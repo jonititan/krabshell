@@ -1,0 +1,37 @@
+<div id="scenario-list" hx-get="/fragments/scenarios" hx-trigger="every 10s" hx-swap="outerHTML">
+{% if scenarios.is_empty() %}
+  <p class="dim">No packs found in the scenarios directory.</p>
+{% else %}
+  <table class="grid">
+    <thead>
+      <tr><th>Id</th><th>Name</th><th>Model</th><th>Res</th><th>Root</th><th>Profile</th><th>Seeded</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for pack in scenarios %}
+      <tr {% if pack.is_current %}class="current"{% endif %}>
+        <td class="mono">{{ pack.id }}</td>
+        <td>{{ pack.name }}<br><span class="dim small">{{ pack.description }}</span></td>
+        <td>
+          <span class="tag">{{ pack.model }}</span>
+          {% if !pack.known_model %}<span class="tag bad">not in this build</span>{% endif %}
+        </td>
+        <td>{{ pack.resolution }}</td>
+        <td class="mono small">{{ pack.root }}</td>
+        <td><span class="tag">{{ pack.profile }}</span></td>
+        <td>{{ pack.seed_agents }}</td>
+        <td>
+          <form hx-post="/actions/load/{{ pack.id }}"
+                hx-target="#control"
+                hx-swap="outerHTML"
+                hx-confirm="Loading '{{ pack.id }}' discards the running world. Continue?">
+            <button type="submit" {% if !pack.known_model %}disabled{% endif %}>
+              {% if pack.is_current %}Reload{% else %}Load{% endif %}
+            </button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+</div>

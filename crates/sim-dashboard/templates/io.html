@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Import / export &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Import and export</h1>
+<p class="lede">
+  Downloads are taken from the committed world. A checkpoint restores to the
+  same tick, and in the gold profile to the same hash.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <h2>Download</h2>
+  <ul class="links">
+    <li>
+      <a href="/api/v1/config/download">Effective configuration</a>
+      <span class="dim">TOML, as the driver is running it right now, not the file on disk.</span>
+    </li>
+    <li>
+      <a href="/api/v1/state/download">Checkpoint at the current tick</a>
+      <span class="dim">JSON: header, config, every occupied cell, model fields and generator state.</span>
+    </li>
+    <li>
+      {% if gold %}
+      <a href="/api/v1/intents/log">Intent log</a>
+      <span class="dim">JSON Lines, for gold replay.</span>
+      {% else %}
+      <span class="dim">Intent log &mdash; only kept in the gold profile. This run is fast.</span>
+      {% endif %}
+    </li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Restore a checkpoint</h2>
+  {% if paused %}
+  <p class="dim">Uploads replace the world and jump the tick counter to whatever the file says.</p>
+  <form class="stack" id="restore" onsubmit="return false">
+    <label>Checkpoint file <input type="file" id="restore-file" accept=".json,application/json" required></label>
+    <button type="submit" class="primary">Restore</button>
+    <p id="restore-status" class="dim small"></p>
+  </form>
+  <script>
+    document.getElementById('restore').addEventListener('submit', async () => {
+      const status = document.getElementById('restore-status');
+      const file = document.getElementById('restore-file').files[0];
+      if (!file) return;
+      status.textContent = 'Uploading…';
+      const response = await fetch('/api/v1/state/upload', { method: 'POST', body: await file.arrayBuffer() });
+      const body = await response.json();
+      status.textContent = response.ok
+        ? `Restored to tick ${body.tick} with ${body.agent_count} agents.`
+        : `${body.code}: ${body.detail}`;
+    });
+  </script>
+  {% else %}
+  <p class="banner warn">Pause the run before restoring a checkpoint.</p>
+  {% endif %}
+</section>
+{% endblock %}

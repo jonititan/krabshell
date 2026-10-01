@@ -1,0 +1,20 @@
+<div id="intent-activity" hx-get="/fragments/intents" hx-trigger="every 2s" hx-swap="outerHTML">
+{% if recent.is_empty() %}
+  <p class="dim">Nothing submitted yet.</p>
+{% else %}
+  <table class="grid">
+    <thead><tr><th>Tick</th><th>Actor</th><th>Verb</th><th>Cell</th><th>Outcome</th></tr></thead>
+    <tbody>
+    {% for row in recent %}
+      <tr class="{% if row.rejected %}rejected{% endif %}">
+        <td>{{ row.tick }}</td>
+        <td>{{ row.actor }}</td>
+        <td><span class="tag">{{ row.verb }}</span></td>
+        <td class="mono small">{{ row.cell }}</td>
+        <td>{{ row.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+</div>

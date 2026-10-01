@@ -1,0 +1,6 @@
+walkers = 20000
+spread_k = 30
+stay_probability = 0.0
+seed = 1
+origin_lon = 8.5417
+origin_lat = 47.3769

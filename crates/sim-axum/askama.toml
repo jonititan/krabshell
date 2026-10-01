@@ -1,0 +1,4 @@
+# Templates live with the dashboard's other assets rather than under this crate,
+# so the frontend is one directory an operator can read end to end.
+[general]
+dirs = ["../sim-dashboard/templates"]

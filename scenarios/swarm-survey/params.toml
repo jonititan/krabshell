@@ -1,0 +1,12 @@
+tick_seconds = 0.1
+seed = 7
+cruise_ms = 15.0
+hfov_deg = 80.0
+max_range_m = 300.0
+sensor_period_s = 2.0
+report_interval_s = 30.0
+persons = 4000
+vehicles = 1000
+wander_radius_m = 4000.0
+origin_lon = -0.1150
+origin_lat = 51.5060

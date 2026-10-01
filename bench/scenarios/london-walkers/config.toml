@@ -1,0 +1,13 @@
+# Run defaults for this pack. The manifest owns resolution, root and profile;
+# everything here is about how the loop runs, not what it simulates.
+[run]
+# No target_tps: run at maximum speed until an operator says otherwise.
+publish_hz = 20.0
+intent_horizon = 8
+max_pending_intents = 10000
+max_applied_per_tick = 1000
+max_published_cells = 50000
+
+[grid]
+# Dashboard heat map aggregates to ~2.8 km cells.
+view_resolution = 11

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Operator artefacts written at runtime.
+/var/
+*.ckpt.json
+*.intents.jsonl
+
+.DS_Store
+.env
+
+# Python virtual environments for the tools/ scripts
+.venv/

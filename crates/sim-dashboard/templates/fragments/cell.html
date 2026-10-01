@@ -1,0 +1,48 @@
+<div id="cell"{% if cell.coarse %} data-coarse{% endif %}>
+{% match cell.error %}
+{% when Some with (error) %}
+  <p class="banner bad">{{ error }}</p>
+{% when None %}
+  {% match cell.cell %}
+  {% when Some with (id) %}
+    <dl class="readout small">
+      <div><dt>Cell</dt><dd class="mono">{{ id }}</dd></div>
+      <div><dt>Resolution</dt><dd>{{ cell.resolution }}</dd></div>
+      <div><dt>Centroid</dt><dd class="mono">{{ cell.centroid }}</dd></div>
+      <div><dt>In this world</dt><dd>{% if cell.in_world %}yes{% else %}no{% endif %}</dd></div>
+      <div><dt>Agents</dt><dd>{{ cell.agents }}</dd></div>
+      {% if cell.coarse %}
+      <div><dt>Occupied cells</dt><dd>{{ cell.occupied }}</dd></div>
+      {% endif %}
+    </dl>
+    {% if cell.objects.is_empty() %}
+      <p class="dim">No agents in this cell at the last published tick.</p>
+    {% else %}
+      <div class="table-scroll">
+      <table class="grid">
+        <thead><tr>
+          <th>Agent</th><th>Kind</th>
+          {% if cell.coarse %}<th>Occupancy cell</th>{% endif %}
+          <th>State</th>
+        </tr></thead>
+        <tbody>
+        {% for object in cell.objects %}
+          <tr>
+            <td class="mono">{{ object.id }}</td>
+            <td><span class="tag">{{ object.kind }}</span></td>
+            {% if cell.coarse %}<td class="mono small">{{ object.cell }}</td>{% endif %}
+            <td class="mono small">{{ object.state }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% if !cell.hidden.is_empty() %}
+        <p class="dim small">{{ cell.hidden }} more not shown. Pick a finer display resolution to narrow it down.</p>
+      {% endif %}
+    {% endif %}
+  {% when None %}
+    <p class="dim">Paste a cell id, or click the map.</p>
+  {% endmatch %}
+{% endmatch %}
+</div>

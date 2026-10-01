@@ -1,0 +1,9 @@
+# A large idle swarm for ground stations to task, over a busy city. Fast
+# profile: use it for load on the MAVLink and CoT gateways, not for replay.
+id = "swarm-survey"
+name = "Swarm survey"
+description = "Thirty drones on the ground awaiting missions, five thousand ground targets and two intruders. Fast profile, for exercising the gateways."
+model = "drones"
+resolution = 15
+root = "6361800000000000"
+profile = "fast"

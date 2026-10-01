@@ -1,0 +1,10 @@
+# A small, reproducible island run. The world is one resolution-6 A5 cell over
+# southern England; occupancy is at resolution 15, whose cells are about 180 m
+# across. Anything addressed outside the root is refused at the edge.
+id = "london-walkers"
+name = "London walkers"
+description = "Two thousand random walkers on 180 m cells around central London, pinned inside one parent cell. Gold profile, so two runs of equal length hash the same."
+model = "walkers"
+resolution = 15
+root = "6361800000000000"
+profile = "gold"

@@ -1,0 +1,9 @@
+# A larger, unrooted world for measuring throughput. Occupancy is at
+# resolution 9 (about 11 km cells), so twenty thousand agents spread over a
+# region a few hundred kilometres across without crowding a single bag.
+id = "global-drift"
+name = "Global drift"
+description = "Twenty thousand walkers on a global grid with no island root. Fast profile: use it for throughput numbers, not for replay."
+model = "walkers"
+resolution = 9
+profile = "fast"

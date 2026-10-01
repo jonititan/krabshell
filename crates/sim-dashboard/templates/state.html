@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}State &middot; krabshell{% endblock %}
+{% block content %}
+<h1>State</h1>
+<p class="lede">
+  Occupancy lives at resolution {{ resolution }}. The map aggregates it to
+  parent cells so a large world stays a few hundred polygons in the browser.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Occupancy map</h2>
+    <div class="map-controls">
+      <label>Display resolution
+        <input id="map-res" type="range" min="0" max="{{ resolution }}" value="{{ view_resolution }}">
+        <output id="map-res-out">{{ view_resolution }}</output>
+      </label>
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-entities" type="checkbox" checked> Drones</label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" aria-label="Occupancy by A5 cell"></canvas>
+    <div id="map-legend" class="legend"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map needs JavaScript. Cell inspection below works without it.</p></noscript>
+  </div>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+<section class="panel">
+  <h2>Inspect a cell</h2>
+  <p class="dim small">
+    Clicking the map inspects the cell at the display resolution, with every
+    agent inside it. Paste an id to inspect any resolution.
+  </p>
+  <form class="row" hx-get="/fragments/cell" hx-target="#cell" hx-swap="outerHTML">
+    <label>Cell
+      <input id="cell-input" class="mono" type="text" name="cell" value="{{ cell.query }}"
+             placeholder="hex cell id" size="24">
+    </label>
+    <button type="submit">Look up</button>
+  </form>
+  {% include "fragments/cell.html" %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/map.js" defer></script>
+<script src="/assets/live.js" defer></script>
+{% endblock %}

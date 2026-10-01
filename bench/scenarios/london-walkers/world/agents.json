@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "kind": "landmark",
+    "lon": -0.1276,
+    "lat": 51.5072,
+    "state": {
+      "anchored": true,
+      "note": "Trafalgar Square"
+    }
+  },
+  {
+    "id": 2,
+    "kind": "landmark",
+    "lon": -0.1195,
+    "lat": 51.5033,
+    "state": {
+      "anchored": true,
+      "note": "London Eye"
+    }
+  }
+]

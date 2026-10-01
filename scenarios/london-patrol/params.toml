@@ -1,0 +1,31 @@
+# Simulated seconds per tick.
+tick_seconds = 0.1
+seed = 20260924
+
+# Flight
+cruise_ms = 12.0
+climb_ms = 3.0
+takeoff_alt_m = 30.0
+rtl_alt_m = 60.0
+# The patrols fly forever: at full speed the simulation runs hundreds of times
+# faster than real time, and a 25-minute battery would ground every drone within
+# seconds of wall-clock time. Set a drain (e.g. 0.0667 %/s for 25 minutes) to
+# see low-battery returns.
+battery_drain_pct_s = 0.0
+
+# Camera: footprint radius is altitude x tan(hfov / 2), capped at max_range_m.
+hfov_deg = 80.0
+max_range_m = 250.0
+p_detect = 0.85
+sensor_period_s = 1.0
+# Report the same target to the same drone at most this often.
+report_interval_s = 15.0
+
+# Ground targets scattered within wander_radius_m of the origin.
+persons = 1200
+vehicles = 150
+wander_radius_m = 1800.0
+origin_lon = -0.1150
+origin_lat = 51.5060
+person_speed_ms = 1.4
+vehicle_speed_ms = 7.0

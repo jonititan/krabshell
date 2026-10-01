@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Intents &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Intents</h1>
+<p class="lede">
+  An intent is a request, not a command. The driver admits it, the model may
+  still refuse it, and either way the outcome shows up below.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <h2>Submit</h2>
+  <form class="stack" hx-post="/actions/intent" hx-target="#intent-activity" hx-swap="outerHTML">
+    <div class="row">
+      <label>Cell
+        <input class="mono" type="text" name="cell" required placeholder="hex cell id at resolution {{ resolution }}" size="24">
+      </label>
+      <label>Verb
+        <select name="verb">
+          <option value="spawn">spawn</option>
+          <option value="despawn">despawn</option>
+          <option value="move">move</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Agent <input type="text" name="agent" placeholder="id, for move and despawn" size="10"></label>
+      <label>Count <input type="text" name="count" placeholder="1" size="6"></label>
+      <label>Kind <input type="text" name="kind" placeholder="walker" size="12"></label>
+    </div>
+    <button type="submit" class="primary">Submit intent</button>
+  </form>
+  <p class="dim small">
+    Despawn with no agent id clears the whole cell. Move needs an agent id and
+    puts it in the named cell on the next tick.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Activity</h2>
+  {% include "fragments/intents.html" %}
+</section>
+{% endblock %}

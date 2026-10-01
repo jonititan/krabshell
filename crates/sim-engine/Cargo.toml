@@ -1,0 +1,39 @@
+[package]
+name = "sim-engine"
+description = "The simulation driver: one OS thread that owns the world and never awaits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Back the reference model with krABMaga's SparseA5Grid instead of the built-in
+# grid. Pulls in Bevy (see docs/baseline.md), so it is off by default and the
+# server builds and runs without it.
+krabmaga = ["dep:krabmaga"]
+# krABMaga's parallel schedule. Implies `krabmaga`.
+parallel = ["krabmaga", "krabmaga/parallel"]
+
+[dependencies]
+sim-core.workspace = true
+a5.workspace = true
+anyhow.workspace = true
+arc-swap.workspace = true
+clap.workspace = true
+libm.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+krabmaga = { version = "0.6.2", features = ["gis"], optional = true }
+
+[[bin]]
+name = "simctl"
+path = "src/bin/simctl.rs"

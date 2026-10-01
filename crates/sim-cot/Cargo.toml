@@ -1,0 +1,19 @@
+[package]
+name = "sim-cot"
+description = "Cursor-on-Target emitter: sends drone tracks and sightings to TAK over UDP multicast."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-engine.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

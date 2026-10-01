@@ -1,0 +1,8 @@
+# Handed to the model verbatim on reset.
+walkers = 2000
+# Seed disk radius in cells: 12 x 180 m is a little over 2 km.
+spread_k = 12
+stay_probability = 0.15
+seed = 20260910
+origin_lon = -0.1276
+origin_lat = 51.5072

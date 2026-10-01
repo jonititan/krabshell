@@ -1,0 +1,445 @@
+[
+  {
+    "id": 1,
+    "kind": "drone",
+    "lon": -0.16,
+    "lat": 51.49,
+    "state": {
+      "sysid": 1,
+      "callsign": "SWARM-01"
+    }
+  },
+  {
+    "id": 2,
+    "kind": "drone",
+    "lon": -0.158,
+    "lat": 51.49,
+    "state": {
+      "sysid": 2,
+      "callsign": "SWARM-02"
+    }
+  },
+  {
+    "id": 3,
+    "kind": "drone",
+    "lon": -0.156,
+    "lat": 51.49,
+    "state": {
+      "sysid": 3,
+      "callsign": "SWARM-03"
+    }
+  },
+  {
+    "id": 4,
+    "kind": "drone",
+    "lon": -0.154,
+    "lat": 51.49,
+    "state": {
+      "sysid": 4,
+      "callsign": "SWARM-04"
+    }
+  },
+  {
+    "id": 5,
+    "kind": "drone",
+    "lon": -0.152,
+    "lat": 51.49,
+    "state": {
+      "sysid": 5,
+      "callsign": "SWARM-05"
+    }
+  },
+  {
+    "id": 6,
+    "kind": "drone",
+    "lon": -0.15,
+    "lat": 51.49,
+    "state": {
+      "sysid": 6,
+      "callsign": "SWARM-06"
+    }
+  },
+  {
+    "id": 7,
+    "kind": "drone",
+    "lon": -0.148,
+    "lat": 51.49,
+    "state": {
+      "sysid": 7,
+      "callsign": "SWARM-07"
+    }
+  },
+  {
+    "id": 8,
+    "kind": "drone",
+    "lon": -0.146,
+    "lat": 51.49,
+    "state": {
+      "sysid": 8,
+      "callsign": "SWARM-08"
+    }
+  },
+  {
+    "id": 9,
+    "kind": "drone",
+    "lon": -0.14400000000000002,
+    "lat": 51.49,
+    "state": {
+      "sysid": 9,
+      "callsign": "SWARM-09"
+    }
+  },
+  {
+    "id": 10,
+    "kind": "drone",
+    "lon": -0.14200000000000002,
+    "lat": 51.49,
+    "state": {
+      "sysid": 10,
+      "callsign": "SWARM-10"
+    }
+  },
+  {
+    "id": 11,
+    "kind": "drone",
+    "lon": -0.16,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 11,
+      "callsign": "SWARM-11"
+    }
+  },
+  {
+    "id": 12,
+    "kind": "drone",
+    "lon": -0.158,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 12,
+      "callsign": "SWARM-12"
+    }
+  },
+  {
+    "id": 13,
+    "kind": "drone",
+    "lon": -0.156,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 13,
+      "callsign": "SWARM-13"
+    }
+  },
+  {
+    "id": 14,
+    "kind": "drone",
+    "lon": -0.154,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 14,
+      "callsign": "SWARM-14"
+    }
+  },
+  {
+    "id": 15,
+    "kind": "drone",
+    "lon": -0.152,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 15,
+      "callsign": "SWARM-15"
+    }
+  },
+  {
+    "id": 16,
+    "kind": "drone",
+    "lon": -0.15,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 16,
+      "callsign": "SWARM-16"
+    }
+  },
+  {
+    "id": 17,
+    "kind": "drone",
+    "lon": -0.148,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 17,
+      "callsign": "SWARM-17"
+    }
+  },
+  {
+    "id": 18,
+    "kind": "drone",
+    "lon": -0.146,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 18,
+      "callsign": "SWARM-18"
+    }
+  },
+  {
+    "id": 19,
+    "kind": "drone",
+    "lon": -0.14400000000000002,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 19,
+      "callsign": "SWARM-19"
+    }
+  },
+  {
+    "id": 20,
+    "kind": "drone",
+    "lon": -0.14200000000000002,
+    "lat": 51.4915,
+    "state": {
+      "sysid": 20,
+      "callsign": "SWARM-20"
+    }
+  },
+  {
+    "id": 21,
+    "kind": "drone",
+    "lon": -0.16,
+    "lat": 51.493,
+    "state": {
+      "sysid": 21,
+      "callsign": "SWARM-21"
+    }
+  },
+  {
+    "id": 22,
+    "kind": "drone",
+    "lon": -0.158,
+    "lat": 51.493,
+    "state": {
+      "sysid": 22,
+      "callsign": "SWARM-22"
+    }
+  },
+  {
+    "id": 23,
+    "kind": "drone",
+    "lon": -0.156,
+    "lat": 51.493,
+    "state": {
+      "sysid": 23,
+      "callsign": "SWARM-23"
+    }
+  },
+  {
+    "id": 24,
+    "kind": "drone",
+    "lon": -0.154,
+    "lat": 51.493,
+    "state": {
+      "sysid": 24,
+      "callsign": "SWARM-24"
+    }
+  },
+  {
+    "id": 25,
+    "kind": "drone",
+    "lon": -0.152,
+    "lat": 51.493,
+    "state": {
+      "sysid": 25,
+      "callsign": "SWARM-25"
+    }
+  },
+  {
+    "id": 26,
+    "kind": "drone",
+    "lon": -0.15,
+    "lat": 51.493,
+    "state": {
+      "sysid": 26,
+      "callsign": "SWARM-26"
+    }
+  },
+  {
+    "id": 27,
+    "kind": "drone",
+    "lon": -0.148,
+    "lat": 51.493,
+    "state": {
+      "sysid": 27,
+      "callsign": "SWARM-27"
+    }
+  },
+  {
+    "id": 28,
+    "kind": "drone",
+    "lon": -0.146,
+    "lat": 51.493,
+    "state": {
+      "sysid": 28,
+      "callsign": "SWARM-28"
+    }
+  },
+  {
+    "id": 29,
+    "kind": "drone",
+    "lon": -0.14400000000000002,
+    "lat": 51.493,
+    "state": {
+      "sysid": 29,
+      "callsign": "SWARM-29"
+    }
+  },
+  {
+    "id": 30,
+    "kind": "drone",
+    "lon": -0.14200000000000002,
+    "lat": 51.493,
+    "state": {
+      "sysid": 30,
+      "callsign": "SWARM-30"
+    }
+  },
+  {
+    "id": 100,
+    "kind": "poi",
+    "lon": -0.1281,
+    "lat": 51.508,
+    "state": {
+      "name": "Trafalgar Square"
+    }
+  },
+  {
+    "id": 101,
+    "kind": "poi",
+    "lon": -0.1246,
+    "lat": 51.5007,
+    "state": {
+      "name": "Big Ben"
+    }
+  },
+  {
+    "id": 102,
+    "kind": "poi",
+    "lon": -0.1196,
+    "lat": 51.5033,
+    "state": {
+      "name": "London Eye"
+    }
+  },
+  {
+    "id": 103,
+    "kind": "poi",
+    "lon": -0.1419,
+    "lat": 51.5014,
+    "state": {
+      "name": "Buckingham Palace"
+    }
+  },
+  {
+    "id": 104,
+    "kind": "poi",
+    "lon": -0.0984,
+    "lat": 51.5138,
+    "state": {
+      "name": "St Paul's Cathedral"
+    }
+  },
+  {
+    "id": 105,
+    "kind": "poi",
+    "lon": -0.124,
+    "lat": 51.5117,
+    "state": {
+      "name": "Covent Garden"
+    }
+  },
+  {
+    "id": 106,
+    "kind": "poi",
+    "lon": -0.1131,
+    "lat": 51.5031,
+    "state": {
+      "name": "Waterloo Station"
+    }
+  },
+  {
+    "id": 107,
+    "kind": "poi",
+    "lon": -0.1172,
+    "lat": 51.511,
+    "state": {
+      "name": "Somerset House"
+    }
+  },
+  {
+    "id": 108,
+    "kind": "poi",
+    "lon": -0.1273,
+    "lat": 51.4994,
+    "state": {
+      "name": "Westminster Abbey"
+    }
+  },
+  {
+    "id": 109,
+    "kind": "poi",
+    "lon": -0.0994,
+    "lat": 51.5076,
+    "state": {
+      "name": "Tate Modern"
+    }
+  },
+  {
+    "id": 200,
+    "kind": "intruder",
+    "lon": -0.14,
+    "lat": 51.52,
+    "state": {
+      "callsign": "UNKNOWN-1",
+      "route": [
+        [
+          -0.14,
+          51.52,
+          70.0
+        ],
+        [
+          -0.09,
+          51.52,
+          70.0
+        ],
+        [
+          -0.09,
+          51.495,
+          70.0
+        ],
+        [
+          -0.14,
+          51.495,
+          70.0
+        ]
+      ]
+    }
+  },
+  {
+    "id": 201,
+    "kind": "intruder",
+    "lon": -0.11,
+    "lat": 51.5,
+    "state": {
+      "callsign": "UNKNOWN-2",
+      "speed_ms": 20.0,
+      "route": [
+        [
+          -0.11,
+          51.5,
+          40.0
+        ],
+        [
+          -0.13,
+          51.515,
+          40.0
+        ]
+      ]
+    }
+  }
+]

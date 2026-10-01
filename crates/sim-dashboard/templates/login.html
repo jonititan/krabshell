@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in &middot; krabshell</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="centered">
+<form class="panel login" method="post" action="/login">
+  <h1 class="wordmark">krab<span>shell</span></h1>
+  <p class="dim">Operator console for krABMaga simulations.</p>
+  {% if open %}
+  <p class="banner warn">
+    No <span class="mono">DASHBOARD_TOKEN</span> is set, so any token is accepted.
+    Set one before binding anything but loopback.
+  </p>
+  {% endif %}
+  {% match error %}
+  {% when Some with (message) %}<p class="banner bad">{{ message }}</p>
+  {% when None %}{% endmatch %}
+  <label>Token
+    <input type="password" name="token" autofocus autocomplete="current-password">
+  </label>
+  <button type="submit" class="primary">Sign in</button>
+</form>
+</body>
+</html>

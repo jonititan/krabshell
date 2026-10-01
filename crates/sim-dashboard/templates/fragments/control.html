@@ -1,0 +1,96 @@
+{#
+  The control panel. Every page includes it, and it polls itself once a second.
+  Actions swap this same fragment, so a button press and the poll cannot fight
+  over the DOM.
+#}
+<section id="control"
+         class="panel control"
+         hx-get="/fragments/control"
+         hx-trigger="every 1s"
+         hx-swap="outerHTML">
+
+  {% if !control.alive %}
+  <div class="banner bad">
+    <strong>The simulation thread is not running.</strong>
+    The API stays up, but nothing will advance. Restart the server.
+  </div>
+  {% endif %}
+
+  {% match control.fault %}
+  {% when Some with (fault) %}
+  <div class="banner bad">
+    <strong>The model panicked.</strong>
+    <span class="mono">{{ fault }}</span>
+    The world is frozen at tick {{ control.last_good_tick }}. Reset to continue.
+  </div>
+  {% when None %}
+  {% endmatch %}
+
+  {% if control.truncated %}
+  <div class="banner warn">
+    The published view hit its cell cap, so some cells are missing from the map
+    and from cell lookups. Raise <span class="mono">run.max_published_cells</span>
+    or use a coarser display resolution.
+  </div>
+  {% endif %}
+
+  {% match control.flash %}
+  {% when Some with (flash) %}
+  <div class="banner {{ flash.kind }}">{{ flash.message }}</div>
+  {% when None %}
+  {% endmatch %}
+
+  <div class="control-head">
+    <span class="{{ control.mode_class }}">{{ control.mode }}</span>
+    <div class="scenario">
+      <strong>{{ control.scenario_name }}</strong>
+      <span class="mono dim">{{ control.scenario_id }}</span>
+      <span class="tag">{{ control.model }}</span>
+      <span class="tag">{{ control.profile }}</span>
+    </div>
+    <div class="engine dim">{{ control.engine }}</div>
+  </div>
+
+  <div class="controls">
+    <form hx-post="/actions/start" hx-target="#control" hx-swap="outerHTML">
+      <button type="submit" class="primary">Start</button>
+      <label>at
+        <input type="text" name="tps" placeholder="max" size="5" inputmode="decimal">
+        tps
+      </label>
+    </form>
+    <form hx-post="/actions/pause" hx-target="#control" hx-swap="outerHTML">
+      <button type="submit">Pause</button>
+    </form>
+    <form hx-post="/actions/step" hx-target="#control" hx-swap="outerHTML">
+      <button type="submit">Step</button>
+      <input type="text" name="n" placeholder="1" size="5" inputmode="numeric">
+    </form>
+    <form hx-post="/actions/reset"
+          hx-target="#control"
+          hx-swap="outerHTML"
+          hx-confirm="Reset drops the current world and reloads the scenario from tick 0. Continue?">
+      <button type="submit" class="danger">Reset</button>
+    </form>
+  </div>
+
+  <dl class="readout">
+    <div><dt>Tick</dt><dd class="big">{{ control.tick }}</dd></div>
+    <div><dt>Agents</dt><dd class="big">{{ control.agents }}</dd></div>
+    <div><dt>Occupied cells</dt><dd class="big">{{ control.cells }}</dd></div>
+    <div><dt>Sim rate</dt><dd class="big">{{ control.sim_tps }}<small>tps</small></dd></div>
+  </dl>
+
+  <dl class="readout small">
+    <div><dt>Target rate</dt><dd>{{ control.rate }}</dd></div>
+    <div><dt>Publishing</dt><dd>{{ control.publish_hz }} Hz</dd></div>
+    <div><dt>Last step</dt><dd>{{ control.step_time }}</dd></div>
+    <div><dt>Intent queue</dt><dd>{{ control.queue_depth }}</dd></div>
+    <div><dt>Applied</dt><dd>{{ control.applied }}</dd></div>
+    <div><dt>Rejected</dt><dd>{{ control.rejected }}</dd></div>
+    <div><dt>Dropped views</dt><dd>{{ control.dropped_views }}</dd></div>
+    <div><dt>Parallel</dt><dd>{{ control.parallel }}</dd></div>
+    <div><dt>Resolution</dt><dd>{{ control.resolution }} / view {{ control.view_resolution }}</dd></div>
+    <div><dt>Root</dt><dd class="mono">{{ control.root }}</dd></div>
+  </dl>
+</section>

@@ -1,0 +1,6 @@
+[run]
+publish_hz = 20.0
+max_published_cells = 50000
+
+[grid]
+view_resolution = 6

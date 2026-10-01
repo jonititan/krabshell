@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Scenarios &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Scenarios</h1>
+<p class="lede">
+  A pack is a manifest, a config, model parameters and an optional seeded world.
+  Loading one replaces the running world and returns to tick&nbsp;0.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <h2>Packs</h2>
+  {% include "fragments/scenarios.html" %}
+</section>
+
+<section class="panel">
+  <h2>Upload a pack</h2>
+  <p class="dim">
+    A zip of <span class="mono">manifest.toml</span>, <span class="mono">config.toml</span>,
+    <span class="mono">params.toml</span> and an optional <span class="mono">world/</span>.
+    The id must match the manifest. Paths that escape the pack directory are refused.
+  </p>
+  <form class="stack" method="post" action="/api/v1/scenarios" enctype="multipart/form-data">
+    <label>Id <input type="text" name="id" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="my-scenario"></label>
+    <label>Archive <input type="file" name="pack" accept=".zip,application/zip" required></label>
+    <button type="submit" class="primary">Upload</button>
+  </form>
+  <p class="dim">Models this build can run: <span class="mono">{{ model_kinds }}</span></p>
+</section>
+{% endblock %}

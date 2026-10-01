@@ -1,0 +1,11 @@
+# Four drones over central London, inside one resolution-6 parent cell.
+# Three fly patrol loops from the moment the world loads; UAV-4 waits on the
+# ground for a ground station to take it. Occupancy is at resolution 15
+# (about 180 m cells). Gold profile: two runs of equal length hash the same.
+id = "london-patrol"
+name = "London patrol"
+description = "Three drones patrolling Westminster, the City and the South Bank, one idle for a GCS, and people, vehicles, landmarks and an intruder drone to find. Gold profile."
+model = "drones"
+resolution = 15
+root = "6361800000000000"
+profile = "gold"

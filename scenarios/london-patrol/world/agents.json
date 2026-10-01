@@ -1,0 +1,407 @@
+[
+  {
+    "id": 1,
+    "kind": "drone",
+    "lon": -0.128,
+    "lat": 51.504,
+    "state": {
+      "sysid": 1,
+      "callsign": "HAWK-1",
+      "autostart": true,
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 80.0
+        },
+        {
+          "seq": 1,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 514980000,
+          "y": -1350000,
+          "z": 80.0
+        },
+        {
+          "seq": 2,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 514980000,
+          "y": -1200000,
+          "z": 80.0
+        },
+        {
+          "seq": 3,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515060000,
+          "y": -1200000,
+          "z": 80.0
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515060000,
+          "y": -1350000,
+          "z": 80.0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 1,
+          "param2": -1,
+          "param3": 0,
+          "param4": 0,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "kind": "drone",
+    "lon": -0.1,
+    "lat": 51.512,
+    "state": {
+      "sysid": 2,
+      "callsign": "HAWK-2",
+      "autostart": true,
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 90.0
+        },
+        {
+          "seq": 1,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515100000,
+          "y": -1050000,
+          "z": 90.0
+        },
+        {
+          "seq": 2,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515100000,
+          "y": -900000,
+          "z": 90.0
+        },
+        {
+          "seq": 3,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515160000,
+          "y": -900000,
+          "z": 90.0
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515160000,
+          "y": -1050000,
+          "z": 90.0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 1,
+          "param2": -1,
+          "param3": 0,
+          "param4": 0,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "kind": "drone",
+    "lon": -0.113,
+    "lat": 51.5035,
+    "state": {
+      "sysid": 3,
+      "callsign": "HAWK-3",
+      "autostart": true,
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 70.0
+        },
+        {
+          "seq": 1,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515000000,
+          "y": -1200000,
+          "z": 70.0
+        },
+        {
+          "seq": 2,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515000000,
+          "y": -1050000,
+          "z": 70.0
+        },
+        {
+          "seq": 3,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515060000,
+          "y": -1050000,
+          "z": 70.0
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5.0,
+          "param3": 0,
+          "param4": null,
+          "x": 515060000,
+          "y": -1200000,
+          "z": 70.0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 1,
+          "param2": -1,
+          "param3": 0,
+          "param4": 0,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "id": 4,
+    "kind": "drone",
+    "lon": -0.1281,
+    "lat": 51.508,
+    "state": {
+      "sysid": 4,
+      "callsign": "UAV-4"
+    }
+  },
+  {
+    "id": 10,
+    "kind": "poi",
+    "lon": -0.1281,
+    "lat": 51.508,
+    "state": {
+      "name": "Trafalgar Square"
+    }
+  },
+  {
+    "id": 11,
+    "kind": "poi",
+    "lon": -0.1246,
+    "lat": 51.5007,
+    "state": {
+      "name": "Big Ben"
+    }
+  },
+  {
+    "id": 12,
+    "kind": "poi",
+    "lon": -0.1196,
+    "lat": 51.5033,
+    "state": {
+      "name": "London Eye"
+    }
+  },
+  {
+    "id": 13,
+    "kind": "poi",
+    "lon": -0.1419,
+    "lat": 51.5014,
+    "state": {
+      "name": "Buckingham Palace"
+    }
+  },
+  {
+    "id": 14,
+    "kind": "poi",
+    "lon": -0.0984,
+    "lat": 51.5138,
+    "state": {
+      "name": "St Paul's Cathedral"
+    }
+  },
+  {
+    "id": 15,
+    "kind": "poi",
+    "lon": -0.124,
+    "lat": 51.5117,
+    "state": {
+      "name": "Covent Garden"
+    }
+  },
+  {
+    "id": 16,
+    "kind": "poi",
+    "lon": -0.1131,
+    "lat": 51.5031,
+    "state": {
+      "name": "Waterloo Station"
+    }
+  },
+  {
+    "id": 17,
+    "kind": "poi",
+    "lon": -0.1172,
+    "lat": 51.511,
+    "state": {
+      "name": "Somerset House"
+    }
+  },
+  {
+    "id": 18,
+    "kind": "poi",
+    "lon": -0.1273,
+    "lat": 51.4994,
+    "state": {
+      "name": "Westminster Abbey"
+    }
+  },
+  {
+    "id": 19,
+    "kind": "poi",
+    "lon": -0.0994,
+    "lat": 51.5076,
+    "state": {
+      "name": "Tate Modern"
+    }
+  },
+  {
+    "id": 30,
+    "kind": "intruder",
+    "lon": -0.105,
+    "lat": 51.509,
+    "state": {
+      "callsign": "UNKNOWN-1",
+      "speed_ms": 14.0,
+      "route": [
+        [
+          -0.105,
+          51.509,
+          55.0
+        ],
+        [
+          -0.095,
+          51.5075,
+          55.0
+        ],
+        [
+          -0.1,
+          51.504,
+          55.0
+        ],
+        [
+          -0.112,
+          51.5055,
+          55.0
+        ]
+      ]
+    }
+  }
+]

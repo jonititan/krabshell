@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Run control &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Run control</h1>
+<p class="lede">
+  The simulation is the authority. These buttons post control messages to the
+  tick thread; nothing here steps the schedule directly.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <h2>What the numbers mean</h2>
+  <dl class="glossary">
+    <dt>Sim rate</dt>
+    <dd>Ticks per second the driver is actually committing, measured over the last publish window.</dd>
+    <dt>Publishing</dt>
+    <dd>Snapshots per second offered to readers. Capped by <span class="mono">run.publish_hz</span>, whatever the tick rate.</dd>
+    <dt>Dropped views</dt>
+    <dd>Snapshots replaced before anything read them. A large number at maximum speed is expected, not a fault.</dd>
+    <dt>Intent queue</dt>
+    <dd>Admitted intents waiting for a tick. It never blocks the loop: a full queue rejects new intents instead.</dd>
+  </dl>
+</section>
+{% endblock %}
