@@ -32,7 +32,14 @@ jobs:
       fail-fast: false
       matrix:
         features: [krabmaga, parallel]
+    env:
+      # Every test binary links all of Bevy; with full debuginfo they fill the
+      # runner's disk and rust-lld dies with SIGBUS mid-link.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
