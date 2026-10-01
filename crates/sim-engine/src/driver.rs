@@ -926,6 +926,14 @@ impl DriverLoop {
             .next_publish
             .saturating_duration_since(Instant::now())
             .min(IDLE_POLL);
+        // Stop taking intents once the pending queue is full, so the channel
+        // fills and `submit` pushes back instead of the queue growing unbounded.
+        let never = crossbeam_channel::never();
+        let intents = if self.pending.len() < self.config.run.max_pending_intents {
+            &self.intents
+        } else {
+            &never
+        };
         crossbeam_channel::select! {
             recv(self.control) -> command => {
                 match command {
@@ -935,7 +943,7 @@ impl DriverLoop {
                     Err(_) => false,
                 }
             }
-            recv(self.intents) -> submission => {
+            recv(intents) -> submission => {
                 if let Ok(submission) = submission {
                     match self.admission.admit(&submission.intent, self.tick) {
                         AdmissionOutcome::Accept => self.pending.push_back(submission),
