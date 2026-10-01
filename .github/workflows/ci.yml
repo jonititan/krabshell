@@ -41,7 +41,7 @@ jobs:
         with:
           key: ${{ matrix.features }}
       - name: Bevy's system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libfontconfig1-dev libxkbcommon-dev pkg-config
       - run: cargo clippy --workspace --all-targets --features sim-axum/${{ matrix.features }}
       - run: cargo test --workspace --features sim-axum/${{ matrix.features }}
       - name: Gold replay on the krABMaga backend
