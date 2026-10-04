@@ -64,8 +64,8 @@ pub struct CotEvent {
     pub stale: Duration,
     pub lat: f64,
     pub lon: f64,
-    /// Metres. The simulation's altitudes are above its ground datum, which
-    /// stands in for the ellipsoid.
+    /// Metres. The simulation's altitudes are above mean sea level, which
+    /// stands in for the ellipsoid: no geoid separation is applied.
     pub hae: f64,
     pub ce: f64,
     pub le: f64,

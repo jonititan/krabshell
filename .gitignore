@@ -12,3 +12,6 @@
 
 # Python virtual environments for the tools/ scripts
 .venv/
+
+# Downloaded data for tools/ scripts
+.cache/

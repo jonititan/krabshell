@@ -8,7 +8,8 @@
 //! Beside the HTTP edge run the drone gateways: MAVLink over UDP for ground
 //! stations, and Cursor-on-Target over UDP multicast for TAK. Both only read
 //! the published view and submit intents, like every other edge. They stop
-//! with the HTTP server, before the driver pauses.
+//! with the HTTP server, before the driver pauses. So does the run logger
+//! (flight heatmap, deliveries) for packs that ask for one.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -94,6 +95,19 @@ struct Cli {
     /// Do not start the CoT emitter.
     #[arg(long)]
     no_cot: bool,
+
+    /// Where run logs (flight heatmap, deliveries) go, one folder per run, for
+    /// scenarios that set `heatmap_resolution` or `order_rate_per_address_day`.
+    #[arg(long, default_value = "var/logs", env = "KRABSHELL_LOG_DIR")]
+    log_dir: PathBuf,
+
+    /// How often run logs are rewritten, seconds of wall-clock time.
+    #[arg(long, default_value_t = 60)]
+    log_every: u64,
+
+    /// Do not write run logs.
+    #[arg(long)]
+    no_logs: bool,
 }
 
 #[tokio::main]
@@ -195,6 +209,18 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::anyhow!("could not start the CoT emitter: {err} (use --no-cot)")
             })?;
         edges.push(tokio::spawn(emitter.run(stop_rx.clone())));
+    }
+
+    if !cli.no_logs {
+        let cfg = sim_axum::runlog::RunLogConfig {
+            dir: cli.log_dir.clone(),
+            every: std::time::Duration::from_secs(cli.log_every),
+        };
+        edges.push(tokio::spawn(sim_axum::runlog::run(
+            handle.clone(),
+            cfg,
+            stop_rx.clone(),
+        )));
     }
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;

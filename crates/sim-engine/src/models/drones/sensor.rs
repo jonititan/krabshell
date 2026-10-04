@@ -57,7 +57,7 @@ impl Sensor {
         (alt_m.max(0.0) * self.half_fov_tan).min(self.max_range_m)
     }
 
-    /// Scan once from `observer` at `from`. Detections not already reported
+    /// Scan once from `observer` at `from`, over ground at `ground_mm`. Detections not already reported
     /// recently are pushed to `out`; `last` remembers when each pair was last
     /// reported.
     #[allow(clippy::too_many_arguments)]
@@ -67,11 +67,13 @@ impl Sensor {
         tick: u64,
         observer: AgentId,
         from: &Point,
+        ground_mm: i32,
         candidates: impl Iterator<Item = Candidate>,
         last: &mut BTreeMap<(AgentId, AgentId), u64>,
         out: &mut Vec<Sighting>,
     ) {
-        let alt_m = f64::from(from.alt_mm) * 1e-3;
+        // The footprint grows with height above the ground below, not above sea level.
+        let alt_m = f64::from(from.alt_mm - ground_mm) * 1e-3;
         let footprint = self.footprint_m(alt_m);
         if footprint < 1.0 {
             return;
@@ -150,6 +152,7 @@ mod tests {
             tick,
             1,
             &from.point(),
+            0,
             targets.iter().map(|(id, at)| Candidate {
                 id: *id,
                 at: *at,

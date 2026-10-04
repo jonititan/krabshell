@@ -1,0 +1,562 @@
+[
+  {
+    "id": 1,
+    "kind": "drone",
+    "lon": 23.89266,
+    "lat": 54.9401304,
+    "state": {
+      "sysid": 1,
+      "callsign": "MEGA-1",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 2,
+    "kind": "drone",
+    "lon": 23.8928911,
+    "lat": 54.9401103,
+    "state": {
+      "sysid": 2,
+      "callsign": "MEGA-2",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 3,
+    "kind": "drone",
+    "lon": 23.8931016,
+    "lat": 54.9400521,
+    "state": {
+      "sysid": 3,
+      "callsign": "MEGA-3",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 4,
+    "kind": "drone",
+    "lon": 23.893273,
+    "lat": 54.9399608,
+    "state": {
+      "sysid": 4,
+      "callsign": "MEGA-4",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 5,
+    "kind": "drone",
+    "lon": 23.8933898,
+    "lat": 54.9398445,
+    "state": {
+      "sysid": 5,
+      "callsign": "MEGA-5",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 6,
+    "kind": "drone",
+    "lon": 23.8934418,
+    "lat": 54.9397137,
+    "state": {
+      "sysid": 6,
+      "callsign": "MEGA-6",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 7,
+    "kind": "drone",
+    "lon": 23.8934243,
+    "lat": 54.9395798,
+    "state": {
+      "sysid": 7,
+      "callsign": "MEGA-7",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 8,
+    "kind": "drone",
+    "lon": 23.893339,
+    "lat": 54.9394548,
+    "state": {
+      "sysid": 8,
+      "callsign": "MEGA-8",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 9,
+    "kind": "drone",
+    "lon": 23.8931933,
+    "lat": 54.9393499,
+    "state": {
+      "sysid": 9,
+      "callsign": "MEGA-9",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 10,
+    "kind": "drone",
+    "lon": 23.8930002,
+    "lat": 54.9392742,
+    "state": {
+      "sysid": 10,
+      "callsign": "MEGA-10",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 11,
+    "kind": "drone",
+    "lon": 23.8927768,
+    "lat": 54.9392347,
+    "state": {
+      "sysid": 11,
+      "callsign": "MEGA-11",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 12,
+    "kind": "drone",
+    "lon": 23.8925432,
+    "lat": 54.9392347,
+    "state": {
+      "sysid": 12,
+      "callsign": "MEGA-12",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 13,
+    "kind": "drone",
+    "lon": 23.8923198,
+    "lat": 54.9392742,
+    "state": {
+      "sysid": 13,
+      "callsign": "MEGA-13",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 14,
+    "kind": "drone",
+    "lon": 23.8921267,
+    "lat": 54.9393499,
+    "state": {
+      "sysid": 14,
+      "callsign": "MEGA-14",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 15,
+    "kind": "drone",
+    "lon": 23.891981,
+    "lat": 54.9394548,
+    "state": {
+      "sysid": 15,
+      "callsign": "MEGA-15",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 16,
+    "kind": "drone",
+    "lon": 23.8918957,
+    "lat": 54.9395798,
+    "state": {
+      "sysid": 16,
+      "callsign": "MEGA-16",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 17,
+    "kind": "drone",
+    "lon": 23.8918782,
+    "lat": 54.9397137,
+    "state": {
+      "sysid": 17,
+      "callsign": "MEGA-17",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 18,
+    "kind": "drone",
+    "lon": 23.8919302,
+    "lat": 54.9398445,
+    "state": {
+      "sysid": 18,
+      "callsign": "MEGA-18",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 19,
+    "kind": "drone",
+    "lon": 23.892047,
+    "lat": 54.9399608,
+    "state": {
+      "sysid": 19,
+      "callsign": "MEGA-19",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 20,
+    "kind": "drone",
+    "lon": 23.8922184,
+    "lat": 54.9400521,
+    "state": {
+      "sysid": 20,
+      "callsign": "MEGA-20",
+      "elevation_m": 81.2,
+      "depot": "MEGA",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 21,
+    "kind": "drone",
+    "lon": 23.8924289,
+    "lat": 54.9401103,
+    "state": {
+      "sysid": 21,
+      "callsign": "MEGA-SPARE",
+      "elevation_m": 81.2
+    }
+  },
+  {
+    "id": 22,
+    "kind": "drone",
+    "lon": 23.91949,
+    "lat": 54.8919104,
+    "state": {
+      "sysid": 22,
+      "callsign": "AKRO-1",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 23,
+    "kind": "drone",
+    "lon": 23.9197208,
+    "lat": 54.8918903,
+    "state": {
+      "sysid": 23,
+      "callsign": "AKRO-2",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 24,
+    "kind": "drone",
+    "lon": 23.9199311,
+    "lat": 54.8918321,
+    "state": {
+      "sysid": 24,
+      "callsign": "AKRO-3",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 25,
+    "kind": "drone",
+    "lon": 23.9201022,
+    "lat": 54.8917408,
+    "state": {
+      "sysid": 25,
+      "callsign": "AKRO-4",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 26,
+    "kind": "drone",
+    "lon": 23.9202189,
+    "lat": 54.8916245,
+    "state": {
+      "sysid": 26,
+      "callsign": "AKRO-5",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 27,
+    "kind": "drone",
+    "lon": 23.9202709,
+    "lat": 54.8914937,
+    "state": {
+      "sysid": 27,
+      "callsign": "AKRO-6",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 28,
+    "kind": "drone",
+    "lon": 23.9202534,
+    "lat": 54.8913598,
+    "state": {
+      "sysid": 28,
+      "callsign": "AKRO-7",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 29,
+    "kind": "drone",
+    "lon": 23.9201681,
+    "lat": 54.8912348,
+    "state": {
+      "sysid": 29,
+      "callsign": "AKRO-8",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 30,
+    "kind": "drone",
+    "lon": 23.9200226,
+    "lat": 54.8911299,
+    "state": {
+      "sysid": 30,
+      "callsign": "AKRO-9",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 31,
+    "kind": "drone",
+    "lon": 23.9198298,
+    "lat": 54.8910542,
+    "state": {
+      "sysid": 31,
+      "callsign": "AKRO-10",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 32,
+    "kind": "drone",
+    "lon": 23.9196067,
+    "lat": 54.8910147,
+    "state": {
+      "sysid": 32,
+      "callsign": "AKRO-11",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 33,
+    "kind": "drone",
+    "lon": 23.9193733,
+    "lat": 54.8910147,
+    "state": {
+      "sysid": 33,
+      "callsign": "AKRO-12",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 34,
+    "kind": "drone",
+    "lon": 23.9191502,
+    "lat": 54.8910542,
+    "state": {
+      "sysid": 34,
+      "callsign": "AKRO-13",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 35,
+    "kind": "drone",
+    "lon": 23.9189574,
+    "lat": 54.8911299,
+    "state": {
+      "sysid": 35,
+      "callsign": "AKRO-14",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 36,
+    "kind": "drone",
+    "lon": 23.9188119,
+    "lat": 54.8912348,
+    "state": {
+      "sysid": 36,
+      "callsign": "AKRO-15",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 37,
+    "kind": "drone",
+    "lon": 23.9187266,
+    "lat": 54.8913598,
+    "state": {
+      "sysid": 37,
+      "callsign": "AKRO-16",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 38,
+    "kind": "drone",
+    "lon": 23.9187091,
+    "lat": 54.8914937,
+    "state": {
+      "sysid": 38,
+      "callsign": "AKRO-17",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 39,
+    "kind": "drone",
+    "lon": 23.9187611,
+    "lat": 54.8916245,
+    "state": {
+      "sysid": 39,
+      "callsign": "AKRO-18",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 80.0
+    }
+  },
+  {
+    "id": 40,
+    "kind": "drone",
+    "lon": 23.9188778,
+    "lat": 54.8917408,
+    "state": {
+      "sysid": 40,
+      "callsign": "AKRO-19",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 60.0
+    }
+  },
+  {
+    "id": 41,
+    "kind": "drone",
+    "lon": 23.9190489,
+    "lat": 54.8918321,
+    "state": {
+      "sysid": 41,
+      "callsign": "AKRO-20",
+      "elevation_m": 45.9,
+      "depot": "AKRO",
+      "cruise_agl_m": 70.0
+    }
+  },
+  {
+    "id": 42,
+    "kind": "drone",
+    "lon": 23.9192592,
+    "lat": 54.8918903,
+    "state": {
+      "sysid": 42,
+      "callsign": "AKRO-SPARE",
+      "elevation_m": 45.9
+    }
+  },
+  {
+    "id": 100,
+    "kind": "poi",
+    "lon": 23.89266,
+    "lat": 54.93968,
+    "state": {
+      "name": "PLC Mega"
+    }
+  },
+  {
+    "id": 101,
+    "kind": "poi",
+    "lon": 23.91949,
+    "lat": 54.89146,
+    "state": {
+      "name": "PLC Akropolis"
+    }
+  }
+]

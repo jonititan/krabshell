@@ -12,6 +12,10 @@
 <section class="panel">
   <h2>What the numbers mean</h2>
   <dl class="glossary">
+    <dt>Sim time</dt>
+    <dd>Simulated time since tick 0: ticks &times; sim time per tick. A reset or a restored checkpoint sets it back with the tick.</dd>
+    <dt>Sim time per tick</dt>
+    <dd>How much simulated time each tick covers, the scenario's <span class="mono">tick_seconds</span>. Real time is one tick per this long.</dd>
     <dt>Sim rate</dt>
     <dd>Ticks per second the driver is actually committing, measured over the last publish window.</dd>
     <dt>Publishing</dt>

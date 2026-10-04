@@ -21,6 +21,9 @@ pub enum ReportKind {
     Detection,
     /// `observer` reached mission item `detail.seq`.
     Waypoint,
+    /// `observer` delivered an order at the given position. `detail` carries
+    /// the order and when it was placed, dispatched and delivered.
+    Delivery,
 }
 
 /// One model-generated event.

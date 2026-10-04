@@ -8,6 +8,7 @@ pub mod auth;
 pub mod problem;
 pub mod ratelimit;
 pub mod routes;
+pub mod runlog;
 
 use std::sync::Arc;
 use std::time::Instant;

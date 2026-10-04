@@ -46,6 +46,10 @@ fn scenario(profile: Profile, walkers: i64) -> ScenarioBlob {
     config.run.publish_hz = 200.0;
     config.model.insert("walkers".into(), Param::Int(walkers));
     config.model.insert("spread_k".into(), Param::Int(2));
+    // Ignored by the walkers model; gives the dashboard a real-time rate (10 tps).
+    config
+        .model
+        .insert("tick_seconds".into(), Param::Float(0.1));
     config
         .model
         .insert("origin_lon".into(), Param::Float(-0.1276));
@@ -853,6 +857,49 @@ async fn the_control_panel_can_step_start_and_pause_the_world() {
 
     let (_, _, html) = call(&h, form("/actions/pause", "")).await;
     assert!(html.contains("Paused."), "{html}");
+}
+
+#[tokio::test]
+async fn the_speed_choice_sets_the_rate_without_starting_and_start_keeps_it() {
+    let h = harness(Profile::Fast, 5);
+    let rate = |v: &Value| v["target_tps"].clone();
+
+    let (status, _, html) = call(&h, form("/actions/speed", "speed=realtime&tps=")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("real time (10 tps)"), "{html}");
+    assert!(html.contains(r#"value="realtime" checked"#), "{html}");
+    let run = call(&h, get("/api/v1/run")).await.1;
+    assert_eq!(rate(&run), 10.0);
+    assert_eq!(run["mode"], "paused");
+
+    let (_, _, html) = call(&h, form("/actions/speed", "speed=custom&tps=25")).await;
+    assert!(html.contains("25 tps (2.5× real time)"), "{html}");
+    assert!(html.contains(r#"value="custom" checked"#), "{html}");
+    assert_eq!(rate(&call(&h, get("/api/v1/run")).await.1), 25.0);
+
+    // Start from the dashboard keeps the chosen speed.
+    let (_, _, html) = call(&h, form("/actions/start", "")).await;
+    assert!(html.contains("Running at 25 tps"), "{html}");
+    let run = call(&h, get("/api/v1/run")).await.1;
+    assert_eq!(rate(&run), 25.0);
+    assert_eq!(run["mode"], "running");
+
+    let (_, _, html) = call(&h, form("/actions/speed", "speed=max&tps=25")).await;
+    assert!(html.contains("Speed set to maximum speed"), "{html}");
+    let run = call(&h, get("/api/v1/run")).await.1;
+    assert_eq!(rate(&run), Value::Null);
+    assert_eq!(run["mode"], "running");
+}
+
+#[tokio::test]
+async fn a_custom_speed_must_be_a_positive_rate() {
+    let h = harness(Profile::Fast, 5);
+    call(&h, form("/actions/speed", "speed=custom&tps=40")).await;
+    let (_, _, html) = call(&h, form("/actions/speed", "speed=custom&tps=")).await;
+    assert!(html.contains("Enter a custom rate"), "{html}");
+    let (_, _, html) = call(&h, form("/actions/speed", "speed=custom&tps=-3")).await;
+    assert!(html.contains("is not a tick rate"), "{html}");
+    assert_eq!(call(&h, get("/api/v1/run")).await.1["target_tps"], 40.0);
 }
 
 #[tokio::test]

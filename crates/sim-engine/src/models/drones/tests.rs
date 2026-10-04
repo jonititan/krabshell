@@ -104,6 +104,9 @@ fn drones(profile: Profile) -> Drones {
     let mut model = Drones {
         grid: SparseCellGrid::new(blob.config.grid.resolution, blob.config.grid.root),
         entities: BTreeMap::new(),
+        terrain: Terrain::FLAT,
+        book: AddressBook::default(),
+        dispatch: Dispatch::default(),
         settings: settings(&blob.config.model),
         seed: 0,
         gold: false,
@@ -244,7 +247,11 @@ fn a_mission_uploaded_by_intent_is_flown() {
     assert_eq!(reached, vec![0, 1, 2]);
     let drone = &model.entities[&2];
     assert_eq!(drone.drone.as_ref().unwrap().mode, Mode::Disarmed);
-    assert!(drone.pose.grounded());
+    assert!(drone
+        .drone
+        .as_ref()
+        .unwrap()
+        .grounded(&drone.pose, &model.terrain));
 }
 
 #[test]
@@ -324,4 +331,104 @@ fn a_gateway_can_read_every_drone_back_out_of_a_snapshot() {
     assert!(hawk.armed());
     assert!(!seen[&2].armed());
     assert!(hawk.battery_pct > 99.0);
+}
+
+fn courier_blob() -> ScenarioBlob {
+    let mut blob = blob(Profile::Gold);
+    let near = |east_m: f64, north_m: f64| {
+        let (lat, lon) = flight::displace(flight::to_e7(LAT), flight::to_e7(LON), east_m, north_m);
+        serde_json::json!([lat, lon, 0, format!("{east_m:.0} E {north_m:.0} N")])
+    };
+    blob.fields = serde_json::json!({ "addresses": {
+        "depots": ["HUB"],
+        "items": [near(600.0, 0.0), near(-400.0, 300.0), near(0.0, -500.0)],
+    }});
+    blob.agents.push(SeedAgent {
+        id: Some(5),
+        kind: "drone".into(),
+        cell: None,
+        lon: Some(LON - 0.001),
+        lat: Some(LAT),
+        state: serde_json::json!({ "sysid": 5, "callsign": "COURIER", "depot": "HUB", "cruise_agl_m": 50 }),
+    });
+    // About one order every 30 s across the three addresses.
+    blob.config
+        .model
+        .insert("order_rate_per_address_day".into(), Param::Float(1_000.0));
+    blob.config
+        .model
+        .insert("dispatch_load_s".into(), Param::Float(10.0));
+    blob
+}
+
+#[test]
+fn orders_are_dispatched_delivered_reported_and_the_courier_comes_home() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&courier_blob()).unwrap();
+
+    let reports = run(&mut model, 1, 9_000);
+    let deliveries: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .collect();
+    assert!(deliveries.len() >= 3, "{} deliveries", deliveries.len());
+    let addresses: Vec<(i32, i32)> = model
+        .book
+        .addresses
+        .iter()
+        .map(|a| (a.lat_e7, a.lon_e7))
+        .collect();
+    for (i, d) in deliveries.iter().enumerate() {
+        assert_eq!(d.observer, Some(5));
+        assert!(addresses.contains(&(d.lat_e7, d.lon_e7)));
+        let detail = &d.detail;
+        let f = |k: &str| detail[k].as_f64().unwrap();
+        assert!((f("total_s") - f("wait_s") - f("flight_s")).abs() < 1e-6);
+        assert!(
+            f("flight_s") > 30.0,
+            "a 400–600 m trip with a winch cycle takes a while"
+        );
+        // One courier serves the queue oldest first.
+        if i > 0 {
+            assert!(detail["order"].as_u64() > deliveries[i - 1].detail["order"].as_u64());
+        }
+    }
+    // Orders keep coming faster than one drone delivers, so some wait.
+    assert!(model.dispatch.placed > model.dispatch.delivered);
+    assert_eq!(model.dispatch.delivered as usize, deliveries.len());
+    let courier = model.entities[&5].courier.as_ref().unwrap();
+    assert!(
+        courier.landed_tick.is_some(),
+        "it has been home at least once"
+    );
+}
+
+#[test]
+fn a_checkpoint_mid_delivery_restores_the_queue_and_the_courier() {
+    let blob = courier_blob();
+    let mut original = drones(Profile::Gold);
+    original.reset(&blob).unwrap();
+    run(&mut original, 1, 2_500);
+    assert!(
+        original.entities[&5]
+            .courier
+            .as_ref()
+            .unwrap()
+            .order
+            .is_some()
+            || original.dispatch.queued() > 0
+    );
+
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    let mut restored = drones(Profile::Gold);
+    restored.reset(&blob).unwrap();
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+    assert_eq!(restored.dispatch, original.dispatch);
+
+    let a = run(&mut original, 2_501, 3_000);
+    let b = run(&mut restored, 2_501, 3_000);
+    assert_eq!(hash(&original), hash(&restored));
+    assert_eq!(a, b);
 }

@@ -49,7 +49,8 @@ crates/
   sim-cot/        Cursor-on-Target emitter: tracks and sightings for TAK
   sim-axum/       REST + WebSocket edge, auth, the krabshell binary
   sim-dashboard/  Askama templates and static assets (htmx, canvas map)
-scenarios/        drone packs: london-patrol (gold), swarm-survey (fast)
+scenarios/        drone packs: london-patrol (gold), kaunas-deliveries (gold),
+                  swarm-survey (fast)
 bench/scenarios/  random-walker packs for benchmarks and the krABMaga replay
 docs/             architecture notes and baseline numbers
 ```
@@ -75,16 +76,53 @@ krabshell [--bind 127.0.0.1:8080] [--scenarios scenarios] [--scenario ID]
           [--mavlink-bind 127.0.0.1:14551] [--mavlink-gcs 127.0.0.1:14550,...]
           [--mavlink-hz 5] [--no-mavlink]
           [--cot-dest 239.2.3.1:6969] [--cot-ttl 1] [--cot-iface IP] [--no-cot]
+          [--log-dir var/logs] [--log-every 60] [--no-logs]
 ```
 
 | Env | Meaning |
 |---|---|
 | `DASHBOARD_TOKEN` | Shared secret for the API and dashboard. Required off loopback. |
 | `KRABSHELL_BIND`, `KRABSHELL_SCENARIOS`, `KRABSHELL_SCENARIO` | Same as the flags. |
-| `KRABSHELL_MAVLINK_BIND`, `KRABSHELL_MAVLINK_GCS`, `KRABSHELL_COT_DEST`, `KRABSHELL_COT_IFACE` | Same as the flags. |
+| `KRABSHELL_MAVLINK_BIND`, `KRABSHELL_MAVLINK_GCS`, `KRABSHELL_COT_DEST`, `KRABSHELL_COT_IFACE`, `KRABSHELL_LOG_DIR` | Same as the flags. |
 
 Ctrl-C pauses the driver, optionally writes a checkpoint, then joins the
 thread.
+
+### Deliveries and run logs
+
+A drones pack can carry an address book (see below). Every address then
+orders at random, rarely and independently (`order_rate_per_address_day`), and
+each order joins a first-come first-served queue at the depot that serves the
+address. Drones with a `depot` are its couriers: the next one that is on its
+home pad, disarmed, loaded (`dispatch_load_s` after landing) and charged to
+`launch_battery_pct` is given the oldest order as a fresh mission: take off
+(`dispatch_takeoff_m` above the pad), fly to the address at its `cruise_agl_m`
+above the terrain, lower the parcel with `DO_WINCH` / `WINCH_DELIVER`, fly home,
+descend to `dispatch_approach_m` and land. The order is delivered when the
+winch completes, and a `delivery` report says when it was placed, dispatched
+and delivered. A courier that comes home without delivering (low battery, a
+ground station took it) puts its order back at the front of the queue. Orders
+come from the run's seed, so `gold` runs place and deliver the same orders.
+
+A pack that sets `heatmap_resolution` or `order_rate_per_address_day` gets a
+run log: krabshell writes a folder `var/logs/<scenario>-<UTC start>/` every
+`--log-every` seconds and on shutdown, and a reset, a restored checkpoint or
+another scenario starts a new one. It holds:
+
+| File | What |
+|---|---|
+| `heatmap.geojson` | Drone-seconds of flight per A5 cell of `heatmap_resolution`, as a styled choropleth (log-scale YlOrRd classes in simplestyle `fill`/`stroke`, legend in the collection's `properties`). geojson.io shows it as it is; QGIS can style on `class`. Time parked or disarmed is not flight. |
+| `deliveries.csv` | Every delivered order: depot, drone, address, ticks, and seconds waiting for a drone, flying, and in total. |
+| `delivery-times.csv`, `delivery-times.svg` | Histogram of time from order to delivery, in whole-minute bins, with mean, median, 90th percentile and slowest. |
+| `summary.json` | Totals, and any reports the logger missed. |
+
+For a long run without the server, `simctl fly` flies the pack for some
+simulated hours as fast as it can and writes the same folder
+(`var/logs/<scenario>-<hours>h/`):
+
+```sh
+cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 8
+```
 
 ### Drones: MAVLink and CoT
 
@@ -107,11 +145,14 @@ address, and to any ground station that has sent it a packet. What works:
 
 Mission items run in the simulation: NAV_WAYPOINT, NAV_LOITER_UNLIM,
 NAV_LOITER_TIME, NAV_RETURN_TO_LAUNCH, NAV_LAND, NAV_TAKEOFF, CONDITION_DELAY,
-DO_JUMP and DO_CHANGE_SPEED. Altitudes are relative to home.
+DO_JUMP, DO_CHANGE_SPEED and DO_WINCH (the drone hovers while the winch runs).
+Altitudes are above mean sea level, over the pack's terrain if it has one;
+mission items may be relative to home, absolute, or terrain-following.
 
-The simulation runs at full speed unless you set a rate on the dashboard, so
-drones fly faster than real time; telemetry shows wherever the sim has got to.
-10 ticks/s is real time in the example packs. When the simulation is paused,
+The simulation runs at full speed unless you choose otherwise under Speed on
+the dashboard (Max, Real time, or a Custom rate in ticks per second), so drones
+fly faster than real time; telemetry shows wherever the sim has got to. Real
+time is one tick per `tick_seconds`: 10 ticks/s in the example packs. When the simulation is paused,
 commands are refused with `TEMPORARILY_REJECTED`, and an upload is acknowledged
 but applies on the next tick (a STATUSTEXT says so).
 
@@ -162,6 +203,7 @@ cargo run --release -p sim-engine --bin simctl -- list
 cargo run --release -p sim-engine --bin simctl -- --scenarios bench/scenarios bench global-drift
 cargo run --release -p sim-engine --bin simctl -- --scenarios bench/scenarios replay london-walkers --ticks 500
 cargo run --release -p sim-engine --bin simctl -- cell --lon -0.1276 --lat 51.5072 --res 15
+cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 8
 ```
 
 ### API
@@ -231,16 +273,32 @@ A `drones` pack seeds `world/agents.json` with entities of five kinds, each by
 
 | Kind | `state` |
 |---|---|
-| `drone` | `sysid` (1–250), `callsign`, optional `mission` (a list of `MISSION_ITEM_INT` fields: `seq`, `frame`, `command`, `param1`–`param4`, `x`, `y`, `z`) and `autostart` |
-| `intruder` | `route`: `[[lon, lat, alt_m], ...]` flown in a loop, optional `speed_ms` |
+| `drone` | `sysid` (1–250), `callsign`, optional `elevation_m` (what its pad stands on, above mean sea level, e.g. a roof; the terrain if left out), optional `mission` (a list of `MISSION_ITEM_INT` fields: `seq`, `frame`, `command`, `param1`–`param4`, `x`, `y`, `z`) and `autostart`, or optional `depot` (a depot in the address book, making it a courier) and `cruise_agl_m` |
+| `intruder` | `route`: `[[lon, lat, alt_m], ...]` flown in a loop, altitudes above the ground at each point, optional `speed_ms` |
 | `person`, `vehicle` | optional `speed_ms`, `radius_m` |
 | `poi` | `name` |
 
 `params.toml` sets `tick_seconds`, flight (`cruise_ms`, `climb_ms`,
-`takeoff_alt_m`, `rtl_alt_m`, `battery_drain_pct_s`, `battery_reserve_pct`),
-the camera (`hfov_deg`, `max_range_m`, `p_detect`, `sensor_period_s`,
-`report_interval_s`) and generated targets (`persons`, `vehicles`,
-`wander_radius_m`, `origin_lon`, `origin_lat`).
+`takeoff_alt_m`, `rtl_alt_m`), the battery (`battery_drain_pct_s`,
+`battery_reserve_pct`, `charge_pct_s` on the home pad, `launch_battery_pct`
+below which a takeoff from the ground waits or is refused), the winch
+(`winch_drop_ms`, `winch_slow_ms`, `winch_slow_m`, `winch_release_s`,
+`winch_reel_ms`, `winch_lock_s`), the camera (`hfov_deg`, `max_range_m`,
+`p_detect`, `sensor_period_s`, `report_interval_s`) and generated targets
+(`persons`, `vehicles`, `wander_radius_m`, `origin_lon`, `origin_lat`),
+deliveries (`order_rate_per_address_day`, `dispatch_takeoff_m`,
+`dispatch_approach_m`, `dispatch_load_s`) and `heatmap_resolution` (see
+[Deliveries and run logs](#deliveries-and-run-logs)).
+
+Terrain goes in `world/fields.json` as a regular latitude/longitude grid of
+elevations above mean sea level; the format is documented in
+`crates/sim-engine/src/models/drones/terrain.rs`. Without it the ground is flat
+at 0 m. People, vehicles and points of interest sit on the terrain, and the
+camera's footprint grows with height above it. The address book goes in the
+same file under `"addresses"`: `{"depots": ["MEGA", ...], "items": [[lat_e7,
+lon_e7, depot_index, "label"], ...]}`. `scenarios/kaunas-deliveries` has a
+Copernicus GLO-30 grid and every OpenStreetMap address within 5 km of its hubs (34502), built by
+`tools/kaunas_deliveries.py`.
 
 ## Development
 

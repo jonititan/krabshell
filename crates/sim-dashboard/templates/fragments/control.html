@@ -54,10 +54,6 @@
   <div class="controls">
     <form hx-post="/actions/start" hx-target="#control" hx-swap="outerHTML">
       <button type="submit" class="primary">Start</button>
-      <label>at
-        <input type="text" name="tps" placeholder="max" size="5" inputmode="decimal">
-        tps
-      </label>
     </form>
     <form hx-post="/actions/pause" hx-target="#control" hx-swap="outerHTML">
       <button type="submit">Pause</button>
@@ -74,8 +70,56 @@
     </form>
   </div>
 
+  {# A change applies at once, running or paused. The custom box keeps what is
+     typed in it across the once-a-second refresh (hx-preserve). #}
+  <form class="speed"
+        hx-post="/actions/speed"
+        hx-trigger="change, submit"
+        hx-target="#control"
+        hx-swap="outerHTML">
+    <span class="speed-label">Speed</span>
+    <label class="choice">
+      <input type="radio" name="speed" value="max"{% if control.speed == "max" %} checked{% endif %}>
+      Max
+    </label>
+    {% match control.realtime_tps %}
+    {% when Some with (tps) %}
+    <label class="choice">
+      <input type="radio" name="speed" value="realtime"{% if control.speed == "realtime" %} checked{% endif %}>
+      Real time <span class="dim">({{ tps }} tps)</span>
+    </label>
+    {% when None %}
+    <label class="choice" title="This scenario has no tick_seconds, so it has no real-time rate.">
+      <input type="radio" name="speed" value="realtime" disabled>
+      Real time
+    </label>
+    {% endmatch %}
+    <label class="choice">
+      <input type="radio" name="speed" value="custom"{% if control.speed == "custom" %} checked{% endif %}>
+      Custom
+    </label>
+    <label class="choice">
+      <input id="speed-custom"
+             hx-preserve="true"
+             type="text"
+             name="tps"
+             value="{{ control.custom_tps }}"
+             placeholder="rate"
+             size="6"
+             inputmode="decimal"
+             aria-label="Custom rate, ticks per second"
+             oninput="this.form.elements.speed.value = 'custom'">
+      tps
+    </label>
+  </form>
+
   <dl class="readout">
     <div><dt>Tick</dt><dd class="big">{{ control.tick }}</dd></div>
+    {% match control.sim_time %}
+    {% when Some with (time) %}
+    <div><dt>Sim time</dt><dd class="big" title="Simulated time since tick 0">{{ time }}</dd></div>
+    {% when None %}
+    {% endmatch %}
     <div><dt>Agents</dt><dd class="big">{{ control.agents }}</dd></div>
     <div><dt>Occupied cells</dt><dd class="big">{{ control.cells }}</dd></div>
     <div><dt>Sim rate</dt><dd class="big">{{ control.sim_tps }}<small>tps</small></dd></div>
@@ -83,6 +127,11 @@
 
   <dl class="readout small">
     <div><dt>Target rate</dt><dd>{{ control.rate }}</dd></div>
+    {% match control.tick_length %}
+    {% when Some with (length) %}
+    <div><dt>Sim time per tick</dt><dd>{{ length }}</dd></div>
+    {% when None %}
+    {% endmatch %}
     <div><dt>Publishing</dt><dd>{{ control.publish_hz }} Hz</dd></div>
     <div><dt>Last step</dt><dd>{{ control.step_time }}</dd></div>
     <div><dt>Intent queue</dt><dd>{{ control.queue_depth }}</dd></div>

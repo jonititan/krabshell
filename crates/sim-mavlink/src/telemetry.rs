@@ -75,9 +75,10 @@ pub fn global_position(drone: &DroneStatus, time_boot_ms: u32) -> MavMessage {
         time_boot_ms,
         lat: drone.pose.lat_e7,
         lon: drone.pose.lon_e7,
-        // The scenario has no terrain or MSL datum: altitude is relative to home.
+        // The simulation's altitudes are above mean sea level. Home is the
+        // launch pad (a rooftop, say), so relative_alt is height above the pad.
         alt: drone.pose.alt_mm,
-        relative_alt: drone.pose.alt_mm,
+        relative_alt: drone.pose.alt_mm - drone.home.alt_mm,
         vx,
         vy,
         vz: (-drone.pose.vs_cms).clamp(-32_768, 32_767) as i16,
@@ -109,7 +110,11 @@ pub fn vfr_hud(drone: &DroneStatus) -> MavMessage {
         alt: drone.pose.alt_mm as f32 / 1000.0,
         climb: drone.pose.vs_cms as f32 / 100.0,
         heading: (drone.pose.hdg_cdeg / 100) as i16,
-        throttle: if drone.pose.alt_mm > 200 { 50 } else { 0 },
+        throttle: if drone.pose.alt_mm - drone.home.alt_mm > 200 {
+            50
+        } else {
+            0
+        },
     })
 }
 
@@ -304,6 +309,17 @@ mod tests {
         assert_eq!(pos.vy, 1_000);
         assert_eq!(pos.hdg, 9_000);
         assert_eq!(pos.relative_alt, 40_000);
+    }
+
+    #[test]
+    fn altitude_is_above_sea_level_and_relative_to_a_rooftop_home() {
+        let mut d = drone(Mode::Auto);
+        d.home.alt_mm = 25_000;
+        let MavMessage::GLOBAL_POSITION_INT(pos) = global_position(&d, 5) else {
+            panic!()
+        };
+        assert_eq!(pos.alt, 40_000);
+        assert_eq!(pos.relative_alt, 15_000);
     }
 
     #[test]

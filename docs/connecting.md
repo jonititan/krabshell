@@ -207,20 +207,31 @@ The drone flies these mission items:
 
 | Item | Id | Notes |
 |---|---:|---|
-| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude |
+| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude. On the ground, waits (charging on its home pad) until the battery reaches `launch_battery_pct` |
 | `NAV_WAYPOINT` | 16 | param1 hold time (s), param2 acceptance radius (m) |
 | `NAV_LOITER_UNLIM` | 17 | Holds until you change mode or item |
 | `NAV_LOITER_TIME` | 19 | param1 seconds |
 | `NAV_RETURN_TO_LAUNCH` | 20 | Climbs to `rtl_alt_m`, flies home, lands, disarms |
-| `NAV_LAND` | 21 | Lands at the item's position, or where it is if 0,0 |
+| `NAV_LAND` | 21 | Lands at the item's position, or where it is if 0,0: on the home pad within 10 m of home, on the terrain elsewhere. Stays armed if more items follow (loading, a takeoff); disarms if it is the last |
 | `CONDITION_DELAY` | 112 | param1 seconds |
 | `DO_JUMP` | 177 | param1 target item, param2 repeats (−1 forever) |
 | `DO_CHANGE_SPEED` | 178 | param2 metres per second |
+| `DO_WINCH` | 42600 | Holds position while the winch runs. param2 `WINCH_DELIVER` (4) lowers from the drone's height, releases, reels up and locks, timed by the `winch_*` params; `WINCH_RELATIVE_LENGTH_CONTROL` (1) takes \|param3\| m at \|param4\| m/s. Other actions complete instantly |
 
 Other items (camera, gimbal, servo) complete instantly, so a mission containing
 them still runs. Geofences and rally points are not simulated: uploading an
-empty one succeeds, and a non-empty one is refused. All altitudes are taken as
-relative to the drone's home, because the scenarios have no terrain.
+empty one succeeds, and a non-empty one is refused.
+
+Altitudes are above mean sea level. A pack can carry terrain (see the README);
+without it the ground is flat at 0 m. A drone's home is the pad it starts on,
+which can be a rooftop above the terrain. Mission altitudes follow the item's
+frame: relative to home (3, 6, QGroundControl's default), above mean sea level
+(0, 5), or above the terrain under the drone (10, 11), which makes the drone
+follow the ground along the whole leg. `GLOBAL_POSITION_INT` reports `alt`
+above sea level and `relative_alt` above home.
+
+On its home pad a drone charges at `charge_pct_s` (if the pack sets it), armed
+or not.
 
 ### Flight modes
 

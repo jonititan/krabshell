@@ -1,0 +1,69 @@
+# Simulated seconds per tick.
+tick_seconds = 0.1
+seed = 20261003
+
+# Orders. Each of the 34502 addresses in world/fields.json orders at random,
+# independently, at this rate: 0.06 a day each is about 86 orders an hour
+# across the city. The forty drones keep up (each flies about three an hour
+# with charging), Akropolis (60 % of addresses) closest to its limit.
+# 0.0104 a day is about 15 an hour. Orders queue at the nearer hub, and the next drone there
+# that is on its pad, loaded and charged to launch_battery_pct flies the
+# oldest one.
+order_rate_per_address_day = 0.06
+# Each delivery mission: take off to this height above the roof, fly to the
+# address at the drone's cruise height above the terrain (60, 70 or 80 m, in
+# world/agents.json), winch the parcel down, fly back, descend to the approach
+# height above the roof and land. Loading takes dispatch_load_s after landing.
+dispatch_takeoff_m = 30.0
+dispatch_approach_m = 15.0
+dispatch_load_s = 120.0
+
+# Flight. Altitudes are above mean sea level, over the terrain in
+# world/fields.json. rtl_alt_m is above the roof.
+cruise_ms = 15.0
+climb_ms = 4.0
+takeoff_alt_m = 30.0
+rtl_alt_m = 90.0
+
+# Battery: 30 minutes of flight, 20 % reserve. The longest round trip (5 km
+# each way, a winch cycle, climbs and a landing) uses under half a charge.
+battery_drain_pct_s = 0.0556
+battery_reserve_pct = 20.0
+# Each pad charges at 0.0333 %/s (empty to full in 50 minutes). A drone takes
+# no order until it is back to launch_battery_pct.
+charge_pct_s = 0.0333
+launch_battery_pct = 80.0
+
+# Winch. Deliveries are MAV_CMD_DO_WINCH / WINCH_DELIVER from the cruise
+# hover: the line drops at winch_drop_ms, slows to winch_slow_ms for the last
+# winch_slow_m, waits winch_release_s on the ground, reels up at winch_reel_ms
+# and locks in winch_lock_s. The drone holds position throughout: about 75 s
+# from 70 m.
+winch_drop_ms = 2.0
+winch_slow_ms = 0.5
+winch_slow_m = 3.0
+winch_release_s = 5.0
+winch_reel_ms = 2.5
+winch_lock_s = 3.0
+
+# Camera
+hfov_deg = 80.0
+max_range_m = 250.0
+p_detect = 0.85
+sensor_period_s = 1.0
+report_interval_s = 15.0
+
+# Ground targets scattered around the city centre, between the two hubs.
+persons = 1500
+vehicles = 300
+wander_radius_m = 5000.0
+origin_lon = 23.9060
+origin_lat = 54.9155
+person_speed_ms = 1.4
+vehicle_speed_ms = 8.0
+
+# Run log: krabshell writes a folder under var/logs/ while this scenario runs,
+# with drone-seconds of flight per A5 cell of this resolution (15: about
+# 180 m), every delivery, and a histogram of time from order to delivery.
+# `simctl fly kaunas-deliveries --hours 8` makes one offline.
+heatmap_resolution = 15

@@ -18,6 +18,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Form, Router};
 use serde::Deserialize;
+use sim_core::config::{Config, Param};
 use sim_core::{GeoCell, Intent, IntentVerb, Profile, RunMode};
 use sim_engine::{Control, Published, Submission};
 
@@ -55,6 +56,7 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/fragments/cell", get(cell_fragment))
         .route("/fragments/intents", get(intents_fragment))
         .route("/actions/start", post(action_start))
+        .route("/actions/speed", post(action_speed))
         .route("/actions/pause", post(action_pause))
         .route("/actions/step", post(action_step))
         .route("/actions/reset", post(action_reset))
@@ -103,6 +105,12 @@ impl Flash {
             message: message.into(),
         }
     }
+    fn warn(message: impl Into<String>) -> Self {
+        Flash {
+            kind: "warn",
+            message: message.into(),
+        }
+    }
 }
 
 /// Everything the control panel shows, pre-formatted so the template does no
@@ -112,6 +120,10 @@ pub struct ControlView {
     pub mode_class: &'static str,
     pub alive: bool,
     pub tick: String,
+    /// Simulated time since tick 0, if the model says how long a tick is.
+    pub sim_time: Option<String>,
+    /// Simulated time per tick.
+    pub tick_length: Option<String>,
     pub agents: String,
     pub cells: String,
     pub sim_tps: String,
@@ -128,6 +140,12 @@ pub struct ControlView {
     pub profile: String,
     pub parallel: String,
     pub rate: String,
+    /// Which speed choice is selected: `max`, `realtime` or `custom`.
+    pub speed: &'static str,
+    /// The real-time rate, if the scenario says how long a tick is.
+    pub realtime_tps: Option<String>,
+    /// The custom rate box's value: the current rate when it is custom.
+    pub custom_tps: String,
     pub resolution: String,
     pub view_resolution: String,
     pub root: String,
@@ -155,6 +173,9 @@ impl ControlView {
             },
             alive: health.alive,
             tick: thousands(view.meta.tick),
+            sim_time: tick_seconds(&view.config)
+                .map(|dt| format_sim_time(view.meta.tick as f64 * dt)),
+            tick_length: tick_seconds(&view.config).map(|dt| format!("{} s", format_tps(dt))),
             agents: thousands(view.meta.agent_count),
             cells: thousands(view.meta.occupied_cells),
             sim_tps: format_rate(m.sim_tps),
@@ -177,9 +198,12 @@ impl ControlView {
             } else {
                 "off".to_owned()
             },
-            rate: match view.config.run.target_tps {
-                Some(tps) => format!("{tps:.0} tps"),
-                None => "maximum".to_owned(),
+            rate: describe_rate(&view.config),
+            speed: speed_choice(&view.config),
+            realtime_tps: realtime_tps(&view.config).map(format_tps),
+            custom_tps: match (speed_choice(&view.config), view.config.run.target_tps) {
+                ("custom", Some(tps)) => format_tps(tps),
+                _ => String::new(),
             },
             resolution: view.meta.resolution.to_string(),
             view_resolution: view.config.grid.view_resolution.to_string(),
@@ -520,13 +544,18 @@ async fn intents_fragment(State(state): State<AppState>) -> Response {
 
 #[derive(Deserialize)]
 pub struct StartForm {
-    /// Blank means maximum speed.
-    #[serde(default)]
-    tps: String,
+    /// Blank means maximum speed. Absent (the dashboard's Start button) keeps
+    /// the speed already chosen.
+    tps: Option<String>,
 }
 
 async fn action_start(State(state): State<AppState>, Form(form): Form<StartForm>) -> Response {
-    let trimmed = form.tps.trim();
+    let Some(tps) = form.tps else {
+        let target_tps = state.driver.view().config.run.target_tps;
+        let message = format!("Running at {}.", describe_rate_tps(&state, target_tps));
+        return act(&state, Control::Start { target_tps }, message).await;
+    };
+    let trimmed = tps.trim();
     let target_tps = if trimmed.is_empty() {
         None
     } else {
@@ -547,6 +576,54 @@ async fn action_start(State(state): State<AppState>, Form(form): Form<StartForm>
         None => "Running at maximum speed.".to_owned(),
     };
     act(&state, Control::Start { target_tps }, message).await
+}
+
+#[derive(Deserialize)]
+pub struct SpeedForm {
+    /// `max`, `realtime` or `custom`.
+    #[serde(default)]
+    speed: String,
+    /// The custom rate, ticks per second. Only read for `custom`.
+    #[serde(default)]
+    tps: String,
+}
+
+/// Change the target rate without starting or pausing the run.
+async fn action_speed(State(state): State<AppState>, Form(form): Form<SpeedForm>) -> Response {
+    let config = state.driver.view().config.clone();
+    let target_tps = match form.speed.as_str() {
+        "max" => None,
+        "realtime" => match realtime_tps(&config) {
+            Some(tps) => Some(tps),
+            None => {
+                return control_with(
+                    &state,
+                    Flash::bad("This scenario has no tick_seconds, so it has no real-time rate."),
+                )
+            }
+        },
+        "custom" => {
+            let trimmed = form.tps.trim();
+            match trimmed.parse::<f64>() {
+                Ok(tps) if tps > 0.0 && tps.is_finite() => Some(tps),
+                _ if trimmed.is_empty() => {
+                    return control_with(
+                        &state,
+                        Flash::warn("Enter a custom rate in ticks per second."),
+                    )
+                }
+                _ => {
+                    return control_with(
+                        &state,
+                        Flash::bad(format!("'{trimmed}' is not a tick rate.")),
+                    )
+                }
+            }
+        }
+        other => return control_with(&state, Flash::bad(format!("Unknown speed '{other}'."))),
+    };
+    let message = format!("Speed set to {}.", describe_rate_tps(&state, target_tps));
+    act(&state, Control::SetRate(target_tps), message).await
 }
 
 async fn action_pause(State(state): State<AppState>) -> Response {
@@ -834,6 +911,74 @@ fn thousands(value: u64) -> String {
     out
 }
 
+/// Ticks per second that keep simulated time in step with the wall clock:
+/// one over the model's `tick_seconds`, if it has one.
+fn realtime_tps(config: &Config) -> Option<f64> {
+    tick_seconds(config).map(|s| 1.0 / s)
+}
+
+/// Simulated seconds per tick, from the model's `tick_seconds`.
+fn tick_seconds(config: &Config) -> Option<f64> {
+    config
+        .model
+        .get("tick_seconds")
+        .and_then(Param::as_f64)
+        .filter(|s| *s > 0.0 && s.is_finite())
+}
+
+/// `4 d 03:12:44` (days only once there are any), whole seconds.
+fn format_sim_time(seconds: f64) -> String {
+    let total = seconds.max(0.0).floor() as u64;
+    let (days, rest) = (total / 86_400, total % 86_400);
+    let clock = format!("{:02}:{:02}:{:02}", rest / 3600, rest % 3600 / 60, rest % 60);
+    if days > 0 {
+        format!("{days} d {clock}")
+    } else {
+        clock
+    }
+}
+
+fn is_realtime(config: &Config, tps: f64) -> bool {
+    realtime_tps(config).is_some_and(|rt| (tps - rt).abs() <= rt * 1e-9)
+}
+
+fn speed_choice(config: &Config) -> &'static str {
+    match config.run.target_tps {
+        None => "max",
+        Some(tps) if is_realtime(config, tps) => "realtime",
+        Some(_) => "custom",
+    }
+}
+
+/// Up to three significant decimals, without trailing zeros: 10, 2.5, 0.125.
+fn format_tps(tps: f64) -> String {
+    let text = format!("{tps:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+fn describe_rate(config: &Config) -> String {
+    describe(config, config.run.target_tps)
+}
+
+fn describe_rate_tps(state: &AppState, target_tps: Option<f64>) -> String {
+    describe(&state.driver.view().config, target_tps)
+}
+
+fn describe(config: &Config, target_tps: Option<f64>) -> String {
+    match target_tps {
+        None => "maximum speed".to_owned(),
+        Some(tps) if is_realtime(config, tps) => format!("real time ({} tps)", format_tps(tps)),
+        Some(tps) => match realtime_tps(config) {
+            Some(rt) => format!(
+                "{} tps ({}× real time)",
+                format_tps(tps),
+                format_tps(tps / rt)
+            ),
+            None => format!("{} tps", format_tps(tps)),
+        },
+    }
+}
+
 fn format_rate(tps: f64) -> String {
     if tps >= 1_000_000.0 {
         format!("{:.2} M", tps / 1_000_000.0)
@@ -874,5 +1019,12 @@ mod tests {
         assert_eq!(format_nanos(500), "500 ns");
         assert_eq!(format_nanos(4_500), "4.5 \u{b5}s");
         assert_eq!(format_nanos(2_000_000), "2.00 ms");
+    }
+
+    #[test]
+    fn sim_time_reads_as_a_clock_with_days() {
+        assert_eq!(format_sim_time(0.0), "00:00:00");
+        assert_eq!(format_sim_time(4_260.9), "01:11:00");
+        assert_eq!(format_sim_time(3.0 * 86_400.0 + 3_725.0), "3 d 01:02:05");
     }
 }

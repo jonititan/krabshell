@@ -67,6 +67,23 @@ enum Command {
         #[arg(long, default_value_t = 500)]
         ticks: u64,
     },
+    /// Fly a drones scenario for some simulated hours as fast as it goes and
+    /// write its run log: flight heatmap, deliveries, and a histogram of time
+    /// from order to delivery.
+    #[command(alias = "heatmap")]
+    Fly {
+        scenario: String,
+        /// Simulated hours to run.
+        #[arg(long, default_value_t = 8.0)]
+        hours: f64,
+        /// Simulated seconds between samples. The heatmap follows the straight
+        /// line between samples, so this only blurs corners at waypoints.
+        #[arg(long, default_value_t = 5.0)]
+        sample_s: f64,
+        /// Output folder. Defaults to var/logs/<scenario>-<hours>h.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Look up the A5 cell at a coordinate. Use it to fill in a manifest `root`.
     Cell {
         #[arg(long, allow_hyphen_values = true)]
@@ -112,6 +129,97 @@ fn main() -> anyhow::Result<()> {
                     pack.id, pack.model, pack.resolution, pack.name
                 );
             }
+        }
+
+        Command::Fly {
+            scenario,
+            hours,
+            sample_s,
+            out,
+        } => {
+            use sim_engine::models::drones::runlog::{self, RunLog};
+            let blob = load(&scenario)?;
+            if !runlog::wanted(&blob.config) {
+                anyhow::bail!(
+                    "'{scenario}' asks for no run log: set heatmap_resolution or order_rate_per_address_day in its params.toml"
+                );
+            }
+            let tick_s = blob
+                .config
+                .model
+                .get("tick_seconds")
+                .and_then(sim_core::config::Param::as_f64)
+                .filter(|s| *s > 0.0)
+                .unwrap_or(0.1);
+            let total = (hours * 3600.0 / tick_s).round().max(1.0) as u64;
+            let every = (sample_s / tick_s).round().max(1.0) as u64;
+            let out = out
+                .unwrap_or_else(|| PathBuf::from("var/logs").join(format!("{scenario}-{hours}h")));
+            let config = blob.config.clone();
+            let (driver, handle) = start(blob)?;
+            println!(
+                "flying '{scenario}' for {hours} simulated hours ({total} ticks), sampling every {every} ticks"
+            );
+            let started = Instant::now();
+            let mut log = RunLog::new(&scenario, &config, &handle.view());
+            log.observe(&handle.view());
+            let mut tick = 0;
+            let mut next_report = total / 10;
+            while tick < total {
+                let n = every.min(total - tick);
+                handle.command(Control::Step { n })?;
+                tick += n;
+                // The driver publishes as soon as a step batch ends.
+                let view = loop {
+                    let view = handle.view();
+                    if view.meta.tick >= tick && !view.health.mode.is_advancing() {
+                        break view;
+                    }
+                    if !view.health.alive {
+                        anyhow::bail!("the driver stopped at tick {}", view.meta.tick);
+                    }
+                    std::thread::sleep(Duration::from_micros(50));
+                };
+                log.observe(&view);
+                if tick >= next_report {
+                    println!(
+                        "  {:>3.0}%  {} deliveries so far",
+                        tick as f64 * 100.0 / total as f64,
+                        log.deliveries.len()
+                    );
+                    next_report += total / 10;
+                }
+            }
+            driver.shutdown();
+
+            std::fs::create_dir_all(&out)?;
+            for (name, contents) in log.files() {
+                std::fs::write(out.join(name), contents)?;
+            }
+            println!("wall clock:    {:.1} s", started.elapsed().as_secs_f64());
+            if let Some(map) = &log.heatmap {
+                println!(
+                    "flight:        {:.1} drone-hours",
+                    map.drone_seconds() / 3600.0
+                );
+            }
+            if let Some(s) = log.deliveries.summary() {
+                println!(
+                    "deliveries:    {} (order to delivery: mean {:.1} min, median {:.1}, 90% within {:.1}, slowest {:.1})",
+                    s.count,
+                    s.mean_s / 60.0,
+                    s.median_s / 60.0,
+                    s.p90_s / 60.0,
+                    s.max_s / 60.0
+                );
+            }
+            if log.missed_reports > 0 {
+                println!(
+                    "warning:       {} reports were dropped before they were read",
+                    log.missed_reports
+                );
+            }
+            println!("wrote          {}/", out.display());
         }
 
         Command::Run {

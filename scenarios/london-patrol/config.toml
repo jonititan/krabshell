@@ -1,7 +1,7 @@
 # No target_tps: the simulation runs flat out. krabshell's MAVLink gateway
-# keeps heartbeats and telemetry on the wall clock however fast it goes. Set a
-# rate from the dashboard to watch flights in real time (10 tps = real time at
-# tick_seconds = 0.1).
+# keeps heartbeats and telemetry on the wall clock however fast it goes. Pick
+# Real time under Speed on the dashboard to watch flights as they happen (10 tps
+# at tick_seconds = 0.1), or Custom for any other rate.
 [run]
 publish_hz = 20.0
 intent_horizon = 8

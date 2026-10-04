@@ -22,10 +22,15 @@
 //! run to the wall clock — krabshell's gateways keep real-time protocols happy
 //! while the simulation runs as fast as it can.
 
+pub mod deliveries;
+pub mod dispatch;
 pub mod flight;
+pub mod heatmap;
 pub mod mission;
+pub mod runlog;
 pub mod sensor;
 pub mod targets;
+pub mod terrain;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,10 +44,12 @@ use sim_core::{
 use crate::grid::SparseCellGrid;
 use crate::model::{Model, Truncation};
 use crate::models::walkers::gold_draw;
+use dispatch::{AddressBook, Courier, Dispatch, DispatchSettings};
 use flight::{Point, Pose};
-use mission::{Drone, Event, MissionItem, Mode, Tuning};
+use mission::{Drone, Event, MissionItem, Mode, Tuning, Winch};
 use sensor::{Candidate, Sensor, Sighting};
 use targets::{Route, Wander};
+use terrain::Terrain;
 
 /// `IntentVerb::Custom` codes this model handles. The MAVLink gateway builds
 /// these; anything else can too (REST, WebSocket).
@@ -60,6 +67,7 @@ pub mod codes {
 /// Salts that keep each use of the seed independent.
 const SPAWN_SALT: u64 = 0x0b5e_55ed_5a17_0001;
 const WANDER_SALT: u64 = 0x0b5e_55ed_5a17_0002;
+const ORDER_SALT: u64 = 0x0b5e_55ed_5a17_0003;
 
 /// Occupancy is re-resolved when an entity crosses into a new square of this
 /// many degrees × 10⁷ (≈4.5 m of latitude). Cells are tens of metres across or
@@ -123,6 +131,8 @@ struct Saved {
     route: Option<Route>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wander: Option<Wander>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    courier: Option<Courier>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +143,7 @@ struct Entity {
     drone: Option<Drone>,
     route: Option<Route>,
     wander: Option<Wander>,
+    courier: Option<Courier>,
     /// The refresh square the pose is in; see [`refresh_key`]. Derived.
     cell_key: (i32, i32),
 }
@@ -146,6 +157,7 @@ impl Entity {
             drone: None,
             route: None,
             wander: None,
+            courier: None,
             cell_key: refresh_key(&pose),
         }
     }
@@ -157,6 +169,7 @@ impl Entity {
             drone: self.drone.clone(),
             route: self.route.clone(),
             wander: self.wander.clone(),
+            courier: self.courier.clone(),
         }
     }
 
@@ -168,6 +181,7 @@ impl Entity {
             drone: saved.drone,
             route: saved.route,
             wander: saved.wander,
+            courier: saved.courier,
             cell_key: refresh_key(&saved.pose),
         }
     }
@@ -179,6 +193,9 @@ struct Settings {
     tuning: Tuning,
     sensor: Sensor,
     max_mission_items: usize,
+    /// Orders per second from each address.
+    order_rate_per_address_s: f64,
+    dispatch: DispatchSettings,
     cruise_cms: i32,
     person_speed_cms: i32,
     vehicle_speed_cms: i32,
@@ -189,6 +206,11 @@ struct Settings {
 pub struct Drones {
     grid: SparseCellGrid,
     entities: BTreeMap<AgentId, Entity>,
+    /// Ground elevation, from the pack's `world/fields.json`.
+    terrain: Terrain,
+    /// Addresses that order deliveries, from the pack's `world/fields.json`.
+    book: AddressBook,
+    dispatch: Dispatch,
     settings: Settings,
     seed: u64,
     gold: bool,
@@ -205,6 +227,9 @@ pub fn build(blob: &ScenarioBlob) -> anyhow::Result<Box<dyn Model>> {
     let mut model = Drones {
         grid: SparseCellGrid::new(blob.config.grid.resolution, blob.config.grid.root),
         entities: BTreeMap::new(),
+        terrain: Terrain::FLAT,
+        book: AddressBook::default(),
+        dispatch: Dispatch::default(),
         settings: settings(&blob.config.model),
         seed: 0,
         gold: false,
@@ -247,6 +272,20 @@ fn settings(params: &BTreeMap<String, Param>) -> Settings {
             ) as u32,
             reserve_ppm: (param_f64(params, "battery_reserve_pct", 15.0).clamp(0.0, 100.0)
                 * 10_000.0) as u32,
+            // No charger by default.
+            charge_ppm_tick: libm::round(
+                param_f64(params, "charge_pct_s", 0.0).max(0.0) * 10_000.0 * dt,
+            ) as u32,
+            launch_ppm: (param_f64(params, "launch_battery_pct", 0.0).clamp(0.0, 100.0) * 10_000.0)
+                as u32,
+            winch: Winch {
+                drop_ms: param_f64(params, "winch_drop_ms", 2.0).max(0.01),
+                slow_ms: param_f64(params, "winch_slow_ms", 0.5).max(0.01),
+                slow_m: param_f64(params, "winch_slow_m", 3.0).max(0.0),
+                release_s: param_f64(params, "winch_release_s", 5.0).max(0.0),
+                reel_ms: param_f64(params, "winch_reel_ms", 2.5).max(0.01),
+                lock_s: param_f64(params, "winch_lock_s", 3.0).max(0.0),
+            },
         },
         sensor: Sensor {
             half_fov_tan: libm::tan(hfov.to_radians() / 2.0),
@@ -258,6 +297,15 @@ fn settings(params: &BTreeMap<String, Param>) -> Settings {
         },
         max_mission_items: param_f64(params, "max_mission_items", 128.0).clamp(1.0, 4096.0)
             as usize,
+        order_rate_per_address_s: param_f64(params, "order_rate_per_address_day", 0.0).max(0.0)
+            / 86_400.0,
+        dispatch: DispatchSettings {
+            // Set at reset, once the address book's size is known.
+            orders_per_tick: 0.0,
+            takeoff_m: param_f64(params, "dispatch_takeoff_m", 30.0) as f32,
+            approach_m: param_f64(params, "dispatch_approach_m", 15.0) as f32,
+            load_ticks: ticks(param_f64(params, "dispatch_load_s", 120.0)),
+        },
         cruise_cms: cms(param_f64(params, "cruise_ms", 10.0)),
         person_speed_cms: cms(param_f64(params, "person_speed_ms", 1.4)),
         vehicle_speed_cms: cms(param_f64(params, "vehicle_speed_ms", 8.0)),
@@ -269,6 +317,23 @@ fn settings(params: &BTreeMap<String, Param>) -> Settings {
 fn rejected(message: impl Into<String>) -> RejectReason {
     RejectReason::Rejected {
         message: message.into(),
+    }
+}
+
+fn drone_in<'a>(
+    entities: &'a mut BTreeMap<AgentId, Entity>,
+    intent: &Intent,
+) -> Result<&'a mut Entity, RejectReason> {
+    let agent = intent
+        .agent
+        .ok_or_else(|| rejected("drone commands need an agent id"))?;
+    match entities.get_mut(&agent) {
+        Some(entity) if entity.drone.is_some() => Ok(entity),
+        Some(entity) => Err(rejected(format!(
+            "agent {agent} is a {}, not a drone",
+            entity.kind.name()
+        ))),
+        None => Err(rejected(format!("no agent {agent}"))),
     }
 }
 
@@ -353,8 +418,14 @@ impl Drones {
         let s = self.settings;
 
         let mut entity = Entity::new(kind, Pose::at(lon, lat, 0.0));
+        entity.pose.alt_mm = self.ground_mm(&entity.pose);
         match kind {
             Kind::Drone => {
+                // What it stands on, above mean sea level: a rooftop pad, say.
+                // The terrain if not given.
+                if let Some(elevation) = number("elevation_m") {
+                    entity.pose.alt_mm = flight::to_mm(elevation);
+                }
                 let sysid = match number("sysid") {
                     Some(n) if (1.0..=f64::from(HIGHEST_SYSID)).contains(&n) => n as u8,
                     Some(n) => {
@@ -381,6 +452,21 @@ impl Drones {
                     drone.mode = Mode::Auto;
                 }
                 entity.callsign = text("callsign").unwrap_or_else(|| format!("UAV-{sysid}"));
+                if let Some(depot) = text("depot") {
+                    let index = self.book.depot_index(&depot).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "drone {id}: depot '{depot}' is not one of the address book's {:?}",
+                            self.book.depots
+                        )
+                    })?;
+                    entity.courier = Some(Courier {
+                        depot: index,
+                        cruise_agl_m: number("cruise_agl_m").unwrap_or(60.0) as f32,
+                        order: None,
+                        delivered: false,
+                        landed_tick: None,
+                    });
+                }
                 entity.drone = Some(drone);
             }
             Kind::Intruder => {
@@ -395,14 +481,19 @@ impl Drones {
                         "intruder {id}: a route needs at least two [lon, lat, alt_m] points"
                     );
                 }
+                // Route altitudes are above the ground at each point.
                 let waypoints: Vec<Point> = route
                     .iter()
-                    .map(|[lon, lat, alt]| Point::at(*lon, *lat, *alt))
+                    .map(|[lon, lat, alt]| {
+                        let p = Point::at(*lon, *lat, *alt);
+                        p.with_alt_mm(p.alt_mm + self.terrain.ground_mm(p.lat_e7, p.lon_e7))
+                    })
                     .collect();
                 if let Some(bad) = waypoints.iter().position(|p| !self.accepts(p)) {
                     anyhow::bail!("intruder {id}: route point {bad} is outside the world");
                 }
                 entity.pose = Pose::at(lon, lat, route[0][2]);
+                entity.pose.alt_mm += self.ground_mm(&entity.pose);
                 entity.callsign = text("callsign").unwrap_or_default();
                 entity.route = Some(Route {
                     waypoints,
@@ -478,6 +569,7 @@ impl Drones {
                 Pose {
                     lat_e7: at.lat_e7,
                     lon_e7: at.lon_e7,
+                    alt_mm: self.terrain.ground_mm(at.lat_e7, at.lon_e7),
                     ..Pose::default()
                 },
             );
@@ -513,17 +605,11 @@ impl Drones {
     }
 
     fn drone_mut(&mut self, intent: &Intent) -> Result<&mut Entity, RejectReason> {
-        let agent = intent
-            .agent
-            .ok_or_else(|| rejected("drone commands need an agent id"))?;
-        match self.entities.get_mut(&agent) {
-            Some(entity) if entity.drone.is_some() => Ok(entity),
-            Some(entity) => Err(rejected(format!(
-                "agent {agent} is a {}, not a drone",
-                entity.kind.name()
-            ))),
-            None => Err(rejected(format!("no agent {agent}"))),
-        }
+        drone_in(&mut self.entities, intent)
+    }
+
+    fn ground_mm(&self, pose: &Pose) -> i32 {
+        self.terrain.ground_mm(pose.lat_e7, pose.lon_e7)
     }
 
     fn apply_drone_intent(&mut self, code: u16, intent: &Intent) -> Result<(), RejectReason> {
@@ -589,7 +675,7 @@ impl Drones {
                         return Err(RejectReason::OutOfBounds);
                     }
                 }
-                let entity = self.drone_mut(intent)?;
+                let entity = drone_in(&mut self.entities, intent)?;
                 let pose = entity.pose;
                 entity
                     .drone
@@ -600,6 +686,7 @@ impl Drones {
                         params,
                         &pose,
                         &tuning,
+                        &self.terrain,
                     )
                     .map_err(rejected)
             }
@@ -636,6 +723,7 @@ impl Drones {
         for _ in 0..count {
             let id = self.next_id;
             let mut entity = Entity::new(kind, Pose::at(lon, lat, 0.0));
+            entity.pose.alt_mm = self.ground_mm(&entity.pose);
             if kind == Kind::Poi {
                 entity.callsign = intent
                     .payload
@@ -690,15 +778,85 @@ impl Drones {
         })
     }
 
+    /// Couriers that landed give up or finish their order; new orders join
+    /// their depot's queue; ready couriers take the oldest order there.
+    fn run_dispatch(&mut self, tick: u64) {
+        if self.book.depots.is_empty() {
+            return;
+        }
+        let launch_ppm = self.settings.tuning.launch_ppm;
+        let ds = self.settings.dispatch;
+        for entity in self.entities.values_mut() {
+            let (Some(courier), Some(drone)) = (entity.courier.as_mut(), entity.drone.as_ref())
+            else {
+                continue;
+            };
+            if courier.order.is_some() && drone.mode == Mode::Disarmed {
+                let mut order = courier.order.take().expect("checked");
+                if !courier.delivered {
+                    // Back without delivering: first in line again.
+                    order.dispatched_tick = None;
+                    self.dispatch.queues[usize::from(courier.depot)].push_front(order);
+                }
+                courier.delivered = false;
+                courier.landed_tick = Some(tick);
+            }
+        }
+
+        let seed = self.seed ^ ORDER_SALT;
+        self.dispatch
+            .place_orders(tick, &self.book, &ds, |n| draw_pair(seed, n, 0));
+        if self.dispatch.queued() == 0 {
+            return;
+        }
+
+        let terrain = &self.terrain;
+        for entity in self.entities.values_mut() {
+            let (Some(courier), Some(drone)) = (entity.courier.as_mut(), entity.drone.as_mut())
+            else {
+                continue;
+            };
+            let ready = courier.order.is_none()
+                && matches!(drone.mode, Mode::Disarmed | Mode::Idle)
+                && drone.on_home_pad(&entity.pose, terrain)
+                && drone.battery_ppm >= launch_ppm
+                && courier
+                    .landed_tick
+                    .is_none_or(|landed| tick.saturating_sub(landed) >= ds.load_ticks);
+            if !ready {
+                continue;
+            }
+            let Some(mut order) = self.dispatch.queues[usize::from(courier.depot)].pop_front()
+            else {
+                continue;
+            };
+            let to = &self.book.addresses[order.address as usize];
+            drone.upload(dispatch::delivery_mission(
+                &drone.home,
+                to,
+                courier.cruise_agl_m,
+                &ds,
+            ));
+            drone.mode = Mode::Auto;
+            order.dispatched_tick = Some(tick);
+            courier.order = Some(order);
+            courier.delivered = false;
+        }
+    }
+
     fn scan(&mut self, tick: u64) {
         let sensor = self.settings.sensor;
-        let observers: Vec<(AgentId, Point)> = self
+        let observers: Vec<(AgentId, Point, i32)> = self
             .entities
             .iter()
-            .filter(|(_, e)| e.kind == Kind::Drone && !e.pose.grounded())
-            .map(|(id, e)| (*id, e.pose.point()))
+            .filter(|(_, e)| {
+                e.drone
+                    .as_ref()
+                    .is_some_and(|d| !d.grounded(&e.pose, &self.terrain))
+            })
+            .map(|(id, e)| (*id, e.pose.point(), self.ground_mm(&e.pose)))
             .collect();
-        for (observer, from) in observers {
+        for (observer, from, ground_mm) in observers {
             let mut sightings = std::mem::take(&mut self.sightings);
             let candidates = self
                 .entities
@@ -714,6 +872,7 @@ impl Drones {
                 tick,
                 observer,
                 &from,
+                ground_mm,
                 candidates,
                 &mut self.last_seen,
                 &mut sightings,
@@ -785,6 +944,48 @@ pub fn drones_in(cells: &[CellBag]) -> BTreeMap<u8, DroneStatus> {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
+fn delivery_report(
+    tick: u64,
+    observer: AgentId,
+    sysid: u8,
+    callsign: &str,
+    order: &dispatch::Order,
+    book: &AddressBook,
+    pose: &Pose,
+    dt: f64,
+) -> Report {
+    let address = &book.addresses[order.address as usize];
+    let seconds = |from: u64, to: u64| to.saturating_sub(from) as f64 * dt;
+    let dispatched = order.dispatched_tick.unwrap_or(tick);
+    Report {
+        seq: 0,
+        tick,
+        kind: ReportKind::Delivery,
+        uid: format!("order-{}", order.id),
+        observer: Some(observer),
+        target: None,
+        target_kind: String::new(),
+        lat_e7: address.lat_e7,
+        lon_e7: address.lon_e7,
+        alt_mm: pose.alt_mm,
+        detail: serde_json::json!({
+            "order": order.id,
+            "address": order.address,
+            "label": address.label,
+            "depot": book.depots[usize::from(address.depot)],
+            "sysid": sysid,
+            "callsign": callsign,
+            "ordered_tick": order.ordered_tick,
+            "dispatched_tick": dispatched,
+            "delivered_tick": tick,
+            "wait_s": seconds(order.ordered_tick, dispatched),
+            "flight_s": seconds(dispatched, tick),
+            "total_s": seconds(order.ordered_tick, tick),
+        }),
+    }
+}
+
 fn lowest_free(used: &BTreeSet<u8>) -> anyhow::Result<u8> {
     (1..=HIGHEST_SYSID)
         .find(|id| !used.contains(id))
@@ -804,6 +1005,12 @@ impl Model for Drones {
         self.last_seen.clear();
         self.reports.clear();
         self.settings = settings(params);
+        self.terrain = Terrain::from_fields(&blob.fields)?;
+        self.book = AddressBook::from_fields(&blob.fields)?;
+        self.dispatch = Dispatch::new(self.book.depots.len());
+        self.settings.dispatch.orders_per_tick = self.settings.order_rate_per_address_s
+            * self.book.addresses.len() as f64
+            * self.settings.tuning.dt;
         self.seed = params
             .get("seed")
             .and_then(Param::as_i64)
@@ -857,13 +1064,36 @@ impl Model for Drones {
     fn step(&mut self, tick: u64) {
         let tuning = self.settings.tuning;
         let seed = self.seed;
+        let terrain = &self.terrain;
         let mut moved: Vec<AgentId> = Vec::new();
 
         for (id, entity) in self.entities.iter_mut() {
             if let Some(drone) = entity.drone.as_mut() {
-                drone.step(&mut entity.pose, &tuning, &mut self.events);
+                drone.step(&mut entity.pose, &tuning, terrain, &mut self.events);
                 for event in self.events.drain(..) {
                     if let Event::Reached(item) = event {
+                        let winched = drone
+                            .mission
+                            .get(usize::from(item))
+                            .is_some_and(|i| i.command == mission::DO_WINCH);
+                        if let Some(courier) = entity.courier.as_mut().filter(|_| winched) {
+                            if let Some(order) =
+                                courier.order.as_ref().filter(|_| !courier.delivered)
+                            {
+                                courier.delivered = true;
+                                self.dispatch.delivered += 1;
+                                self.reports.push(delivery_report(
+                                    tick,
+                                    *id,
+                                    drone.sysid,
+                                    &entity.callsign,
+                                    order,
+                                    &self.book,
+                                    &entity.pose,
+                                    tuning.dt,
+                                ));
+                            }
+                        }
                         self.reports.push(Report {
                             seq: 0,
                             tick,
@@ -888,6 +1118,7 @@ impl Model for Drones {
                     GeoCell::from_lonlat(p.lon(), p.lat(), grid.resolution())
                         .is_ok_and(|c| grid.accepts(c))
                 });
+                entity.pose.alt_mm = terrain.ground_mm(entity.pose.lat_e7, entity.pose.lon_e7);
             }
             let key = refresh_key(&entity.pose);
             if key != entity.cell_key {
@@ -905,6 +1136,8 @@ impl Model for Drones {
                 self.grid.set_location(id, cell);
             }
         }
+
+        self.run_dispatch(tick);
 
         if self.settings.sensor.scans_on(tick) {
             self.scan(tick);
@@ -959,6 +1192,7 @@ impl Model for Drones {
             "seed": self.seed,
             "gold": self.gold,
             "last_seen": last_seen,
+            "dispatch": self.dispatch,
         })
     }
 
@@ -971,6 +1205,9 @@ impl Model for Drones {
         }
         if let Some(gold) = fields.get("gold").and_then(serde_json::Value::as_bool) {
             self.gold = gold;
+        }
+        if let Some(dispatch) = fields.get("dispatch") {
+            self.dispatch = serde_json::from_value(dispatch.clone())?;
         }
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;

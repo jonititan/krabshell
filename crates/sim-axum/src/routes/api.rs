@@ -701,11 +701,35 @@ pub struct Entity {
 
 /// Every object that carries an exact position (`lat_e7`/`lon_e7` in its
 /// state), for drawing individual things on the map rather than cell counts.
+/// The body is the entities; headers say which tick they are from
+/// (`x-sim-tick`), how long a tick is in simulated seconds
+/// (`x-sim-tick-seconds`, when the model says) and whether the run is
+/// advancing (`x-sim-mode`), so a client can predict motion between polls.
 pub async fn state_entities(
     State(state): State<AppState>,
     Query(query): Query<EntitiesQuery>,
-) -> Json<Vec<Entity>> {
+) -> (axum::http::HeaderMap, Json<Vec<Entity>>) {
     let view = state.driver.view();
+    let mut headers = axum::http::HeaderMap::new();
+    let mut header = |name: &'static str, value: String| {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
+            headers.insert(name, value);
+        }
+    };
+    header("x-sim-tick", view.meta.tick.to_string());
+    header(
+        "x-sim-mode",
+        format!("{:?}", view.health.mode).to_lowercase(),
+    );
+    if let Some(seconds) = view
+        .config
+        .model
+        .get("tick_seconds")
+        .and_then(sim_core::config::Param::as_f64)
+        .filter(|s| *s > 0.0 && s.is_finite())
+    {
+        header("x-sim-tick-seconds", seconds.to_string());
+    }
     let kinds: Option<Vec<&str>> = query.kind.as_deref().map(|k| {
         k.split(',')
             .map(str::trim)
@@ -747,7 +771,7 @@ pub async fn state_entities(
             });
         }
     }
-    Json(out)
+    (headers, Json(out))
 }
 
 #[derive(Deserialize)]

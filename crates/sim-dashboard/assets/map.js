@@ -54,6 +54,22 @@
   let lastReport = null;  // seq of the newest report seen; null until primed
   const SIGHTING_MS = 30_000;
 
+  // Smooth, accurate motion between polls, the way netcode does it: each poll
+  // brings the authoritative state of every drone at a known tick. Between
+  // polls a drone is drawn where that state predicts it to be at the current
+  // simulated time (straight on at its reported speed and heading). When the
+  // next poll lands, the prediction is thrown away and rebuilt from the new
+  // state, so what is drawn is never more than one poll's prediction away
+  // from the truth, and is the truth whenever a poll arrives.
+  const ENTITY_POLL_MS = 250;
+  const FRAME_MS = 33;
+  // Never predict further than this many simulated seconds past a sample. At
+  // big speed-ups a poll covers minutes of flight; dead reckoning through a
+  // turn for that long would be fiction, so the drone waits for the truth.
+  const MAX_PREDICT_S = 20;
+  const samples = new Map(); // id -> { lon, lat, hdg, speed, tick }
+  const clock = { tick: null, at: 0, ticksPerMs: 0, tickSeconds: 0.1, advancing: false };
+
   // ------------------------------------------------------------ geometry
 
   function cssSize() {
@@ -347,8 +363,77 @@
     }
   }
 
-  // Sightings fade over SIGHTING_MS; drones are arrows along their heading;
-  // POIs are diamonds. Colours come from the theme so both modes read.
+  // Track the simulation clock from the ticks the polls report. The rate is
+  // smoothed, so one late poll does not lurch every drone.
+  function updateClock(tick, mode, tickSeconds, now) {
+    clock.advancing = mode === 'running' || mode === 'stepping';
+    if (tickSeconds > 0) clock.tickSeconds = tickSeconds;
+    if (clock.tick === null || tick < clock.tick) {
+      clock.ticksPerMs = 0;
+    } else if (tick > clock.tick && now > clock.at) {
+      const rate = (tick - clock.tick) / (now - clock.at);
+      clock.ticksPerMs = clock.ticksPerMs ? clock.ticksPerMs * 0.6 + rate * 0.4 : rate;
+    } else {
+      return; // Same tick as before: keep predicting from the older anchor.
+    }
+    clock.tick = tick;
+    clock.at = now;
+  }
+
+  function simTickAt(now) {
+    if (clock.tick === null) return 0;
+    return clock.advancing ? clock.tick + clock.ticksPerMs * (now - clock.at) : clock.tick;
+  }
+
+  // Replace every drone's state with the authoritative one just received.
+  function recordSamples(tick) {
+    samples.clear();
+    for (const e of entities) {
+      if (e.kind === 'poi') continue;
+      samples.set(e.id, { lon: e.lon, lat: e.lat, hdg: e.heading_deg || 0, speed: e.speed_ms || 0, tick });
+    }
+  }
+
+  // Where a drone is now, predicted from its last authoritative state.
+  function predicted(e, now) {
+    const s = samples.get(e.id);
+    if (!s) return { lon: e.lon, lat: e.lat, hdg: e.heading_deg || 0 };
+    const dt = Math.min(Math.max((simTickAt(now) - s.tick) * clock.tickSeconds, 0), MAX_PREDICT_S);
+    if (dt === 0 || s.speed === 0) return s;
+    const a = (s.hdg * Math.PI) / 180;
+    const k = 180 / Math.PI / 6_371_000;
+    const north = Math.cos(a) * s.speed * dt;
+    const east = Math.sin(a) * s.speed * dt;
+    return {
+      lon: s.lon + (east * k) / Math.cos((s.lat * Math.PI) / 180),
+      lat: s.lat + north * k,
+      hdg: s.hdg,
+    };
+  }
+
+  function anyMoving() {
+    if (!clock.advancing) return false;
+    for (const s of samples.values()) if (s.speed > 0) return true;
+    return false;
+  }
+
+  // Redraw while something is moving, at about 30 frames a second. The
+  // browser pauses this when the tab is hidden.
+  let lastFrame = 0;
+  function animate(now) {
+    if (camera && now - lastFrame >= FRAME_MS && anyMoving()) {
+      lastFrame = now;
+      draw();
+    }
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+
+  // Sightings fade over SIGHTING_MS; drones are arrows along their heading,
+  // drawn where they are predicted to be now; POIs are small diamonds
+  // underneath, so a city full of
+  // addresses does not hide the drones. Colours come from the theme so both
+  // modes read.
   function drawEntities(style, ink) {
     const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
     const accent = token('--accent', '#2b6cb0');
@@ -375,25 +460,33 @@
     // Camera scale is pixels per Earth circumference (world units 0..1).
     const pxPerKm = camera.scale / 40_075;
     const namePois = pxPerKm > 400;
-    for (const e of entities) {
-      const [x, y] = project(e.lon, e.lat);
+    // POIs first, so drones draw on top of them.
+    const ordered = [...entities].sort((a, b) => (a.kind === 'poi' ? 0 : 1) - (b.kind === 'poi' ? 0 : 1));
+    for (const e of ordered) {
+      const at = e.kind === 'poi' ? null : predicted(e, now);
+      const [x, y] = at ? project(at.lon, at.lat) : project(e.lon, e.lat);
       if (e.kind === 'poi') {
+        const r = namePois ? 5 : 3.5;
+        ctx.globalAlpha = namePois ? 1 : 0.7;
         ctx.beginPath();
-        ctx.moveTo(x, y - 6);
-        ctx.lineTo(x + 5, y);
-        ctx.lineTo(x, y + 6);
-        ctx.lineTo(x - 5, y);
+        ctx.moveTo(x, y - r);
+        ctx.lineTo(x + r * 0.8, y);
+        ctx.lineTo(x, y + r);
+        ctx.lineTo(x - r * 0.8, y);
         ctx.closePath();
         ctx.fillStyle = panel;
         ctx.strokeStyle = ink;
+        ctx.lineWidth = 1;
         ctx.fill();
         ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.5;
       } else {
         // An arrow pointing along the heading; screen y grows downward.
-        const a = (e.heading_deg * Math.PI) / 180;
-        const tip = [x + Math.sin(a) * 9, y - Math.cos(a) * 9];
-        const left = [x + Math.sin(a + 2.5) * 6, y - Math.cos(a + 2.5) * 6];
-        const right = [x + Math.sin(a - 2.5) * 6, y - Math.cos(a - 2.5) * 6];
+        const a = (at.hdg * Math.PI) / 180;
+        const tip = [x + Math.sin(a) * 12, y - Math.cos(a) * 12];
+        const left = [x + Math.sin(a + 2.5) * 8, y - Math.cos(a + 2.5) * 8];
+        const right = [x + Math.sin(a - 2.5) * 8, y - Math.cos(a - 2.5) * 8];
         ctx.beginPath();
         ctx.moveTo(...tip);
         ctx.lineTo(...left);
@@ -405,7 +498,10 @@
         ctx.fill();
         ctx.stroke();
       }
-      if (e.callsign && (e.kind !== 'poi' || namePois)) {
+      // Drones parked together on a roof would print their names on top of
+      // each other: name the ones moving, and the rest once zoomed in.
+      const moving = e.kind !== 'poi' && e.speed_ms > 0.3;
+      if (e.callsign && (moving || namePois || (e.kind === 'intruder'))) {
         const label = e.kind === 'drone' && e.mode ? `${e.callsign} · ${e.mode}` : e.callsign;
         ctx.lineWidth = 3;
         ctx.strokeStyle = panel;
@@ -421,7 +517,17 @@
     if (entitiesToggle && !entitiesToggle.checked) return;
     try {
       const response = await fetch('/api/v1/state/entities?kind=drone,intruder,poi');
-      if (response.ok) entities = await response.json();
+      if (response.ok) {
+        entities = await response.json();
+        const tick = Number(response.headers.get('x-sim-tick'));
+        updateClock(
+          tick,
+          response.headers.get('x-sim-mode') || '',
+          Number(response.headers.get('x-sim-tick-seconds')) || 0,
+          performance.now(),
+        );
+        recordSamples(tick);
+      }
 
       const since = lastReport ?? 0;
       const reports = await fetch(`/api/v1/reports?since=${since}`);
@@ -646,10 +752,19 @@
 
   refresh();
   refreshEntities();
+  // Occupancy once a second; drones several times a second, so a correction
+  // is never more than a quarter of a second of prediction.
   setInterval(() => {
-    if (!follow || follow.checked) {
-      refresh();
-      refreshEntities();
-    }
+    if (!follow || follow.checked) refresh();
   }, 1000);
+  let entitiesInFlight = false;
+  setInterval(async () => {
+    if ((follow && !follow.checked) || entitiesInFlight) return;
+    entitiesInFlight = true;
+    try {
+      await refreshEntities();
+    } finally {
+      entitiesInFlight = false;
+    }
+  }, ENTITY_POLL_MS);
 })();

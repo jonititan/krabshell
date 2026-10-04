@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 /// well under a metre over the few kilometres a scenario spans.
 const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
-/// Where something is and how it is moving. Altitude is relative to the
-/// scenario's ground datum, the same as MAVLink's relative-altitude frames.
+/// Where something is and how it is moving. Altitude is above mean sea level;
+/// see [`super::terrain`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Pose {
     pub lat_e7: i32,
@@ -59,11 +59,6 @@ impl Pose {
             lon_e7: self.lon_e7,
             alt_mm: self.alt_mm,
         }
-    }
-
-    /// On the ground, to within 20 cm.
-    pub fn grounded(&self) -> bool {
-        self.alt_mm <= 200
     }
 
     fn stop(&mut self) {

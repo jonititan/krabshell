@@ -38,6 +38,32 @@
     <div id="map-attribution" class="attribution" hidden></div>
     <noscript><p class="dim">The map needs JavaScript. Cell inspection below works without it.</p></noscript>
   </div>
+  <ul class="map-key" aria-label="Map key">
+    <li>
+      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-drone" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
+      Drone, pointing along its heading; named while moving
+    </li>
+    <li>
+      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-intruder" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
+      Intruder drone
+    </li>
+    <li>
+      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-poi" d="M0 -5 L4 0 L0 5 L-4 0 Z"/></svg>
+      Point of interest (hub, landmark); named when zoomed in
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true">
+        <circle class="k-person" cx="7" cy="10" r="4"/>
+        <circle class="k-vehicle" cx="20" cy="10" r="4"/>
+        <circle class="k-intruder" cx="33" cy="10" r="4"/>
+      </svg>
+      Camera sighting of a person, vehicle or intruder; fades over 30&nbsp;s
+    </li>
+    <li>
+      <span class="ramp" aria-hidden="true"></span>
+      Cell shading: agents per cell, mostly people and vehicles (scale bottom right)
+    </li>
+  </ul>
   <p class="dim small" id="map-status">Loading the map&hellip;</p>
 </section>
 
