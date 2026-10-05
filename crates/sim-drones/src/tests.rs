@@ -193,3 +193,81 @@ fn a_committed_view_stays_put_while_the_world_steps_on() {
     assert_ne!(hash(&world), before, "the world moved on");
     assert_eq!(held.records().len() as u64, world.agent_count());
 }
+
+fn started_crowd(name: &str, threads: usize) -> (World, Schedule) {
+    let mut world = World::new(&pack(name)).unwrap();
+    world.set_threads(threads).unwrap();
+    let mut schedule = schedule();
+    world.init(&mut schedule);
+    (world, schedule)
+}
+
+/// Apply `intent` to both worlds, which must agree on whether to accept it.
+fn both(a: &mut World, b: &mut World, intent: &Intent) -> bool {
+    let accepted = a.apply_intent(intent).is_ok();
+    assert_eq!(accepted, b.apply_intent(intent).is_ok());
+    accepted
+}
+
+#[test]
+fn a_crowd_steps_exactly_as_the_schedule_does() {
+    for (pack, threads) in [("london-patrol", 4), ("kaunas-deliveries", 3)] {
+        let (mut alone, mut a) = started(pack);
+        let (mut crowd, mut b) = started_crowd(pack, threads);
+        assert_eq!(b.get_all_events().len(), 2, "the dispatcher and the crowd");
+        let (mut ra, mut rb) = (Vec::new(), Vec::new());
+        for tick in 1..=600u64 {
+            if tick == 100 {
+                let cell = alone.records()[0].cell;
+                let spawn = Intent::operator(
+                    cell,
+                    IntentVerb::Spawn,
+                    serde_json::json!({ "kind": "person", "count": 4 }),
+                );
+                assert!(both(&mut alone, &mut crowd, &spawn));
+            }
+            if tick == 150 {
+                let newest = alone.records().last().unwrap().clone();
+                let mut despawn =
+                    Intent::operator(newest.cell, IntentVerb::Despawn, serde_json::Value::Null);
+                despawn.agent = Some(newest.id);
+                assert!(both(&mut alone, &mut crowd, &despawn));
+            }
+            if tick == 200 {
+                // Every flying drone heads home: mail, applied at the start
+                // of a step.
+                let drones: Vec<_> = alone
+                    .records()
+                    .iter()
+                    .filter(|r| r.kind == Kind::Drone)
+                    .map(|r| (r.id, r.cell))
+                    .collect();
+                let mut homing = 0;
+                for (id, cell) in drones {
+                    let mut rtl = Intent::operator(
+                        cell,
+                        IntentVerb::Custom(crate::codes::COMMAND),
+                        serde_json::json!({ "command": 20, "params": [0, 0, 0, 0, 0, 0, 0] }),
+                    );
+                    rtl.agent = Some(id);
+                    homing += usize::from(both(&mut alone, &mut crowd, &rtl));
+                }
+                assert!(homing > 0, "{pack}: no drone in the air to call home");
+            }
+            a.step(&mut alone);
+            b.step(&mut crowd);
+            alone.drain_reports(&mut ra);
+            crowd.drain_reports(&mut rb);
+            if tick % 50 == 0 {
+                assert_eq!(hash(&alone), hash(&crowd), "{pack} at tick {tick}");
+            }
+        }
+        assert_eq!(alone.agent_count(), crowd.agent_count());
+        assert!(!ra.is_empty(), "{pack} reported nothing");
+        assert_eq!(
+            serde_json::to_string(&ra).unwrap(),
+            serde_json::to_string(&rb).unwrap(),
+            "{pack} reports"
+        );
+    }
+}

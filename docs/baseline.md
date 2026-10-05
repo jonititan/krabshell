@@ -120,3 +120,49 @@ cargo build --release -p sim-engine -p sim-drones --bins
 target/release/simctl run london-patrol --ticks 3000
 target/release/krab-drones scenarios/london-patrol --steps 3000
 ```
+
+## Parallel drones: krABMaga's schedule vs a crowd
+
+Branch `experiment/parallel-threads`. `krab-drones` alone, 3 000 ticks,
+32 logical CPUs.
+
+**krABMaga's `parallel` schedule with more threads** (`--features parallel
+--threads N`), `kaunas-deliveries`: 1 thread 606 ticks/s, 4 threads 333,
+16 threads 276, against 1 339 for the default build. Its step takes one
+mutex around the whole `State` for every agent's `step`, so agents still run
+one at a time and the extra threads only add contention. It also deals
+agents round-robin to threads that interleave freely, so the gold hash
+changes from run to run (three different hashes at 4 threads), and it steps
+every queued agent regardless of its scheduled time.
+
+**A crowd** (`--crowd N`, [`crowd.rs`](../crates/sim-drones/src/crowd.rs)):
+every agent but the dispatcher steps inside one krABMaga agent. Work an agent
+does alone (wandering, flying, scanning the committed board) runs on a rayon
+pool; the parts that touch shared state (order queues, reports, the sensor's
+memory, placing on the grid) run after it in id order. Gold hashes and the
+full report stream are byte-identical to the schedule's at every thread
+count (checked over 36 000 ticks of `kaunas-deliveries`, and by
+`a_crowd_steps_exactly_as_the_schedule_does` with spawns, despawns and
+mail).
+
+Medians of three interleaved runs, ticks per second:
+
+| Pack | Agents | Schedule | Crowd 1 | 2 | 4 | 8 | 16 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `kaunas-deliveries` | 1 844 | 1 332 | 1 437 | 2 251 | 2 885 | **3 032** (2.3×) | 2 723 |
+| `london-patrol` | 1 365 | 2 244 | 2 354 | 3 511 | 4 292 | **4 837** (2.2×) | 4 542 |
+| `swarm-survey` | 5 042 | 473 | 529 | 926 | 1 410 | 1 745 | **1 792** (3.8×) |
+
+- **One crowd thread is already ≈ 8 % faster**: one heap pop per tick
+  instead of one per agent.
+- **Deliveries flatten past 4–8 threads.** At ≈ 330 µs a tick the id-order
+  phases (placing 1 844 agents on the grid, the commit) and two pool
+  round-trips are a growing share. The bigger `swarm-survey` keeps scaling to
+  16.
+
+Re-run with:
+
+```sh
+cargo build --release -p sim-drones --bin krab-drones
+target/release/krab-drones scenarios/kaunas-deliveries --steps 3000 --crowd 8
+```

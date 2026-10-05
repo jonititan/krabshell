@@ -40,6 +40,7 @@ use sim_core::{
 };
 
 use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
+use crate::crowd::Crowd;
 use crate::dispatch::{AddressBook, Courier, Dispatch};
 use crate::flight::{self, Point, Pose};
 use crate::mission::{self, Drone, MissionItem, Mode, Tuning};
@@ -102,8 +103,48 @@ pub(crate) fn draw_pair(seed: u64, id: AgentId, tick: u64) -> (f64, f64) {
     (a, (b >> 11) as f64 / (1u64 << 53) as f64)
 }
 
-fn to_a5(cell: GeoCell) -> A5Cell {
+pub(crate) fn to_a5(cell: GeoCell) -> A5Cell {
     A5Cell::new(cell.raw())
+}
+
+/// The grid's extent, without the grid: what [`World::contains`] needs, in a
+/// form threads can share. Mirrors `SparseA5Grid::contains`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bounds {
+    root: A5Cell,
+    resolution: i32,
+}
+
+impl Bounds {
+    fn of(grid: &SparseA5Grid<AgentId>) -> Bounds {
+        Bounds {
+            root: grid.root,
+            resolution: grid.resolution,
+        }
+    }
+
+    pub(crate) fn contains(&self, cell: GeoCell) -> bool {
+        let cell = to_a5(cell);
+        if cell.resolution() != self.resolution {
+            return false;
+        }
+        if self.root.is_world_cell() {
+            return true;
+        }
+        let root_res = self.root.resolution();
+        root_res <= self.resolution && cell.parent(root_res) == Some(self.root)
+    }
+
+    /// The grid cell at a position, if it is inside the world.
+    pub(crate) fn cell_of(&self, lat_e7: i32, lon_e7: i32) -> Option<GeoCell> {
+        let cell = GeoCell::from_lonlat(
+            f64::from(lon_e7) * 1e-7,
+            f64::from(lat_e7) * 1e-7,
+            self.resolution,
+        )
+        .ok()?;
+        self.contains(cell).then_some(cell)
+    }
 }
 
 fn new_grid(resolution: i32, root: Option<GeoCell>) -> SparseA5Grid<AgentId> {
@@ -117,14 +158,24 @@ fn new_grid(resolution: i32, root: Option<GeoCell>) -> SparseA5Grid<AgentId> {
 ///
 /// Under the `parallel` feature krABMaga's default schedule reads its thread
 /// count from the process's command line, which belongs to whoever embeds the
-/// model. One thread keeps gold runs in id order anyway.
+/// model. One thread keeps gold runs in id order anyway. For threads that
+/// help, see [`World::set_threads`].
 pub fn schedule() -> Schedule {
+    schedule_with_threads(1)
+}
+
+/// A schedule for a [`World`] stepping its agents on `threads` threads.
+/// Without the `parallel` feature krABMaga's schedule is sequential and
+/// `threads` is ignored. With more than one thread the step order between
+/// agents is not fixed, so gold hashes are not expected to hold.
+pub fn schedule_with_threads(threads: usize) -> Schedule {
     #[cfg(feature = "parallel")]
     {
-        Schedule::with_threads(1)
+        Schedule::with_threads(threads.max(1))
     }
     #[cfg(not(feature = "parallel"))]
     {
+        let _ = threads;
         Schedule::new()
     }
 }
@@ -239,6 +290,7 @@ pub struct World {
     pack_seed: u64,
 
     pub(crate) grid: SparseA5Grid<AgentId>,
+    pub(crate) bounds: Bounds,
     pub(crate) settings: Settings,
     pub(crate) terrain: Terrain,
     pub(crate) book: AddressBook,
@@ -251,7 +303,7 @@ pub struct World {
     next_id: AgentId,
 
     /// Committed agent state, sorted by id. Shared with snapshots in flight.
-    board: Arc<Vec<Record>>,
+    pub(crate) board: Arc<Vec<Record>>,
     /// What agents publish during a step.
     board_next: Vec<Record>,
     occupied: u64,
@@ -268,12 +320,16 @@ pub struct World {
     /// Each addressed drone as its queued instructions leave it, to check the
     /// next one against.
     scratch: BTreeMap<AgentId, Drone>,
-    arrivals: Vec<Member>,
-    retiring: BTreeSet<AgentId>,
+    pub(crate) arrivals: Vec<Member>,
+    pub(crate) retiring: BTreeSet<AgentId>,
 
     /// Grid cells a drone in a given cell could see into.
-    caps: HashMap<GeoCell, Vec<A5Cell>>,
+    pub(crate) caps: HashMap<GeoCell, Vec<A5Cell>>,
     scan_radius_m: f64,
+
+    /// When set, every agent but the dispatcher steps inside one
+    /// [`crate::crowd::Crowd`] on this pool instead of on the schedule.
+    pub(crate) crowd: Option<Arc<rayon::ThreadPool>>,
 }
 
 impl World {
@@ -298,6 +354,7 @@ impl World {
         let scan_radius_m = settings.sensor.max_range_m
             + 2.0 * sim_core::cell::nominal_cell_edge_meters(resolution)
             + 20.0;
+        let grid = new_grid(resolution, root);
         let mut world = World {
             id: blob.manifest.id.clone(),
             resolution,
@@ -305,7 +362,8 @@ impl World {
             roster: Vec::new(),
             roster_next_id: 1,
             pack_seed: seed,
-            grid: new_grid(resolution, root),
+            bounds: Bounds::of(&grid),
+            grid,
             dispatch: Dispatch::new(book.depots.len()),
             settings,
             terrain,
@@ -330,6 +388,7 @@ impl World {
             retiring: BTreeSet::new(),
             caps: HashMap::new(),
             scan_radius_m,
+            crowd: None,
         };
         world.enrol(blob)?;
         world.begin();
@@ -636,17 +695,11 @@ impl World {
 
     /// The grid cell at a position, if it is inside the world.
     pub fn cell_of(&self, lat_e7: i32, lon_e7: i32) -> Option<GeoCell> {
-        let cell = GeoCell::from_lonlat(
-            f64::from(lon_e7) * 1e-7,
-            f64::from(lat_e7) * 1e-7,
-            self.resolution,
-        )
-        .ok()?;
-        self.contains(cell).then_some(cell)
+        self.bounds.cell_of(lat_e7, lon_e7)
     }
 
     pub fn contains(&self, cell: GeoCell) -> bool {
-        self.grid.contains(&to_a5(cell))
+        self.bounds.contains(cell)
     }
 
     pub(crate) fn accepts(&self, point: &Point) -> bool {
@@ -688,6 +741,20 @@ impl World {
     /// Ids of every agent committed to a cell a drone in `cell` could see
     /// into, sorted.
     pub(crate) fn nearby(&mut self, cell: GeoCell) -> Vec<AgentId> {
+        self.warm_cap(cell);
+        let mut ids = Vec::new();
+        for c in &self.caps[&cell] {
+            if let Some(bag) = self.grid.get_objects(c) {
+                ids.extend(bag);
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// Cache the cells a drone in `cell` could see into.
+    pub(crate) fn warm_cap(&mut self, cell: GeoCell) {
         if !self.caps.contains_key(&cell) {
             if self.caps.len() >= CAP_CACHE {
                 self.caps.clear();
@@ -698,15 +765,6 @@ impl World {
                 .unwrap_or_default();
             self.caps.insert(cell, cells);
         }
-        let mut ids = Vec::new();
-        for c in &self.caps[&cell] {
-            if let Some(bag) = self.grid.get_objects(c) {
-                ids.extend(bag);
-            }
-        }
-        ids.sort_unstable();
-        ids.dedup();
-        ids
     }
 
     // ------------------------------------------------------- shared state
@@ -734,6 +792,10 @@ impl World {
 
     pub(crate) fn retiring(&self, id: AgentId) -> bool {
         self.retiring.contains(&id)
+    }
+
+    pub(crate) fn has_mail(&self) -> bool {
+        !self.mail.is_empty()
     }
 
     pub(crate) fn take_mail(&mut self, id: AgentId) -> Vec<Instruction> {
@@ -802,12 +864,37 @@ impl World {
     /// Place `members` and the dispatcher on an empty schedule and commit.
     fn populate(&mut self, schedule: &mut Schedule, members: Vec<Member>) {
         schedule.schedule_repeating(Box::new(Dispatcher), 0.0, DISPATCHER_ORDER);
-        for member in members {
-            let order = ordering(member.body().id).expect("ids are checked on the way in");
-            self.place(member.record());
-            schedule.schedule_repeating(member.boxed(), 0.0, order);
+        if self.crowd.is_some() {
+            for member in &members {
+                self.place(member.record());
+            }
+            schedule.schedule_repeating(Box::new(Crowd::new(members)), 0.0, 1);
+        } else {
+            for member in members {
+                let order = ordering(member.body().id).expect("ids are checked on the way in");
+                self.place(member.record());
+                schedule.schedule_repeating(member.boxed(), 0.0, order);
+            }
         }
         self.commit();
+    }
+
+    /// Step every agent but the dispatcher inside one krABMaga agent, on a
+    /// pool of `threads` threads, from the next [`State::init`] or
+    /// [`World::restore`]. 0 puts each agent on the schedule (the default).
+    /// Either way agents act in id order where they share state, so gold
+    /// runs agree.
+    pub fn set_threads(&mut self, threads: usize) -> anyhow::Result<()> {
+        self.crowd = if threads == 0 {
+            None
+        } else {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(|i| format!("sim-crowd-{i}"))
+                .build()?;
+            Some(Arc::new(pool))
+        };
+        Ok(())
     }
 
     /// Step once as `tick`. For embedders that keep their own clock.
@@ -1260,7 +1347,8 @@ impl State for World {
 
     fn before_step(&mut self, schedule: &mut Schedule) {
         self.tick = self.pinned.take().unwrap_or(self.tick + 1);
-        if self.arrivals.is_empty() {
+        // A crowd takes its own arrivals.
+        if self.arrivals.is_empty() || self.crowd.is_some() {
             return;
         }
         // Agents already on the schedule run at its next time; arrivals join

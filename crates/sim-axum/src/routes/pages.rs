@@ -930,7 +930,12 @@ fn tick_seconds(config: &Config) -> Option<f64> {
 fn format_sim_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor() as u64;
     let (days, rest) = (total / 86_400, total % 86_400);
-    let clock = format!("{:02}:{:02}:{:02}", rest / 3600, rest % 3600 / 60, rest % 60);
+    let clock = format!(
+        "{:02}:{:02}:{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    );
     if days > 0 {
         format!("{days} d {clock}")
     } else {

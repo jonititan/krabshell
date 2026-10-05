@@ -37,6 +37,15 @@ struct Cli {
     /// object per line.
     #[arg(long)]
     reports: Option<PathBuf>,
+    /// Threads for krABMaga's parallel schedule. Needs the `parallel`
+    /// feature; ignored without it.
+    #[arg(long, default_value_t = 1)]
+    threads: usize,
+    /// Step every agent but the dispatcher as one crowd on this many
+    /// threads, keeping gold runs identical. 0 steps each agent on the
+    /// schedule.
+    #[arg(long, default_value_t = 0)]
+    crowd: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -51,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         );
     }
     let mut world = World::new(&blob)?;
+    world.set_threads(cli.crowd)?;
     // Nobody drains them here; they are counted, and written out if asked.
     world.keep_reports(false);
     if let Some(path) = &cli.reports {
@@ -59,8 +69,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!(
-        "running '{}' for {} steps × {} on krABMaga",
-        blob.manifest.id, cli.steps, cli.reps
+        "running '{}' for {} steps × {} on krABMaga ({} schedule thread(s){}, crowd {})",
+        blob.manifest.id,
+        cli.steps,
+        cli.reps,
+        cli.threads,
+        if cfg!(feature = "parallel") {
+            ", parallel"
+        } else {
+            ""
+        },
+        cli.crowd
     );
     if cli.tui {
         #[cfg(not(feature = "parallel"))]
@@ -72,7 +91,7 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("--tui needs a build without the parallel feature");
     }
     let started = Instant::now();
-    run(&mut world, cli.steps, cli.reps);
+    run(&mut world, cli.steps, cli.reps, cli.threads);
     let wall = started.elapsed().as_secs_f64();
     world.flush_reports()?;
 
@@ -110,9 +129,9 @@ fn main() -> anyhow::Result<()> {
 
 /// What `simulate!` does without its terminal monitor: initialise, then step
 /// the schedule, for each repetition.
-fn run(world: &mut World, steps: u64, reps: u64) {
+fn run(world: &mut World, steps: u64, reps: u64, threads: usize) {
     for _ in 0..reps {
-        let mut schedule = sim_drones::schedule();
+        let mut schedule = sim_drones::schedule_with_threads(threads);
         world.init(&mut schedule);
         for _ in 0..steps {
             schedule.step(world);

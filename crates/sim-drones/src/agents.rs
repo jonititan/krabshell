@@ -14,14 +14,49 @@ use crate::dispatch::{self, AddressBook, Courier, Order};
 use crate::flight::Pose;
 use crate::mission::{self, Drone, Event, Mode};
 use crate::sensor::{Candidate, Sighting};
+use crate::settings::Settings;
 use crate::targets::{Route, Wander};
-use crate::world::{draw_pair, refresh_key, Kind, Record, Saved, World, WANDER_SALT};
+use crate::terrain::Terrain;
+use crate::world::{
+    draw_pair, refresh_key, Bounds, Instruction, Kind, Record, Saved, World, WANDER_SALT,
+};
 
 fn world(state: &mut dyn State) -> &mut World {
     state
         .as_any_mut()
         .downcast_mut::<World>()
         .expect("drones agents step in a drones World")
+}
+
+/// What an agent reads while it works alone: nothing another agent writes
+/// during a step. Shared across a [`crate::crowd::Crowd`]'s threads.
+#[derive(Clone, Copy)]
+pub(crate) struct Env<'a> {
+    pub settings: &'a Settings,
+    pub terrain: &'a Terrain,
+    pub bounds: Bounds,
+    pub seed: u64,
+    pub tick: u64,
+}
+
+impl World {
+    pub(crate) fn env(&self) -> Env<'_> {
+        Env {
+            settings: &self.settings,
+            terrain: &self.terrain,
+            bounds: self.bounds,
+            seed: self.seed,
+            tick: self.tick,
+        }
+    }
+}
+
+/// An agent as `board` (sorted by id) has it.
+pub(crate) fn record_in(board: &[Record], id: AgentId) -> Option<&Record> {
+    board
+        .binary_search_by_key(&id, |r| r.id)
+        .ok()
+        .map(|i| &board[i])
 }
 
 /// What every agent has: who it is and where.
@@ -51,7 +86,7 @@ impl Body {
 
     /// Follow the pose into a new cell, if it has moved far enough to be
     /// worth an A5 lookup.
-    fn refresh(&mut self, world: &World) {
+    pub(crate) fn refresh(&mut self, bounds: &Bounds) {
         let key = refresh_key(&self.pose);
         if key == self.cell_key {
             return;
@@ -59,7 +94,7 @@ impl Body {
         self.cell_key = key;
         // Off the edge of the world (a drone following a stale plan): keep
         // the last cell rather than drop the agent from occupancy.
-        if let Some(cell) = world.cell_of(self.pose.lat_e7, self.pose.lon_e7) {
+        if let Some(cell) = bounds.cell_of(self.pose.lat_e7, self.pose.lon_e7) {
             self.cell = cell;
         }
     }
@@ -131,32 +166,20 @@ impl Agent for DroneAgent {
             return;
         }
         let tick = world.tick;
-        let tuning = world.settings.tuning;
-
-        // Instructions were checked against this same state when they
-        // arrived, so they cannot fail now.
-        for instruction in world.take_mail(self.body.id) {
-            let _ = instruction.apply(&mut self.drone, &self.body.pose, &tuning, &world.terrain);
-        }
-
+        let mail = world.take_mail(self.body.id);
         let mut events = Vec::new();
-        self.drone
-            .step(&mut self.body.pose, &tuning, &world.terrain, &mut events);
-        for event in events {
-            if let Event::Reached(item) = event {
-                self.reached(world, tick, item);
-            }
+        self.fly(&world.env(), mail, &mut events);
+        let mut reports = Vec::new();
+        self.settle(world, tick, &events, &mut reports);
+        for report in reports {
+            world.report(report);
         }
 
-        self.courier_duty(world, tick);
-
-        if world.settings.sensor.scans_on(tick)
-            && !self.drone.grounded(&self.body.pose, &world.terrain)
-        {
+        if self.scans(&world.env()) {
             self.scan(world, tick);
         }
 
-        self.body.refresh(world);
+        self.body.refresh(&world.bounds);
         world.place(self.record());
     }
 
@@ -173,7 +196,42 @@ impl DroneAgent {
         self.body.record(saved)
     }
 
-    fn reached(&mut self, world: &mut World, tick: u64, item: u16) {
+    /// Apply the mail, then fly a tick. Touches nothing but the drone.
+    pub(crate) fn fly(&mut self, env: &Env, mail: Vec<Instruction>, events: &mut Vec<Event>) {
+        let tuning = env.settings.tuning;
+        // Instructions were checked against this same state when they
+        // arrived, so they cannot fail now.
+        for instruction in mail {
+            let _ = instruction.apply(&mut self.drone, &self.body.pose, &tuning, env.terrain);
+        }
+        self.drone
+            .step(&mut self.body.pose, &tuning, env.terrain, events);
+    }
+
+    /// The part of a drone's step that touches the order queues: deliveries
+    /// for the waypoints reached this tick, then courier duty. Agents must
+    /// settle in id order.
+    pub(crate) fn settle(
+        &mut self,
+        world: &mut World,
+        tick: u64,
+        events: &[Event],
+        reports: &mut Vec<Report>,
+    ) {
+        for event in events {
+            if let Event::Reached(item) = *event {
+                self.reached(world, tick, item, reports);
+            }
+        }
+        self.courier_duty(world, tick);
+    }
+
+    /// Whether the camera is on this tick.
+    pub(crate) fn scans(&self, env: &Env) -> bool {
+        env.settings.sensor.scans_on(env.tick) && !self.drone.grounded(&self.body.pose, env.terrain)
+    }
+
+    fn reached(&mut self, world: &mut World, tick: u64, item: u16, reports: &mut Vec<Report>) {
         let winched = self
             .drone
             .mission
@@ -193,10 +251,10 @@ impl DroneAgent {
                     &self.body.pose,
                     world.settings.tuning.dt,
                 );
-                world.report(report);
+                reports.push(report);
             }
         }
-        world.report(Report {
+        reports.push(Report {
             seq: 0,
             tick,
             kind: ReportKind::Waypoint,
@@ -292,14 +350,19 @@ impl DroneAgent {
             &mut sightings,
         );
         for sighting in sightings {
-            if let Some(report) = self.sighting_report(world, tick, &sighting) {
+            if let Some(report) = self.sighting_report(&world.board, tick, &sighting) {
                 world.report(report);
             }
         }
     }
 
-    fn sighting_report(&self, world: &World, tick: u64, sighting: &Sighting) -> Option<Report> {
-        let target = world.record(sighting.target)?;
+    pub(crate) fn sighting_report(
+        &self,
+        board: &[Record],
+        tick: u64,
+        sighting: &Sighting,
+    ) -> Option<Report> {
+        let target = record_in(board, sighting.target)?;
         let pose = &target.saved.pose;
         let mut detail = serde_json::json!({
             "sysid": self.drone.sysid,
@@ -334,15 +397,7 @@ impl Agent for GroundAgent {
         if world.retiring(self.body.id) {
             return;
         }
-        let tuning = world.settings.tuning;
-        let draw = draw_pair(world.seed ^ WANDER_SALT, self.body.id, world.tick);
-        self.wander
-            .step(&mut self.body.pose, tuning.dt, tuning.dt_ms, draw, |p| {
-                world.accepts(p)
-            });
-        let pose = &mut self.body.pose;
-        pose.alt_mm = world.terrain.ground_mm(pose.lat_e7, pose.lon_e7);
-        self.body.refresh(world);
+        self.advance(&world.env());
         world.place(self.record());
     }
 
@@ -352,6 +407,20 @@ impl Agent for GroundAgent {
 }
 
 impl GroundAgent {
+    /// Wander a tick. Touches nothing but the agent.
+    pub(crate) fn advance(&mut self, env: &Env) {
+        let tuning = env.settings.tuning;
+        let draw = draw_pair(env.seed ^ WANDER_SALT, self.body.id, env.tick);
+        let bounds = env.bounds;
+        self.wander
+            .step(&mut self.body.pose, tuning.dt, tuning.dt_ms, draw, |p| {
+                bounds.cell_of(p.lat_e7, p.lon_e7).is_some()
+            });
+        let pose = &mut self.body.pose;
+        pose.alt_mm = env.terrain.ground_mm(pose.lat_e7, pose.lon_e7);
+        self.body.refresh(&env.bounds);
+    }
+
     pub(crate) fn record(&self) -> Record {
         let mut saved = self.body.saved();
         saved.wander = Some(self.wander.clone());
@@ -365,9 +434,7 @@ impl Agent for IntruderAgent {
         if world.retiring(self.body.id) {
             return;
         }
-        self.route
-            .step(&mut self.body.pose, world.settings.tuning.dt);
-        self.body.refresh(world);
+        self.advance(&world.env());
         world.place(self.record());
     }
 
@@ -377,6 +444,12 @@ impl Agent for IntruderAgent {
 }
 
 impl IntruderAgent {
+    /// Fly the circuit a tick. Touches nothing but the agent.
+    pub(crate) fn advance(&mut self, env: &Env) {
+        self.route.step(&mut self.body.pose, env.settings.tuning.dt);
+        self.body.refresh(&env.bounds);
+    }
+
     pub(crate) fn record(&self) -> Record {
         let mut saved = self.body.saved();
         saved.route = Some(self.route.clone());

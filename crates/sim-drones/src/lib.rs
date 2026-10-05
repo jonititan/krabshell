@@ -31,6 +31,7 @@
 //! tick) stream; agents step in id order. `gold` runs replay bit for bit.
 
 pub mod agents;
+mod crowd;
 pub mod dispatch;
 pub mod flight;
 pub mod mission;
@@ -41,7 +42,7 @@ pub mod terrain;
 pub mod world;
 
 pub use krabmaga;
-pub use world::{codes, schedule, Committed, Kind, Record, Saved, World};
+pub use world::{codes, schedule, schedule_with_threads, Committed, Kind, Record, Saved, World};
 
 #[cfg(test)]
 mod tests;

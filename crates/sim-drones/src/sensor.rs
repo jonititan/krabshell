@@ -72,6 +72,28 @@ impl Sensor {
         last: &mut BTreeMap<(AgentId, AgentId), u64>,
         out: &mut Vec<Sighting>,
     ) {
+        let from_len = out.len();
+        self.scan_seen(seed, tick, observer, from, ground_mm, candidates, last, out);
+        for sighting in &out[from_len..] {
+            last.insert((observer, sighting.target), tick);
+        }
+    }
+
+    /// [`Sensor::scan`] without remembering: the caller records each
+    /// sighting pushed to `out` as reported at `tick`. Candidates are
+    /// distinct, so no pair is looked up after it would have been recorded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn scan_seen(
+        &self,
+        seed: u64,
+        tick: u64,
+        observer: AgentId,
+        from: &Point,
+        ground_mm: i32,
+        candidates: impl Iterator<Item = Candidate>,
+        last: &BTreeMap<(AgentId, AgentId), u64>,
+        out: &mut Vec<Sighting>,
+    ) {
         // The footprint grows with height above the ground below, not above sea level.
         let alt_m = f64::from(from.alt_mm - ground_mm) * 1e-3;
         let footprint = self.footprint_m(alt_m);
@@ -103,7 +125,6 @@ impl Sensor {
                 .get(&key)
                 .is_none_or(|at| tick.saturating_sub(*at) >= self.report_every_ticks);
             if due {
-                last.insert(key, tick);
                 out.push(Sighting {
                     target: candidate.id,
                     range_m: range,
