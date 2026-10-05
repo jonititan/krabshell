@@ -10,6 +10,8 @@
 //! The publish side is a pointer swap, so a slow reader can never stall a tick,
 //! and a fast tick loop can never queue unbounded frames for a slow socket
 //! (spec §9.3, §12). Readers may miss intermediate frames; that is the design.
+//! Views are built on a second thread (see [`crate::publisher`]) when the
+//! model can hand over a frame of its committed world.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -26,6 +28,7 @@ use uuid::Uuid;
 
 use crate::admission::{Admission, AdmissionOutcome};
 use crate::model::{Model, ModelRegistry};
+use crate::publisher::{Cells, Publisher};
 
 /// Control channel depth. Control messages are operator-scale, not agent-scale.
 const CONTROL_CAPACITY: usize = 64;
@@ -130,8 +133,8 @@ pub struct IntentRecord {
 
 /// The committed world as the HTTP edge sees it.
 ///
-/// Rebuilt on the tick thread at most `publish_hz` times a second and swapped
-/// in atomically. Readers clone the `Arc`, never the contents.
+/// Rebuilt at most `publish_hz` times a second, and after operator actions,
+/// and swapped in atomically. Readers clone the `Arc`, never the contents.
 #[derive(Debug, Clone)]
 pub struct Published {
     pub meta: SnapshotMeta,
@@ -348,8 +351,10 @@ impl Driver {
             published: Arc::clone(&published),
         };
 
-        let mut loop_state =
-            DriverLoop::new(registry, blob, model, control_rx, intent_rx, published);
+        let publisher = Publisher::spawn(Arc::clone(&published))?;
+        let mut loop_state = DriverLoop::new(
+            registry, blob, model, control_rx, intent_rx, published, publisher,
+        );
         // Publish before the thread exists, so a caller that reads the view on
         // the line after `spawn` sees the seeded world rather than an empty one.
         loop_state.publish();
@@ -395,6 +400,7 @@ struct DriverLoop {
     control: Receiver<Command>,
     intents: Receiver<Submission>,
     published: Arc<ArcSwap<Published>>,
+    publisher: Publisher,
 
     mode: RunMode,
     tick: u64,
@@ -415,7 +421,6 @@ struct DriverLoop {
     report_seq: u64,
 
     metrics: Metrics,
-    scratch: Vec<CellBag>,
     next_publish: Instant,
     next_tick_at: Option<Instant>,
     window_start: Instant,
@@ -432,6 +437,7 @@ impl DriverLoop {
         control: Receiver<Command>,
         intents: Receiver<Submission>,
         published: Arc<ArcSwap<Published>>,
+        publisher: Publisher,
     ) -> Self {
         let config = blob.config.clone();
         DriverLoop {
@@ -442,6 +448,7 @@ impl DriverLoop {
             control,
             intents,
             published,
+            publisher,
             mode: RunMode::Paused,
             tick: 0,
             steps_remaining: 0,
@@ -456,7 +463,6 @@ impl DriverLoop {
             report_scratch: Vec::new(),
             report_seq: 0,
             metrics: Metrics::default(),
-            scratch: Vec::new(),
             next_publish: Instant::now(),
             next_tick_at: None,
             window_start: Instant::now(),
@@ -477,7 +483,7 @@ impl DriverLoop {
             }
 
             if Instant::now() >= self.next_publish {
-                self.publish();
+                self.publish_in_background();
             }
 
             if !self.mode.is_advancing() && !self.idle() {
@@ -591,6 +597,7 @@ impl DriverLoop {
         // keeps counting so consumers never mistake a new report for a seen one.
         self.reports.clear();
         self.metrics = Metrics::default();
+        self.publisher.reset_dropped();
         self.mode = RunMode::Paused;
         self.publish();
         Ok(())
@@ -835,10 +842,33 @@ impl DriverLoop {
         }
     }
 
+    /// Publish the world as it is now, and return once readers can see it.
+    /// Operator actions publish this way before they ack.
     fn publish(&mut self) {
+        let (view, cells, limit) = self.next_view();
+        self.publisher.publish_now(view, cells, limit);
+    }
+
+    /// Publish the world as it is now without waiting for the view to be
+    /// built. The regular publish while running.
+    fn publish_in_background(&mut self) {
+        let (view, cells, limit) = self.next_view();
+        self.publisher.submit(view, cells, limit);
+    }
+
+    /// Everything a view needs from the tick thread. The cells come as a frame
+    /// to build elsewhere when the model has one, and are written here when
+    /// it does not.
+    fn next_view(&mut self) -> (Published, Cells, usize) {
         let limit = self.config.run.max_published_cells;
-        let truncation = self.model.snapshot(&mut self.scratch, limit);
-        let gold = self.config.run.profile == Profile::Gold;
+        let cells = match self.model.frame() {
+            Some(frame) => Cells::Frame(frame),
+            None => {
+                let mut cells = Vec::new();
+                let truncation = self.model.snapshot(&mut cells, limit);
+                Cells::Ready(cells, truncation)
+            }
+        };
 
         // Rates are recomputed on every publish so a freshly started run shows
         // a real number immediately, and the window is rolled once a second has
@@ -856,13 +886,7 @@ impl DriverLoop {
         self.metrics.tick = self.tick;
         self.metrics.agent_count = self.model.agent_count();
         self.metrics.occupied_cells = self.model.occupied_cells();
-        self.metrics.truncated_cells = truncation.cells_omitted;
-
-        let previous = self.published.load();
-        if Arc::strong_count(&previous) <= 1 {
-            // Nothing read the last frame before it was replaced.
-            self.metrics.dropped_views = self.metrics.dropped_views.saturating_add(1);
-        }
+        self.next_publish = Instant::now() + self.config.publish_interval();
 
         let view = Published {
             meta: SnapshotMeta {
@@ -873,8 +897,8 @@ impl DriverLoop {
                 resolution: self.config.grid.resolution,
                 agent_count: self.metrics.agent_count,
                 occupied_cells: self.metrics.occupied_cells,
-                hash: (gold && !truncation.is_truncated())
-                    .then(|| sim_core::snapshot::stable_hash(&self.scratch)),
+                // The publisher hashes the cells once they are written.
+                hash: None,
             },
             metrics: self.metrics,
             health: DriverHealth {
@@ -888,15 +912,13 @@ impl DriverLoop {
             scenario_id: self.blob.manifest.id.clone(),
             scenario_name: self.blob.manifest.name.clone(),
             model_kind: self.blob.manifest.model.clone(),
-            cells: self.scratch.clone(),
-            truncated: truncation.is_truncated(),
+            cells: Vec::new(),
+            truncated: false,
             published_at_ms: now_ms(),
             recent_intents: self.recent.iter().cloned().collect(),
             reports: self.reports.iter().cloned().collect(),
         };
-
-        self.published.store(Arc::new(view));
-        self.next_publish = Instant::now() + self.config.publish_interval();
+        (view, cells, limit)
     }
 
     /// Start measuring the tick rate afresh. Called when a run starts, so the
@@ -910,6 +932,8 @@ impl DriverLoop {
     /// Mark the view dead so the HTTP edge answers 503 rather than serving a
     /// snapshot that will never advance again (spec §12).
     fn publish_final(&mut self) {
+        // Let the last view in flight land first, so this one is not overwritten.
+        self.publisher.stop();
         let mut view = (**self.published.load()).clone();
         view.health.alive = false;
         view.health.mode = RunMode::Paused;

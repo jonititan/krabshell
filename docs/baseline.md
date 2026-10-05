@@ -87,20 +87,28 @@ on the built-in grid to krABMaga agents on a `Schedule` and a `SparseA5Grid`.
 Medians of three interleaved runs of 3 000 ticks, on 32 logical CPUs (Linux 7.0,
 shared with an editor):
 
-| Pack | Agents | Built-in loop (`simctl`, before) | krABMaga (`simctl`) | krABMaga alone (`krab-drones`) |
-|---|---:|---:|---:|---:|
-| `london-patrol` (gold) | 1 365 | 2 730 | 2 041 | 2 280 |
-| `kaunas-deliveries` (gold) | 1 844 | 1 479 | 1 165 | 1 326 |
-| `swarm-survey` (fast) | 5 042 | 468 | 363 | 476 |
+| Pack | Agents | Built-in loop (`simctl`, before) | krABMaga (`simctl`) | krABMaga, views built off the tick thread (`simctl`) | krABMaga alone (`krab-drones`) |
+|---|---:|---:|---:|---:|---:|
+| `london-patrol` (gold) | 1 365 | 2 739 | 2 041 | 2 217 | 2 280 |
+| `kaunas-deliveries` (gold) | 1 844 | 1 499 | 1 165 | 1 311 | 1 326 |
+| `swarm-survey` (fast) | 5 042 | 491 | 363 | 465 | 476 |
 
-Ticks per second. Observations:
+Ticks per second, publishing at the packs' 20 Hz. Observations:
 
-- **About a quarter slower under the driver.** Every agent now goes through
-  krABMaga's priority queue and re-places itself on the grid and the board on
-  every step (krABMaga's commit clears what nobody wrote), where the old loop
-  touched the grid only when an entity crossed a cell.
-- **Faster alone than under the driver**, by 10–30 %: `krab-drones` publishes
-  no snapshots for the dashboard and gateways.
+- **What krABMaga costs is 80–100 ns per agent per tick.** With publishing
+  at 1 Hz the step alone runs at 2 900 / 1 630 / 599 ticks/s before and
+  2 204 / 1 303 / 462 on krABMaga. Timed separately for `swarm-survey`: the
+  schedule's heap pop and push ≈ 55 ns (the queue's hasher makes no
+  difference), every agent re-placing itself on the grid and the commit
+  dropping every cell's bag ≈ 20 ns, cloning the board ≈ 14 ns, the
+  occupied-cell set ≈ 5 ns. The agents' own work, ≈ 325 ns, is unchanged.
+- **Publishing used to cost about a fifth of the tick thread.** A view of
+  `swarm-survey` takes ≈ 3.5 ms to build (every agent's state as JSON),
+  and the driver builds 20 a second. The drones now hand the driver a frame
+  (an `Arc` of the committed board) and a publisher thread builds the view,
+  so the tick thread runs as fast at 20 Hz as at 1 Hz. The old loop paid that
+  fifth, which is why the gap narrows most for the biggest pack.
+- **`krab-drones` publishes nothing**, so it is the step alone.
 - **`parallel` is slower again** (≈990 ticks/s for `london-patrol` alone): it
   pays for the locked grid and a mutex around the state while the schedule
   still runs on one thread, and gives the same gold hash.

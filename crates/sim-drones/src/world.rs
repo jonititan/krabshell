@@ -22,9 +22,9 @@
 //! [`agents::Dispatcher`]: crate::agents::Dispatcher
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
+use std::sync::Arc;
 
 use krabmaga::bevy_a5::prelude::GeoCell as A5Cell;
 use krabmaga::engine::fields::field::Field;
@@ -250,8 +250,8 @@ pub struct World {
     pinned: Option<u64>,
     next_id: AgentId,
 
-    /// Committed agent state, sorted by id.
-    board: Vec<Record>,
+    /// Committed agent state, sorted by id. Shared with snapshots in flight.
+    board: Arc<Vec<Record>>,
     /// What agents publish during a step.
     board_next: Vec<Record>,
     occupied: u64,
@@ -315,7 +315,7 @@ impl World {
             tick: 0,
             pinned: None,
             next_id: 1,
-            board: Vec::new(),
+            board: Arc::default(),
             board_next: Vec::new(),
             occupied: 0,
             occupied_next: HashSet::new(),
@@ -665,13 +665,22 @@ impl World {
     /// Commit what agents wrote since the last commit.
     fn commit(&mut self) {
         self.grid.lazy_update();
-        std::mem::swap(&mut self.board, &mut self.board_next);
-        self.board_next.clear();
+        let mut board = std::mem::take(&mut self.board_next);
         // Agents step in id order, so this only sorts after a restore that
         // scheduled out of order.
-        if !self.board.is_sorted_by_key(|r| r.id) {
-            self.board.sort_by_key(|r| r.id);
+        if !board.is_sorted_by_key(|r| r.id) {
+            board.sort_by_key(|r| r.id);
         }
+        let capacity = board.len();
+        let old = std::mem::replace(&mut self.board, Arc::new(board));
+        // Reuse the old board's allocation unless a snapshot still holds it.
+        self.board_next = match Arc::try_unwrap(old) {
+            Ok(mut old) => {
+                old.clear();
+                old
+            }
+            Err(_) => Vec::with_capacity(capacity),
+        };
         self.occupied = self.occupied_next.len() as u64;
         self.occupied_next.clear();
     }
@@ -713,6 +722,14 @@ impl World {
     /// Every committed agent, by id.
     pub fn records(&self) -> &[Record] {
         &self.board
+    }
+
+    /// The committed agents, to snapshot elsewhere: on another thread, while
+    /// this world steps on.
+    pub fn committed(&self) -> Committed {
+        Committed {
+            board: Arc::clone(&self.board),
+        }
     }
 
     pub(crate) fn retiring(&self, id: AgentId) -> bool {
@@ -760,7 +777,7 @@ impl World {
     /// Clear everything a run changes, ready to populate a schedule.
     fn begin(&mut self) {
         self.grid = new_grid(self.resolution, self.root);
-        self.board.clear();
+        self.board = Arc::default();
         self.board_next.clear();
         self.occupied = 0;
         self.occupied_next.clear();
@@ -1061,37 +1078,7 @@ impl World {
     /// id within each cell, stopping after `limit` cells. Returns how many
     /// cells were left out.
     pub fn snapshot(&self, out: &mut Vec<CellBag>, limit: usize) -> u64 {
-        out.clear();
-        // Read bags straight from the committed side of the grid.
-        let pairs = RefCell::new(Vec::with_capacity(self.board.len()));
-        self.grid
-            .iter_objects(|cell, id| pairs.borrow_mut().push((cell.raw(), *id)));
-        let mut pairs = pairs.into_inner();
-        pairs.sort_unstable();
-
-        let mut omitted = 0;
-        for group in pairs.chunk_by(|a, b| a.0 == b.0) {
-            if out.len() >= limit {
-                omitted += 1;
-                continue;
-            }
-            let objects = group
-                .iter()
-                .filter_map(|(_, id)| {
-                    let record = self.record(*id)?;
-                    Some(WorldObject {
-                        id: *id,
-                        kind: record.kind.name().to_owned(),
-                        state: serde_json::to_value(&record.saved).unwrap_or_default(),
-                    })
-                })
-                .collect();
-            out.push(CellBag {
-                cell: GeoCell::from_raw(group[0].0),
-                objects,
-            });
-        }
-        omitted
+        self.committed().snapshot(out, limit)
     }
 
     // -------------------------------------------------------- checkpoints
@@ -1177,7 +1164,7 @@ impl World {
         members.sort_by_key(|m| m.body().id);
 
         self.grid = new_grid(self.resolution, self.root);
-        self.board.clear();
+        self.board = Arc::default();
         self.board_next.clear();
         self.occupied_next.clear();
         self.reports.clear();
@@ -1187,6 +1174,58 @@ impl World {
         }
         self.populate(schedule, members);
         Ok(())
+    }
+}
+
+/// The agents a world committed at the end of a step, detached from it.
+///
+/// Each agent's record carries the cell it placed itself in on the grid, so
+/// this is the grid's committed occupancy, with every agent's state beside it.
+#[derive(Debug, Clone)]
+pub struct Committed {
+    board: Arc<Vec<Record>>,
+}
+
+impl Committed {
+    pub fn records(&self) -> &[Record] {
+        &self.board
+    }
+
+    /// As [`World::snapshot`], for the step this was taken after.
+    pub fn snapshot(&self, out: &mut Vec<CellBag>, limit: usize) -> u64 {
+        out.clear();
+        let mut order: Vec<(GeoCell, usize)> = self
+            .board
+            .iter()
+            .enumerate()
+            .map(|(at, r)| (r.cell, at))
+            .collect();
+        // The board is in id order, so within a cell this is too.
+        order.sort_unstable();
+
+        let mut omitted = 0;
+        for group in order.chunk_by(|a, b| a.0 == b.0) {
+            if out.len() >= limit {
+                omitted += 1;
+                continue;
+            }
+            let objects = group
+                .iter()
+                .map(|(_, at)| {
+                    let record = &self.board[*at];
+                    WorldObject {
+                        id: record.id,
+                        kind: record.kind.name().to_owned(),
+                        state: serde_json::to_value(&record.saved).unwrap_or_default(),
+                    }
+                })
+                .collect();
+            out.push(CellBag {
+                cell: group[0].0,
+                objects,
+            });
+        }
+        omitted
     }
 }
 

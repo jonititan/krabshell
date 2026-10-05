@@ -31,9 +31,9 @@ use std::collections::BTreeMap;
 use sim_core::{AgentId, CellBag, GeoCell, Intent, RejectReason, Report, ScenarioBlob};
 use sim_drones::krabmaga::engine::schedule::Schedule;
 use sim_drones::krabmaga::engine::state::State;
-use sim_drones::{Saved, World};
+use sim_drones::{Committed, Saved, World};
 
-use crate::model::{Model, Truncation};
+use crate::model::{Frame, Model, Truncation};
 use flight::{Point, Pose};
 use mission::{MissionItem, Mode};
 
@@ -118,6 +118,19 @@ pub fn drones_in(cells: &[CellBag]) -> BTreeMap<u8, DroneStatus> {
     out
 }
 
+/// What the drones committed at the end of a step, for the publisher.
+struct DronesFrame(Committed);
+
+impl Frame for DronesFrame {
+    fn snapshot(&self, out: &mut Vec<CellBag>, limit: usize) -> Truncation {
+        let cells_omitted = self.0.snapshot(out, limit);
+        Truncation {
+            cells_written: out.len() as u64,
+            cells_omitted,
+        }
+    }
+}
+
 impl Model for Drones {
     fn kind(&self) -> &'static str {
         "drones"
@@ -136,12 +149,12 @@ impl Model for Drones {
         self.world.step_at(&mut self.schedule, tick);
     }
 
+    fn frame(&self) -> Option<Box<dyn Frame>> {
+        Some(Box::new(DronesFrame(self.world.committed())))
+    }
+
     fn snapshot(&self, out: &mut Vec<CellBag>, limit: usize) -> Truncation {
-        let cells_omitted = self.world.snapshot(out, limit);
-        Truncation {
-            cells_written: out.len() as u64,
-            cells_omitted,
-        }
+        DronesFrame(self.world.committed()).snapshot(out, limit)
     }
 
     fn agent_count(&self) -> u64 {

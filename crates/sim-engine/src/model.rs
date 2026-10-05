@@ -44,6 +44,18 @@ pub trait Model: Send + 'static {
     /// Advance exactly one tick, including the field commit.
     fn step(&mut self, tick: u64);
 
+    /// A copy of the committed world that the driver can turn into a
+    /// published view on another thread, so building it (every agent's state
+    /// as JSON) does not hold up the next tick.
+    ///
+    /// It must be cheap to make, an `Arc` clone say, and its
+    /// [`Frame::snapshot`] must write exactly what [`Model::snapshot`] would
+    /// have at the moment it was taken. Models without one are snapshotted on
+    /// the tick thread.
+    fn frame(&self) -> Option<Box<dyn Frame>> {
+        None
+    }
+
     /// Write the committed occupancy into `out`, sorted by cell and by agent id
     /// within each cell.
     ///
@@ -79,6 +91,13 @@ pub trait Model: Send + 'static {
     /// Called by the driver after every successful step. Models that raise no
     /// events keep the default.
     fn drain_reports(&mut self, _out: &mut Vec<Report>) {}
+}
+
+/// A committed world, detached from the model it came from. See
+/// [`Model::frame`].
+pub trait Frame: Send + 'static {
+    /// As [`Model::snapshot`], for the world as it was when the frame was taken.
+    fn snapshot(&self, out: &mut Vec<CellBag>, limit: usize) -> Truncation;
 }
 
 /// Builds a model for a scenario. Registered by name at start-up.

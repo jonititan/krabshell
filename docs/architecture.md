@@ -28,6 +28,13 @@ One `std::thread` named `sim-driver` owns the `Model`. Three channels:
   `Backpressured` rejection at submit time. Nothing waits.
 - **Snapshot out**: an `ArcSwap<Published>`. The driver swaps in a new view at
   most `publish_hz` times a second, and immediately after operator actions.
+  A model that offers a `Frame` (a cheap copy of its committed world; the
+  drones hand over an `Arc` of their board) has its views built on a
+  `sim-publisher` thread, so writing every agent out as JSON and hashing it
+  never holds up a tick. The publisher has one slot, not a queue: a view
+  still waiting is replaced by the next and counted as dropped. Operator
+  actions wait for their view to be stored before they ack. Models without
+  a frame are snapshotted on the tick thread as before.
   Readers clone an `Arc`. A slow reader never delays a tick; a fast loop never
   queues frames. Frames nobody read are counted as `dropped_views`.
 

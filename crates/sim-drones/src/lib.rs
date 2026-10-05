@@ -41,7 +41,7 @@ pub mod terrain;
 pub mod world;
 
 pub use krabmaga;
-pub use world::{codes, schedule, Kind, Record, Saved, World};
+pub use world::{codes, schedule, Committed, Kind, Record, Saved, World};
 
 #[cfg(test)]
 mod tests;

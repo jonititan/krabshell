@@ -523,3 +523,38 @@ fn reports_are_numbered_in_order_and_survive_a_reload_without_reusing_numbers() 
     assert_eq!(seqs, vec![7, 8]);
     driver.shutdown();
 }
+
+#[test]
+fn a_view_built_off_the_tick_thread_is_there_when_a_command_returns() {
+    // The drones hand the driver a frame, so their views are built on the
+    // publisher thread. Operator actions must still see their result at once.
+    let pack =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/london-patrol");
+    let blob = sim_engine::read_pack(&pack).unwrap();
+    assert_eq!(blob.config.run.profile, Profile::Gold);
+    let driver = Driver::spawn(ModelRegistry::with_builtins(), blob).unwrap();
+    let handle = driver.handle();
+    assert!(
+        handle.view().meta.hash.is_some(),
+        "the first view is published by spawn"
+    );
+
+    handle.command(Control::Step { n: 40 }).unwrap();
+    wait_for(&handle, "the steps to finish", |v| {
+        v.meta.tick == 40 && v.health.mode == RunMode::Paused
+    });
+    let view = handle.view();
+    let checkpoint = handle.checkpoint().unwrap();
+    assert_eq!(checkpoint.meta.tick, 40);
+    assert_eq!(view.meta.hash, checkpoint.meta.hash);
+    assert_eq!(view.cells, checkpoint.cells);
+
+    handle.command(Control::Start { target_tps: None }).unwrap();
+    wait_for(&handle, "views to keep coming while it runs", |v| {
+        v.meta.tick > 200
+    });
+    handle.command(Control::Pause).unwrap();
+    let paused = handle.view();
+    assert_eq!(paused.health.mode, RunMode::Paused);
+    assert_eq!(paused.meta.hash, handle.checkpoint().unwrap().meta.hash);
+}

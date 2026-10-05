@@ -154,3 +154,42 @@ fn spawned_agents_join_the_schedule_and_despawned_ones_leave_it() {
     assert!(world.record(newest.id).is_none());
     assert_eq!(schedule.get_all_events().len() as u64, before + 2 + 1);
 }
+
+#[test]
+fn the_board_holds_exactly_what_the_grid_committed() {
+    let (mut world, mut schedule) = started("london-patrol");
+    for _ in 0..300 {
+        schedule.step(&mut world);
+        let from_grid = std::cell::RefCell::new(Vec::new());
+        world
+            .grid
+            .iter_objects(|cell, id| from_grid.borrow_mut().push((cell.raw(), *id)));
+        let mut from_grid = from_grid.into_inner();
+        from_grid.sort_unstable();
+        let mut from_board: Vec<(u64, AgentId)> = world
+            .records()
+            .iter()
+            .map(|r| (r.cell.raw(), r.id))
+            .collect();
+        from_board.sort_unstable();
+        assert_eq!(from_grid, from_board, "tick {}", world.tick());
+    }
+}
+
+#[test]
+fn a_committed_view_stays_put_while_the_world_steps_on() {
+    let (mut world, mut schedule) = started("kaunas-deliveries");
+    for _ in 0..50 {
+        schedule.step(&mut world);
+    }
+    let held = world.committed();
+    let before = hash(&world);
+    for _ in 0..50 {
+        schedule.step(&mut world);
+    }
+    let mut cells = Vec::new();
+    held.snapshot(&mut cells, usize::MAX);
+    assert_eq!(sim_core::snapshot::stable_hash(&cells), before);
+    assert_ne!(hash(&world), before, "the world moved on");
+    assert_eq!(held.records().len() as u64, world.agent_count());
+}

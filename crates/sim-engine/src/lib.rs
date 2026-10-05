@@ -23,6 +23,7 @@ pub mod edge;
 pub mod grid;
 pub mod model;
 pub mod models;
+mod publisher;
 pub mod scenario;
 
 pub use admission::{Admission, AdmissionOutcome};
@@ -32,7 +33,7 @@ pub use driver::{
 };
 pub use edge::{check_intent_cell, ActorLimiter, CellCheck};
 pub use grid::SparseCellGrid;
-pub use model::{Model, ModelFactory, ModelRegistry, Truncation};
+pub use model::{Frame, Model, ModelFactory, ModelRegistry, Truncation};
 pub use scenario::{read_pack, ScenarioStore};
 
 /// Whether this build links krABMaga. It always does now: the drones model
