@@ -9,7 +9,6 @@ repository.workspace = true
 
 [features]
 default = []
-krabmaga = ["sim-engine/krabmaga"]
 parallel = ["sim-engine/parallel"]
 
 [dependencies]

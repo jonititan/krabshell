@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 
 use sim_core::AgentId;
 
-use super::flight::{self, Point};
-use crate::models::walkers::gold_draw;
+use crate::flight::{self, Point};
+use sim_core::rng::gold_draw;
 
 /// Keeps sensor draws independent of every other stream seeded from the run.
 const SENSOR_SALT: u64 = 0x5e45_0e5d_d7a9_c3b1;
@@ -116,7 +116,7 @@ impl Sensor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::drones::flight::Pose;
+    use crate::flight::Pose;
 
     const SENSOR: Sensor = Sensor {
         half_fov_tan: 0.7,

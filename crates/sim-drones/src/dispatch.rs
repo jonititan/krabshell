@@ -31,8 +31,8 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
-use super::flight::Point;
-use super::mission::{MissionItem, DO_WINCH, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT, WINCH_DELIVER};
+use crate::flight::Point;
+use crate::mission::{MissionItem, DO_WINCH, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT, WINCH_DELIVER};
 
 const FRAME_MISSION: u8 = 2;
 const FRAME_RELATIVE: u8 = 3;

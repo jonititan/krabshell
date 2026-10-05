@@ -8,8 +8,9 @@ did not know.
 
 | Crate | Owns | Must not |
 |---|---|---|
-| `sim-core` | `GeoCell` and A5 queries, intents, snapshots, checkpoints, config, scenario manifests, WebSocket messages, problem codes, the deterministic RNG | depend on Bevy, Axum, Tokio or krABMaga |
-| `sim-engine` | the driver thread, the `Model` trait, the built-in grid, reference models, scenario loading, checkpoint encoding, `simctl` | await, open sockets, or do file I/O inside a tick |
+| `sim-core` | `GeoCell` and A5 queries, intents, snapshots, checkpoints, config, scenario manifests and reading pack directories, WebSocket messages, problem codes, the deterministic RNG | depend on Bevy, Axum, Tokio or krABMaga |
+| `sim-drones` | the drones model as krABMaga agents and a krABMaga `State`; flight, missions, sensor, dispatch; the standalone `krab-drones` runner | depend on the driver, Axum or Tokio |
+| `sim-engine` | the driver thread, the `Model` trait and the `drones` adapter, the built-in grid, the walker models, the scenario store, checkpoint encoding, `simctl` | await, open sockets, or do file I/O inside a tick |
 | `sim-mavlink` | the MAVLink gateway: one UDP socket presenting every drone as a vehicle, the mission handshake, command acks | step the schedule or touch model state; block on the driver |
 | `sim-cot` | the Cursor-on-Target emitter: drone tracks, sightings and POIs as XML over UDP | step the schedule or touch model state |
 | `sim-axum` | REST, WebSocket, auth, the dashboard, the `krabshell` binary | step the schedule or touch model state directly |
@@ -81,9 +82,8 @@ the contract both gateways read through; neither sees model internals.
 `Model` is the seam. The driver knows how to reset one, hand it admitted
 intents, step it, and read a sorted, capped snapshot out of it.
 
-- `walkers` — built-in double-buffered grid. Builds without Bevy.
+- `walkers` — built-in double-buffered grid.
 - `walkers-krabmaga` — krABMaga's `SparseA5Grid` as occupancy of record.
-  Needs `--features krabmaga` (or `parallel`).
 
 Any walker pack can run on either with `--model`. Both follow the same intent
 rule: an agent placed by an intent (spawn or move) holds that cell for the tick
@@ -93,7 +93,27 @@ that applies it instead of walking off it.
   interest. Positions are continuous; occupancy is the cell each entity is in.
   Each tick is `tick_seconds` of simulated time. Nothing paces it to the wall
   clock; that is the gateways' job.
-  - **Missions.** They execute MAVLink commands (see `drones/mission.rs`) and
+  - **On krABMaga.** The model is the `sim-drones` crate. Each entity is a
+    krABMaga `Agent` (`DroneAgent`, `GroundAgent` for people and vehicles,
+    `IntruderAgent`, `PoiAgent`) on a krABMaga `Schedule`, plus a `Dispatcher`
+    agent that places delivery orders first on every step. They step against
+    `World`, a krABMaga `State` that owns the `SparseA5Grid`, terrain,
+    address book and order queues. `sim-engine`'s `drones` model is a thin
+    adapter holding a `World` and its `Schedule`; `krab-drones` runs the same
+    two with no driver at all, and both reach the same gold hash.
+  - **The krABMaga double buffer.** During a step every agent reads the
+    committed side (the grid, and a board of every agent's published state,
+    as of the end of the last step) and writes itself to the other side;
+    `State::after_step` commits both. So a drone's camera sees where targets
+    were at the end of the previous tick, and finds them by asking the grid
+    for the cells within sensor range (`SparseA5Grid::cell_spherical_cap`,
+    cached per cell) rather than looking at every entity.
+  - **Intents.** Mission and command intents are checked against a copy of
+    the drone's committed state and queued; the drone applies them at the
+    start of its next step. Spawned agents join the schedule in
+    `before_step` and step in that tick; despawned ones skip their step,
+    which drops them from the grid at commit, and leave the schedule.
+  - **Missions.** They execute MAVLink commands (see `sim-drones/src/mission.rs`) and
     arrive as `Custom` intents 100–103 carrying `MISSION_ITEM_INT` /
     `COMMAND_LONG` fields. An intent addressed to a drone's old cell is still
     accepted: the drone moves between publish and apply, and only the world
@@ -107,6 +127,28 @@ that applies it instead of walking off it.
     same path as an uninterrupted run (a test checks this).
 
 ## Things the spec did not know
+
+- **krABMaga's schedule promises no order between equals.** Agents due at
+  the same time are popped from a binary-heap `PriorityQueue` by an `i32`
+  ordering; agents with equal orderings come out in whatever order the heap
+  leaves them, not insertion or id order. The drones give each agent its id
+  as its ordering (so ids must fit in `1..=i32::MAX`), which makes the step
+  order the id order.
+- **krABMaga's `parallel` `Schedule::new()` parses the process's command
+  line** (with clap 2, exiting on arguments it does not know) to find its
+  thread count. An embedder must use `Schedule::with_threads`.
+  `sim_drones::schedule()` does, with one thread, which keeps gold hashes
+  equal to the default build's.
+- **`simulate!` with its terminal monitor moves the state into a thread** and
+  needs it `'static`, so it cannot hand the world back for a summary.
+  `krab-drones` runs the same loop itself unless asked for `--tui`.
+- **The schedule calls `State::update` before the first step** as well as
+  after every step. A model that commits its grid in `update` commits twice
+  at step 0 and loses the initial placement; the drones commit in
+  `after_step`.
+- **An empty krABMaga schedule ends the process** under `parallel`
+  (`std::process::exit(0)`). The drones' `Dispatcher` agent never leaves, so
+  despawning everything is safe.
 
 - **krABMaga 0.6.2 already has** `apply_to_all_values`, grid-disk,
   spherical-cap and lon/lat helpers on `SparseA5Grid`. Two items on the

@@ -4,8 +4,5 @@
 //! a scenario manifest's `model` key.
 
 pub mod drones;
-pub mod walkers;
-
-/// The same model on krABMaga's `SparseA5Grid`, registered as `walkers-krabmaga`.
-#[cfg(feature = "krabmaga")]
 pub mod krabmaga_walkers;
+pub mod walkers;

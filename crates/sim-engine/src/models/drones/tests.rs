@@ -1,5 +1,9 @@
+use std::collections::BTreeSet;
+
 use super::*;
-use sim_core::{ActorId, Config, ScenarioManifest};
+use sim_core::config::Param;
+use sim_core::{ActorId, Config, IntentVerb, Profile, ReportKind, ScenarioManifest, SeedAgent};
+use sim_drones::Record;
 use uuid::Uuid;
 
 /// Resolution-6 parent over southern England, the same root as the London packs.
@@ -100,24 +104,11 @@ fn blob(profile: Profile) -> ScenarioBlob {
 }
 
 fn drones(profile: Profile) -> Drones {
-    let blob = blob(profile);
-    let mut model = Drones {
-        grid: SparseCellGrid::new(blob.config.grid.resolution, blob.config.grid.root),
-        entities: BTreeMap::new(),
-        terrain: Terrain::FLAT,
-        book: AddressBook::default(),
-        dispatch: Dispatch::default(),
-        settings: settings(&blob.config.model),
-        seed: 0,
-        gold: false,
-        next_id: 1,
-        last_seen: BTreeMap::new(),
-        reports: Vec::new(),
-        events: Vec::new(),
-        sightings: Vec::new(),
-    };
-    model.reset(&blob).unwrap();
-    model
+    Drones::new(&blob(profile)).unwrap()
+}
+
+fn record(model: &Drones, id: AgentId) -> &Record {
+    model.world().record(id).unwrap()
 }
 
 fn run(model: &mut Drones, from: u64, ticks: u64) -> Vec<Report> {
@@ -136,11 +127,11 @@ fn hash(model: &Drones) -> u64 {
 }
 
 fn intent(model: &Drones, agent: AgentId, code: u16, payload: serde_json::Value) -> Intent {
-    let pose = model.entities[&agent].pose;
+    let pose = record(model, agent).saved.pose;
     Intent {
         id: Uuid::new_v4(),
         tick: None,
-        cell: model.cell_of(pose.lat_e7, pose.lon_e7).unwrap(),
+        cell: model.world().cell_of(pose.lat_e7, pose.lon_e7).unwrap(),
         agent: Some(agent),
         actor: ActorId::operator(),
         verb: IntentVerb::Custom(code),
@@ -153,10 +144,15 @@ fn intent(model: &Drones, agent: AgentId, code: u16, payload: serde_json::Value)
 fn a_seeded_world_holds_every_kind_of_entity() {
     let model = drones(Profile::Gold);
     assert_eq!(model.agent_count(), 4 + 80 + 20);
-    let kinds: BTreeSet<&str> = model.entities.values().map(|e| e.kind.name()).collect();
+    let kinds: BTreeSet<&str> = model
+        .world()
+        .records()
+        .iter()
+        .map(|r| r.kind.name())
+        .collect();
     assert_eq!(kinds.len(), 5);
-    assert_eq!(model.entities[&1].callsign, "HAWK-1");
-    assert_eq!(model.entities[&2].callsign, "UAV-2");
+    assert_eq!(record(&model, 1).saved.callsign, "HAWK-1");
+    assert_eq!(record(&model, 2).saved.callsign, "UAV-2");
 }
 
 #[test]
@@ -183,9 +179,9 @@ fn the_patrolling_drone_reports_waypoints_and_sightings() {
         "only the airborne drone can see anything"
     );
 
-    let drone = model.entities[&1].drone.as_ref().unwrap();
-    assert_eq!(drone.mode, Mode::Auto);
-    assert!(model.entities[&1].pose.alt_mm > 39_000);
+    let hawk = record(&model, 1);
+    assert_eq!(hawk.saved.drone.as_ref().unwrap().mode, Mode::Auto);
+    assert!(hawk.saved.pose.alt_mm > 39_000);
 }
 
 #[test]
@@ -245,13 +241,10 @@ fn a_mission_uploaded_by_intent_is_flown() {
         .map(|r| r.detail["seq"].as_u64().unwrap())
         .collect();
     assert_eq!(reached, vec![0, 1, 2]);
-    let drone = &model.entities[&2];
-    assert_eq!(drone.drone.as_ref().unwrap().mode, Mode::Disarmed);
-    assert!(drone
-        .drone
-        .as_ref()
-        .unwrap()
-        .grounded(&drone.pose, &model.terrain));
+    let saved = &record(&model, 2).saved;
+    let drone = saved.drone.as_ref().unwrap();
+    assert_eq!(drone.mode, Mode::Disarmed);
+    assert!(drone.grounded(&saved.pose, model.world().terrain()));
 }
 
 #[test]
@@ -373,7 +366,8 @@ fn orders_are_dispatched_delivered_reported_and_the_courier_comes_home() {
         .collect();
     assert!(deliveries.len() >= 3, "{} deliveries", deliveries.len());
     let addresses: Vec<(i32, i32)> = model
-        .book
+        .world()
+        .book()
         .addresses
         .iter()
         .map(|a| (a.lat_e7, a.lon_e7))
@@ -394,9 +388,10 @@ fn orders_are_dispatched_delivered_reported_and_the_courier_comes_home() {
         }
     }
     // Orders keep coming faster than one drone delivers, so some wait.
-    assert!(model.dispatch.placed > model.dispatch.delivered);
-    assert_eq!(model.dispatch.delivered as usize, deliveries.len());
-    let courier = model.entities[&5].courier.as_ref().unwrap();
+    let dispatch = model.world().dispatch();
+    assert!(dispatch.placed > dispatch.delivered);
+    assert_eq!(dispatch.delivered as usize, deliveries.len());
+    let courier = record(&model, 5).saved.courier.as_ref().unwrap();
     assert!(
         courier.landed_tick.is_some(),
         "it has been home at least once"
@@ -410,13 +405,14 @@ fn a_checkpoint_mid_delivery_restores_the_queue_and_the_courier() {
     original.reset(&blob).unwrap();
     run(&mut original, 1, 2_500);
     assert!(
-        original.entities[&5]
+        record(&original, 5)
+            .saved
             .courier
             .as_ref()
             .unwrap()
             .order
             .is_some()
-            || original.dispatch.queued() > 0
+            || original.world().dispatch().queued() > 0
     );
 
     let mut cells = Vec::new();
@@ -425,7 +421,7 @@ fn a_checkpoint_mid_delivery_restores_the_queue_and_the_courier() {
     restored.reset(&blob).unwrap();
     restored.load_cells(cells).unwrap();
     restored.restore_fields(&original.fields()).unwrap();
-    assert_eq!(restored.dispatch, original.dispatch);
+    assert_eq!(restored.world().dispatch(), original.world().dispatch());
 
     let a = run(&mut original, 2_501, 3_000);
     let b = run(&mut restored, 2_501, 3_000);

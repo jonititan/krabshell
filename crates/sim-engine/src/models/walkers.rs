@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use sim_core::config::Param;
+pub(crate) use sim_core::rng::gold_draw;
 use sim_core::rng::Rng;
 use sim_core::{
     AgentId, CellBag, GeoCell, Intent, IntentVerb, Profile, RejectReason, ScenarioBlob, WorldObject,
@@ -105,14 +106,6 @@ pub(crate) fn seed_area(
         );
     }
     Ok(area)
-}
-
-/// The draw a `gold` agent makes on a tick: depends only on (seed, agent, tick).
-pub(crate) fn gold_draw(seed: u64, agent: AgentId, tick: u64) -> (f64, u64) {
-    let mut stream = Rng::new(
-        seed ^ agent.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ tick.wrapping_mul(0xbf58_476d_1ce4_e5b9),
-    );
-    (stream.unit(), stream.next_u64())
 }
 
 impl Walkers {

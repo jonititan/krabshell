@@ -17,7 +17,7 @@ performance claim.
 Re-run with:
 
 ```sh
-cargo build --release -p sim-engine --features krabmaga --bin simctl
+cargo build --release -p sim-engine --bin simctl
 target/release/simctl --scenarios bench/scenarios bench london-walkers --warmup 200 --ticks 1500
 target/release/simctl --scenarios bench/scenarios --model walkers-krabmaga bench london-walkers --warmup 200 --ticks 1500
 ```
@@ -29,8 +29,9 @@ a `SparseA5Grid` for 200 ticks measured **≈44 ns per move, field only** (no
 model, no driver). Confirmed `bevy_a5::GeoCell` is `Copy + Eq + Hash + Send + Sync`.
 
 Enabling `gis` links all of Bevy 0.18 (≈610 crates) even though the grid only
-needs `bevy_a5` maths. That is the risk in spec §16; it is why the server's own
-crates use the `a5` crate directly and keep krABMaga behind a feature.
+needs `bevy_a5` maths. That is the risk in spec §16. The server's own crates
+still use the `a5` crate directly for cell maths, but krABMaga is no longer
+behind a feature: the drones model runs on it, so every build links Bevy.
 
 ## Driver throughput, headless
 
@@ -78,3 +79,36 @@ with `publish_hz` and world size, not with the number of readers.
 
 Not yet measured (spec Phase 5): 10 and 50 WebSocket subscribers, and a
 checkpoint of 10⁵ agents while running.
+
+## Drones on krABMaga
+
+The drones model moved from a hand-rolled loop over a `BTreeMap` of entities
+on the built-in grid to krABMaga agents on a `Schedule` and a `SparseA5Grid`.
+Medians of three interleaved runs of 3 000 ticks, on 32 logical CPUs (Linux 7.0,
+shared with an editor):
+
+| Pack | Agents | Built-in loop (`simctl`, before) | krABMaga (`simctl`) | krABMaga alone (`krab-drones`) |
+|---|---:|---:|---:|---:|
+| `london-patrol` (gold) | 1 365 | 2 730 | 2 041 | 2 280 |
+| `kaunas-deliveries` (gold) | 1 844 | 1 479 | 1 165 | 1 326 |
+| `swarm-survey` (fast) | 5 042 | 468 | 363 | 476 |
+
+Ticks per second. Observations:
+
+- **About a quarter slower under the driver.** Every agent now goes through
+  krABMaga's priority queue and re-places itself on the grid and the board on
+  every step (krABMaga's commit clears what nobody wrote), where the old loop
+  touched the grid only when an entity crossed a cell.
+- **Faster alone than under the driver**, by 10–30 %: `krab-drones` publishes
+  no snapshots for the dashboard and gateways.
+- **`parallel` is slower again** (≈990 ticks/s for `london-patrol` alone): it
+  pays for the locked grid and a mutex around the state while the schedule
+  still runs on one thread, and gives the same gold hash.
+
+Re-run with:
+
+```sh
+cargo build --release -p sim-engine -p sim-drones --bins
+target/release/simctl run london-patrol --ticks 3000
+target/release/krab-drones scenarios/london-patrol --steps 3000
+```

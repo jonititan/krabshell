@@ -66,6 +66,15 @@ impl Rng {
     }
 }
 
+/// The draw an agent makes on a tick in a `gold` run: two numbers that depend
+/// only on (seed, agent, tick), so the order agents step in cannot change them.
+pub fn gold_draw(seed: u64, agent: u64, tick: u64) -> (f64, u64) {
+    let mut stream = Rng::new(
+        seed ^ agent.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ tick.wrapping_mul(0xbf58_476d_1ce4_e5b9),
+    );
+    (stream.unit(), stream.next_u64())
+}
+
 impl Default for Rng {
     fn default() -> Self {
         Rng::new(0x5eed_1234_5678_9abc)

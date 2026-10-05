@@ -15,6 +15,12 @@ see to TAK as Cursor-on-Target. It does the real-time half of both protocols
 itself (heartbeats, telemetry, handshakes and timeouts, all on the wall clock),
 so the simulation underneath can run as fast as it likes.
 
+The drones model is a krABMaga model: every drone, person, vehicle, intruder
+and point of interest is a krABMaga agent with its own `step()`, on a krABMaga
+schedule, against a krABMaga `State` whose occupancy is a `SparseA5Grid`. It
+lives in its own crate, `sim-drones`, and runs without krabshell too; see
+[Without krabshell](#without-krabshell).
+
 The design is in [`krabshell_spec.md`](krabshell_spec.md). How the code
 implements it, and what was learned doing so, is in
 [`docs/architecture.md`](docs/architecture.md). Speed numbers are in
@@ -30,12 +36,15 @@ Open <http://127.0.0.1:8080/>. With no `DASHBOARD_TOKEN` set the server accepts
 any token and refuses to bind anything but loopback. The MAVLink gateway and the
 CoT emitter start with it; see [Drones: MAVLink and CoT](#drones-mavlink-and-cot).
 
-The random-walker packs used for benchmarks live in `bench/scenarios`. To run
-one on the krABMaga grid instead of the built-in one (links Bevy; the first
-build is slow):
+Every build links krABMaga with its `gis` feature, which pulls in Bevy, so the
+first build is slow and needs Bevy's system libraries on Linux (`libasound2-dev
+libudev-dev libwayland-dev libfontconfig1-dev libxkbcommon-dev pkg-config`).
+
+The random-walker packs used for benchmarks live in `bench/scenarios`. They run
+on the built-in grid (`walkers`) or on krABMaga's (`walkers-krabmaga`):
 
 ```sh
-cargo run --release -p sim-axum --features krabmaga --bin krabshell -- \
+cargo run --release -p sim-axum --bin krabshell -- \
   --scenarios bench/scenarios --scenario london-walkers --model walkers-krabmaga
 ```
 
@@ -43,8 +52,9 @@ cargo run --release -p sim-axum --features krabmaga --bin krabshell -- \
 
 ```
 crates/
-  sim-core/       types and A5 cell maths — no Bevy, Axum or krABMaga
-  sim-engine/     driver thread, models, scenario packs, checkpoints, simctl
+  sim-core/       types, A5 cell maths, pack reading — no Bevy, Axum or krABMaga
+  sim-drones/     the drones model as krABMaga agents and State; krab-drones
+  sim-engine/     driver thread, Model seam, walkers, scenario store, checkpoints, simctl
   sim-mavlink/    MAVLink gateway: drones as UDP vehicles for ground stations
   sim-cot/        Cursor-on-Target emitter: tracks and sightings for TAK
   sim-axum/       REST + WebSocket edge, auth, the krabshell binary
@@ -59,12 +69,12 @@ docs/             architecture notes and baseline numbers
 
 | Cargo feature | Effect |
 |---|---|
-| *(none)* | Built-in sparse A5 grid. Fast to build, no Bevy. |
-| `krabmaga` | Adds the `walkers-krabmaga` model on krABMaga's `SparseA5Grid` (`gis`). |
-| `parallel` | As `krabmaga`, with krABMaga's `parallel` feature. |
+| *(none)* | krABMaga with `gis`: the drones model and `walkers-krabmaga`. |
+| `parallel` | krABMaga's `parallel` feature: its thread-safe grid and schedule. The drones schedule still runs on one thread, so gold hashes match the default build. |
 
-Enable on the binary with `-p sim-axum --features krabmaga` or on the CLI with
-`-p sim-engine --features krabmaga`.
+Enable on the binary with `-p sim-axum --features parallel`, on `simctl` with
+`-p sim-engine --features parallel`, or on `krab-drones` with
+`-p sim-drones --features parallel`.
 
 ## Operating
 
@@ -206,6 +216,37 @@ cargo run --release -p sim-engine --bin simctl -- cell --lon -0.1276 --lat 51.50
 cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 8
 ```
 
+### Without krabshell
+
+`krab-drones` runs a drones pack on krABMaga alone: no driver, server, gateways
+or dashboard. It reads the pack, builds the `World` (the krABMaga `State`),
+and steps it on a krABMaga `Schedule` the way `simulate!` does:
+
+```sh
+cargo run --release -p sim-drones --bin krab-drones -- scenarios/kaunas-deliveries --steps 36000
+cargo run --release -p sim-drones --bin krab-drones -- scenarios/london-patrol --reports reports.jsonl
+cargo run --release -p sim-drones --bin krab-drones -- scenarios/london-patrol --tui
+```
+
+It prints agents, occupied cells, steps per second, reports by kind, orders
+and the gold hash. `--reports` writes every detection, waypoint and delivery as
+JSON lines. `--tui` hands the world to krABMaga's `simulate!` with its terminal
+monitor instead, and prints no summary.
+
+To embed the model in your own krABMaga program, depend on `sim-drones`:
+
+```rust
+use sim_drones::krabmaga::engine::state::State;
+
+let blob = sim_core::read_pack("scenarios/london-patrol".as_ref())?;
+let mut world = sim_drones::World::new(&blob)?;
+let mut schedule = sim_drones::schedule();
+world.init(&mut schedule);
+for _ in 0..1_000 {
+    schedule.step(&mut world);
+}
+```
+
 ### API
 
 Everything is under `/api/v1`. Send `Authorization: Bearer $DASHBOARD_TOKEN`.
@@ -292,7 +333,7 @@ deliveries (`order_rate_per_address_day`, `dispatch_takeoff_m`,
 
 Terrain goes in `world/fields.json` as a regular latitude/longitude grid of
 elevations above mean sea level; the format is documented in
-`crates/sim-engine/src/models/drones/terrain.rs`. Without it the ground is flat
+`crates/sim-drones/src/terrain.rs`. Without it the ground is flat
 at 0 m. People, vehicles and points of interest sit on the terrain, and the
 camera's footprint grows with height above it. The address book goes in the
 same file under `"addresses"`: `{"depots": ["MEGA", ...], "items": [[lat_e7,
@@ -303,10 +344,13 @@ Copernicus GLO-30 grid and every OpenStreetMap address within 5 km of its hubs (
 ## Development
 
 ```sh
-cargo test --workspace                          # fast, no Bevy
-cargo test --workspace --features sim-axum/krabmaga
+cargo test --workspace
+cargo test --workspace --features sim-axum/parallel,sim-drones/parallel
 cargo clippy --workspace --all-targets
 ```
 
-CI runs formatting, clippy and tests without features, then the `krabmaga`
-and `parallel` matrix with a gold replay on the krABMaga backend.
+Every test binary links Bevy; `CARGO_PROFILE_DEV_DEBUG=0
+CARGO_PROFILE_TEST_DEBUG=0` keeps them small. CI runs formatting, clippy, tests
+and gold replays (drones through `simctl` and standalone through
+`krab-drones`, walkers on krABMaga's grid) on the default build and again with
+`parallel`.

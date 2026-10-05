@@ -12,6 +12,7 @@ pub mod cell;
 pub mod config;
 pub mod error;
 pub mod intent;
+pub mod pack;
 pub mod report;
 pub mod rng;
 pub mod scenario;
@@ -22,6 +23,7 @@ pub use cell::{CellError, GeoCell, MAX_RESOLUTION};
 pub use config::{Config, GridConfig, Profile, RunConfig};
 pub use error::{ErrorCode, Problem};
 pub use intent::{ActorId, AgentId, Intent, IntentVerb, RejectReason};
+pub use pack::read_pack;
 pub use report::{Report, ReportKind};
 pub use scenario::{ScenarioBlob, ScenarioError, ScenarioManifest, ScenarioSummary, SeedAgent};
 pub use snapshot::{

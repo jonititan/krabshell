@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
 /// Where something is and how it is moving. Altitude is above mean sea level;
-/// see [`super::terrain`].
+/// see [`crate::terrain`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Pose {
     pub lat_e7: i32,

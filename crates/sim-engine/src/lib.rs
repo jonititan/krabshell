@@ -35,20 +35,21 @@ pub use grid::SparseCellGrid;
 pub use model::{Model, ModelFactory, ModelRegistry, Truncation};
 pub use scenario::{read_pack, ScenarioStore};
 
-/// Whether this build links krABMaga.
+/// Whether this build links krABMaga. It always does now: the drones model
+/// runs on it.
 ///
 /// The dashboard reports it, because "is the real engine underneath?" is the
 /// first question anyone asks of a running server.
-pub const HAS_KRABMAGA: bool = cfg!(feature = "krabmaga");
+pub const HAS_KRABMAGA: bool = true;
 
-/// Whether this build enables krABMaga's parallel schedule.
+/// Whether this build enables krABMaga's parallel feature.
 pub const HAS_PARALLEL: bool = cfg!(feature = "parallel");
 
 /// A one-line description of the engine backing this build.
 pub fn engine_description() -> &'static str {
-    match (HAS_KRABMAGA, HAS_PARALLEL) {
-        (true, true) => "krABMaga (gis, parallel)",
-        (true, false) => "krABMaga (gis)",
-        (false, _) => "built-in sparse A5 grid",
+    if HAS_PARALLEL {
+        "krABMaga (gis, parallel)"
+    } else {
+        "krABMaga (gis)"
     }
 }

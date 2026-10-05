@@ -5606,6 +5606,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-drones"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap 4.6.6",
+ "krabmaga",
+ "libm",
+ "serde",
+ "serde_json",
+ "sim-core",
+]
+
+[[package]]
 name = "sim-engine"
 version = "0.1.0"
 dependencies = [
@@ -5619,6 +5632,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sim-core",
+ "sim-drones",
  "thiserror 2.0.20",
  "toml",
  "tracing",

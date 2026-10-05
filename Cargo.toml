@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/sim-core",
+    "crates/sim-drones",
     "crates/sim-engine",
     "crates/sim-mavlink",
     "crates/sim-cot",
@@ -17,6 +18,7 @@ repository = "https://github.com/jonititan/krabshell"
 
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
+sim-drones = { path = "crates/sim-drones" }
 sim-engine = { path = "crates/sim-engine" }
 sim-mavlink = { path = "crates/sim-mavlink" }
 sim-cot = { path = "crates/sim-cot" }
@@ -55,6 +57,8 @@ codegen-units = 1
 # The tick loop is the product. Never ship a debug-speed driver by accident:
 # `cargo run` in dev still optimises the engine and its maths dependencies.
 [profile.dev.package.sim-engine]
+opt-level = 3
+[profile.dev.package.sim-drones]
 opt-level = 3
 [profile.dev.package.a5]
 opt-level = 3

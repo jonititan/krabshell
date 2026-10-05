@@ -5,7 +5,7 @@
 //! back out on download unchanged. Command numbers and parameter meanings follow
 //! MAVLink `common.xml`; see <https://mavlink.io/en/services/mission.html>.
 //!
-//! Altitudes are above mean sea level (see [`super::terrain`]). A mission item's
+//! Altitudes are above mean sea level (see [`crate::terrain`]). A mission item's
 //! altitude is read by its frame: relative to home (3, 6), above mean sea level
 //! (0, 5), or above the terrain under the drone (10, 11), which makes a leg
 //! follow the ground. The drone's home is the pad it launched from, a rooftop
@@ -14,8 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::flight::{self, Limits, Point, Pose};
-use super::terrain::Terrain;
+use crate::flight::{self, Limits, Point, Pose};
+use crate::terrain::Terrain;
 
 // MAV_CMD values this executor understands.
 pub const NAV_WAYPOINT: u16 = 16;

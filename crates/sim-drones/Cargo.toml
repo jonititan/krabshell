@@ -1,0 +1,28 @@
+[package]
+name = "sim-drones"
+description = "Drones, people and vehicles as krABMaga agents on a SparseA5Grid. Runs inside krabshell or on its own."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# krABMaga's parallel schedule and thread-safe grid. The schedule still runs
+# on one thread here, so gold runs stay deterministic.
+parallel = ["krabmaga/parallel"]
+
+[dependencies]
+sim-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+krabmaga = { version = "0.6.2", features = ["gis"] }
+
+[[bin]]
+name = "krab-drones"
+path = "src/bin/krab-drones.rs"

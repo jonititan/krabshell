@@ -3,7 +3,8 @@
 //! Everything specific to a world — agents, fields, rules — lives behind
 //! [`Model`]. The driver knows only how to reset it, feed it admitted intents,
 //! step it, and read a committed view out of it. That is the seam krABMaga
-//! plugs into: see `krabmaga_grid.rs` for the `SparseA5Grid`-backed variant.
+//! plugs into: `drones` wraps a krABMaga state and schedule (see
+//! `models/drones`), and `walkers-krabmaga` a krABMaga `SparseA5Grid`.
 //!
 //! A `Model` is stepped on the tick thread and must never block, allocate
 //! unboundedly, or touch Tokio (spec §6.3).
@@ -95,7 +96,6 @@ impl ModelRegistry {
         let mut registry = ModelRegistry::default();
         registry.register("drones", crate::models::drones::build);
         registry.register("walkers", crate::models::walkers::build);
-        #[cfg(feature = "krabmaga")]
         registry.register("walkers-krabmaga", crate::models::krabmaga_walkers::build);
         registry
     }

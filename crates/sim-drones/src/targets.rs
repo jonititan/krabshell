@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::flight::{self, Limits, Point, Pose};
+use crate::flight::{self, Limits, Point, Pose};
 
 /// A ground target that walks or drives between random destinations near
 /// where it started.
