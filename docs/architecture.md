@@ -122,7 +122,13 @@ that applies it instead of walking off it.
     which drops them from the grid at commit, and leave the schedule.
   - **Missions.** They execute MAVLink commands (see `sim-drones/src/mission.rs`) and
     arrive as `Custom` intents 100–103 carrying `MISSION_ITEM_INT` /
-    `COMMAND_LONG` fields. An intent addressed to a drone's old cell is still
+    `COMMAND_LONG` fields. Intents 110 and 111 open and close geofences
+    (`sim-drones/src/airspace.rs`), which the dispatcher applies with ATM's
+    random ones at the start of a step. The operator
+    (`sim-drones/src/operator.rs`) then reroutes the drones the simulation
+    flies by queuing the same mission uploads and commands a ground station's
+    intents would. The fences reach gateways through `Model::overlays`, a
+    small JSON value each published view carries beside the cells. An intent addressed to a drone's old cell is still
     accepted: the drone moves between publish and apply, and only the world
     bounds are checked.
   - **Gold determinism.** Poses are integers in MAVLink's `_INT` units, trig

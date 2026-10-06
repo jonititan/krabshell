@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use sim_core::config::Param;
 
+use crate::airspace::Atm;
 use crate::dispatch::DispatchSettings;
 use crate::flight;
 use crate::mission::{Tuning, Winch};
@@ -23,6 +24,9 @@ pub(crate) struct Settings {
     pub(crate) vehicle_speed_cms: i32,
     pub(crate) intruder_speed_cms: i32,
     pub(crate) wander_radius_m: u32,
+    /// How far drones keep from a geofence, metres.
+    pub(crate) geofence_margin_m: f64,
+    pub(crate) atm: Atm,
 }
 
 pub(crate) fn param_f64(params: &BTreeMap<String, Param>, key: &str, default: f64) -> f64 {
@@ -93,5 +97,23 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
         vehicle_speed_cms: cms(param_f64(params, "vehicle_speed_ms", 8.0)),
         intruder_speed_cms: cms(param_f64(params, "intruder_speed_ms", 12.0)),
         wander_radius_m: param_f64(params, "wander_radius_m", 600.0).max(1.0) as u32,
+        geofence_margin_m: param_f64(params, "geofence_margin_m", 30.0).clamp(2.0, 1_000.0),
+        atm: {
+            let min_radius_m = param_f64(params, "atm_fence_min_radius_m", 150.0).max(10.0);
+            Atm {
+                per_tick: param_f64(params, "atm_fences_per_hour", 0.0).max(0.0) / 3_600.0 * dt,
+                mean_open_ticks: param_f64(params, "atm_fence_mean_minutes", 20.0).max(0.1) * 60.0
+                    / dt,
+                min_radius_m,
+                max_radius_m: param_f64(params, "atm_fence_max_radius_m", 500.0).max(min_radius_m),
+                max_open: param_f64(params, "atm_max_fences", 6.0).clamp(0.0, 1_000.0) as usize,
+                area_radius_m: param_f64(
+                    params,
+                    "atm_area_radius_m",
+                    param_f64(params, "wander_radius_m", 600.0),
+                )
+                .max(1.0),
+            }
+        },
     }
 }

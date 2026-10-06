@@ -114,6 +114,39 @@ and delivered. A courier that comes home without delivering (low battery, a
 ground station took it) puts its order back at the front of the queue. Orders
 come from the run's seed, so `gold` runs place and deliver the same orders.
 
+A drone whose battery reaches 0 % in the air crashes where it is: it leaves
+the world, a `crash` report is logged, and the order it carried goes back to
+the front of the queue. A crashed courier's duty goes to its hub's spare (a
+drone with `"spare": "<depot>"`), and once the spares are used, to a new drone
+on the wreck's pad. New drones get an agent id and MAVLink system id nothing
+has had before. Every touchdown after a flight is a `landing` report with the
+battery left.
+
+### Geofences
+
+Geofences are keep-out zones, at every altitude, that open and close while a
+run goes on: circles and polygons. Air traffic management opens them at random
+when a pack sets `atm_fences_per_hour` (with `atm_fence_mean_minutes`,
+`atm_fence_min_radius_m`/`atm_fence_max_radius_m`, `atm_max_fences` and
+`atm_area_radius_m`), never over a drone's pad, and closes each after an
+exponentially distributed time. Intents open and close them by hand: `Custom`
+110 with `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
+...]}` and optionally `"minutes"`; `Custom` 111 with `{"id"}`.
+
+The autopilot knows nothing of fences. The operator, who flies the drones the
+simulation flies itself (couriers, and drones a pack starts on a mission),
+keeps them `geofence_margin_m` clear the way a ground station would, by
+MAVLink: it re-uploads the mission with detour waypoints round each fence
+(`MISSION_ITEM_INT`, `DO_JUMP`s renumbered, `MISSION_SET_CURRENT`), turns a
+return home into a mission round the fences, moves a drone a fence opened
+round out of it with `DO_REPOSITION` and then resumes, and sends a courier
+whose address is fenced home (its order waits for the fence to close). When a
+fence closes, its detours come out again. Drones flown by a ground station
+are left to it. A drone inside a fence in the air is a `breach` report, once
+per fence it enters; opens, closes and reroutes are reports too
+(`geofence`, `reroute`). Ground stations can download the fences as a fence
+plan (see below).
+
 A pack that sets `heatmap_resolution` or `order_rate_per_address_day` gets a
 run log: krabshell writes a folder `var/logs/<scenario>-<UTC start>/` every
 `--log-every` seconds and on shutdown, and a reset, a restored checkpoint or
@@ -126,7 +159,10 @@ another scenario starts a new one. It holds:
 | `delivery-times.csv`, `delivery-times.svg` | Histogram of time from order to delivery, in whole-minute bins, with mean, median, 90th percentile and slowest. |
 | `landings.csv` | The end of every flight: drone, landed or crashed, and the battery percentage it touched down with (-1 for a crash), with what replaced a crashed drone. |
 | `landing-battery.csv`, `landing-battery.svg` | Histogram of battery at touchdown in 5 % bins, one sample per flight, crashes in a bin of their own at -1. |
-| `summary.json` | Totals (flights and crashes among them), and any reports the logger missed. |
+| `geofences.geojson` | Every geofence that opened, with when it opened and closed and how often it was breached, and every breach as a point. Styled for geojson.io. |
+| `breaches.csv` | Every breach: drone, fence, whether it flew in or the fence opened round it, and who was flying it. |
+| `reroutes.csv` | Every set of MAVLink messages the operator sent to take a drone round a fence, and why. |
+| `summary.json` | Totals (flights and crashes among them, geofences, breaches, reroutes), and any reports the logger missed. |
 
 For a long run without the server, `simctl fly` flies the pack for some
 simulated hours as fast as it can and writes the same folder
@@ -150,6 +186,10 @@ address, and to any ground station that has sent it a packet. What works:
   MISSION_CURRENT and MISSION_ITEM_REACHED;
 - the mission protocol: upload (`MISSION_COUNT` → `MISSION_REQUEST_INT` →
   `MISSION_ITEM_INT` → `MISSION_ACK`), download and clear;
+- the geofences as a fence plan (`MAV_MISSION_TYPE_FENCE`): download only,
+  as `NAV_FENCE_CIRCLE_EXCLUSION` and `NAV_FENCE_POLYGON_VERTEX_EXCLUSION`
+  items, with `MISSION_CURRENT.fence_id` changing whenever a fence opens or
+  closes;
 - commands (`COMMAND_LONG`/`COMMAND_INT`): arm/disarm, takeoff, mission start,
   RTL, land, DO_SET_MODE, DO_REPOSITION, DO_PAUSE_CONTINUE, DO_SET_MISSION_CURRENT;
 - the capability handshake QGroundControl needs for a generic autopilot

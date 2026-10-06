@@ -14,12 +14,16 @@
 //!   percentage it touched down with (-1 for a crash);
 //! - `landing-battery.csv` and `landing-battery.svg`: a histogram of those
 //!   percentages, crashes in a bin of their own;
+//! - `geofences.geojson`: every geofence opened during the run and every
+//!   breach of one; `breaches.csv`, every breach; `reroutes.csv`, the MAVLink
+//!   messages the operator sent to take drones round them;
 //! - `summary.json`: the run's span and totals.
 
 use sim_core::config::{Config, Param};
 
 use super::deliveries::DeliveryLog;
 use super::drones_in;
+use super::geofences::GeofenceLog;
 use super::heatmap::{self, Heatmap};
 use super::landings::LandingLog;
 use crate::Published;
@@ -39,6 +43,7 @@ pub struct RunLog {
     pub heatmap: Option<Heatmap>,
     pub deliveries: DeliveryLog,
     pub landings: LandingLog,
+    pub geofences: GeofenceLog,
     last_tick: Option<u64>,
     last_report: u64,
     /// Reports that fell out of the driver's buffer before they were read.
@@ -52,6 +57,7 @@ impl RunLog {
             heatmap: heatmap::settings(config).map(|(res, dt)| Heatmap::new(res, dt)),
             deliveries: DeliveryLog::default(),
             landings: LandingLog::default(),
+            geofences: GeofenceLog::default(),
             last_tick: None,
             // Only what happens from now on.
             last_report: view.reports.last().map_or(0, |r| r.seq),
@@ -75,6 +81,7 @@ impl RunLog {
         for report in new {
             self.deliveries.add(report);
             self.landings.add(report);
+            self.geofences.add(report);
             self.last_report = report.seq;
         }
     }
@@ -113,6 +120,14 @@ impl RunLog {
                 )),
             ));
         }
+        if !self.geofences.is_empty() {
+            out.push((
+                "geofences.geojson",
+                self.geofences.to_geojson(&self.scenario).to_string(),
+            ));
+            out.push(("breaches.csv", self.geofences.breaches_csv()));
+            out.push(("reroutes.csv", self.geofences.reroutes_csv()));
+        }
         if !out.is_empty() {
             let summary = self.deliveries.summary();
             out.push((
@@ -128,6 +143,9 @@ impl RunLog {
                     })),
                     "flights": self.landings.len(),
                     "crashes": self.landings.crashes(),
+                    "geofences": self.geofences.fences.len(),
+                    "breaches": self.geofences.breaches.len(),
+                    "reroutes": self.geofences.reroutes.len(),
                     "missed_reports": self.missed_reports,
                 }))
                 .unwrap_or_default(),

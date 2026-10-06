@@ -161,7 +161,9 @@ pub fn home_position(drone: &DroneStatus) -> MavMessage {
     })
 }
 
-pub fn mission_current(drone: &DroneStatus) -> MavMessage {
+/// `fence_id` changes whenever the geofences do, which tells a ground
+/// station to download the fence plan again.
+pub fn mission_current(drone: &DroneStatus, fence_id: u32) -> MavMessage {
     let total = drone.mission.len() as u16;
     let state = if total == 0 {
         MissionState::MISSION_STATE_NO_MISSION
@@ -180,7 +182,7 @@ pub fn mission_current(drone: &DroneStatus) -> MavMessage {
         mission_state: state,
         mission_mode: u8::from(drone.mode == Mode::Auto),
         mission_id: drone.mission_rev,
-        fence_id: 0,
+        fence_id,
         rally_points_id: 0,
     })
 }

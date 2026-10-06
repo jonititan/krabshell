@@ -66,6 +66,13 @@ pub trait Model: Send + 'static {
 
     fn agent_count(&self) -> u64;
 
+    /// Anything else a view should carry that is not an agent in a cell,
+    /// such as the drones' geofences. Built on the tick thread at every
+    /// publish, so it must stay small. Null by default.
+    fn overlays(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     fn occupied_cells(&self) -> u64;
 
     /// State that does not live in the grid, for checkpoints.

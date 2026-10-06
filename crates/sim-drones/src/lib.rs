@@ -14,7 +14,10 @@
 //! - [`agents::GroundAgent`]: a person or vehicle wandering near where it
 //!   started.
 //! - [`agents::PoiAgent`]: a named point of interest that never moves.
-//! - [`agents::Dispatcher`]: places delivery orders, first on every step.
+//! - [`agents::Dispatcher`]: first on every step, opens and closes geofences
+//!   (see [`airspace`]), places delivery orders, and lets the [`operator`]
+//!   reroute the drones it flies round the fences, by MAVLink mission upload
+//!   and command.
 //!
 //! Occupancy of record is krABMaga's `SparseA5Grid`, double-buffered the
 //! krABMaga way: during a step, agents read the committed side (where
@@ -31,9 +34,11 @@
 //! tick) stream; agents step in id order. `gold` runs replay bit for bit.
 
 pub mod agents;
+pub mod airspace;
 pub mod dispatch;
 pub mod flight;
 pub mod mission;
+pub mod operator;
 pub mod sensor;
 mod settings;
 pub mod targets;

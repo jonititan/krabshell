@@ -251,6 +251,14 @@ pub struct Drone {
     /// a long endurance drains smoothly at a 0.1 s tick, rather than rounding
     /// to a whole step per tick.
     pub battery_ppm: u32,
+    /// The low-battery failsafe has sent it home on this charge. It fires
+    /// once, as an autopilot's does: whoever flies the drone may then send
+    /// it elsewhere (a way home round a geofence, say).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub failsafe: bool,
+    /// Geofences it is inside now, by id, so a breach is reported once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fenced: Vec<u32>,
 }
 
 /// A mission step's outcome, for the model to turn into a report.
@@ -356,6 +364,8 @@ impl Drone {
             jumps: Default::default(),
             cruise_cms,
             battery_ppm: 1_000_000,
+            failsafe: false,
+            fenced: Vec::new(),
         }
     }
 
@@ -593,14 +603,19 @@ impl Drone {
             }
             if tuning.drain_ppm_tick > 0
                 && self.battery_ppm <= tuning.reserve_ppm
+                && !self.failsafe
                 && !matches!(self.mode, Mode::Rtl | Mode::Land)
             {
                 self.mode = Mode::Rtl;
+                self.failsafe = true;
                 events.push(Event::LowBattery);
             }
         } else if self.near_home(pose) {
             // On the home pad, plugged in.
             self.battery_ppm = (self.battery_ppm + tuning.charge_ppm_tick).min(1_000_000);
+        }
+        if self.failsafe && self.battery_ppm > tuning.reserve_ppm {
+            self.failsafe = false;
         }
 
         let limits = self.limits(tuning);

@@ -306,3 +306,139 @@ async fn a_ground_station_can_upload_download_and_fly_a_mission() {
     task.await.unwrap().unwrap();
     driver.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
+    use sim_core::config::Param;
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/london-patrol");
+    let mut blob = sim_engine::read_pack(&pack).expect("london-patrol pack");
+    // ATM opening fences often, and keeping them open.
+    for (key, value) in [
+        ("atm_fences_per_hour", 600.0),
+        ("atm_fence_mean_minutes", 600.0),
+        ("atm_max_fences", 3.0),
+    ] {
+        blob.config.model.insert(key.into(), Param::Float(value));
+    }
+    let driver = Driver::spawn(ModelRegistry::with_builtins(), blob).unwrap();
+    let handle = driver.handle();
+    handle.command(Control::Start { target_tps: None }).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let fences = loop {
+        let (_, fences) = sim_engine::models::drones::geofences_in(&handle.view().overlays);
+        if fences.len() == 3 {
+            break fences;
+        }
+        assert!(Instant::now() < deadline, "ATM opened no fences");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    handle.command(Control::Pause).unwrap();
+
+    let station_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let cfg = MavlinkConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        gcs: vec![station_socket.local_addr().unwrap()],
+        telemetry_hz: 10.0,
+    };
+    let gateway = Gateway::bind(cfg, handle.clone(), Arc::new(ActorLimiter::new()))
+        .await
+        .unwrap();
+    let mut station = Station {
+        gateway: gateway.local_addr().unwrap(),
+        socket: station_socket,
+        seq: 0,
+    };
+    let (stop, stopped) = watch::channel(false);
+    let serving = tokio::spawn(gateway.run(stopped));
+
+    // MISSION_CURRENT names the fence plan's id: the airspace revision.
+    let (rev, _) = sim_engine::models::drones::geofences_in(&handle.view().overlays);
+    let fence_id = station
+        .expect(UAV, "MISSION_CURRENT", |m| match m {
+            MavMessage::MISSION_CURRENT(c) => Some(c.fence_id),
+            _ => None,
+        })
+        .await;
+    assert_eq!(u64::from(fence_id), rev);
+
+    station
+        .send(MavMessage::MISSION_REQUEST_LIST(
+            MISSION_REQUEST_LIST_DATA {
+                target_system: UAV,
+                target_component: 1,
+                mission_type: MavMissionType::MAV_MISSION_TYPE_FENCE,
+            },
+        ))
+        .await;
+    let count = station
+        .expect(UAV, "fence MISSION_COUNT", |m| match m {
+            MavMessage::MISSION_COUNT(c)
+                if c.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE =>
+            {
+                Some(c.count)
+            }
+            _ => None,
+        })
+        .await;
+    let expected: usize = fences
+        .iter()
+        .map(|f| match &f.shape {
+            sim_engine::models::drones::airspace::Shape::Circle { .. } => 1,
+            sim_engine::models::drones::airspace::Shape::Polygon { points } => points.len(),
+        })
+        .sum();
+    assert_eq!(usize::from(count), expected);
+    let mut commands = BTreeSet::new();
+    for seq in 0..count {
+        station
+            .send(MavMessage::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
+                seq,
+                target_system: UAV,
+                target_component: 1,
+                mission_type: MavMissionType::MAV_MISSION_TYPE_FENCE,
+            }))
+            .await;
+        let item = station
+            .expect(UAV, "fence item", |m| match m {
+                MavMessage::MISSION_ITEM_INT(i)
+                    if i.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE =>
+                {
+                    Some(i.clone())
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(item.seq, seq);
+        commands.insert(item.command as u32);
+    }
+    assert!(commands
+        .iter()
+        .all(|c| *c == MavCmd::MAV_CMD_NAV_FENCE_CIRCLE_EXCLUSION as u32
+            || *c == MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION as u32));
+
+    // The fence plan is not a ground station's to replace.
+    station
+        .send(MavMessage::MISSION_COUNT(MISSION_COUNT_DATA {
+            count: 1,
+            target_system: UAV,
+            target_component: 1,
+            mission_type: MavMissionType::MAV_MISSION_TYPE_FENCE,
+            opaque_id: 0,
+        }))
+        .await;
+    let result = station
+        .expect(UAV, "fence upload ack", |m| match m {
+            MavMessage::MISSION_ACK(a)
+                if a.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE =>
+            {
+                Some(a.mavtype)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(result, MavMissionResult::MAV_MISSION_UNSUPPORTED);
+
+    stop.send(true).unwrap();
+    serving.await.unwrap().unwrap();
+    driver.shutdown();
+}

@@ -40,9 +40,11 @@ use sim_core::{
 };
 
 use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
+use crate::airspace::{Airspace, AtmState, Fence, SavedAirspace, Shape};
 use crate::dispatch::{AddressBook, Courier, Dispatch};
 use crate::flight::{self, Point, Pose};
 use crate::mission::{self, Drone, MissionItem, Mode, Tuning};
+use crate::operator::{self, Ops};
 use crate::settings::{cms, settings, Settings};
 use crate::targets::{Route, Wander};
 use crate::terrain::Terrain;
@@ -58,12 +60,20 @@ pub mod codes {
     pub const MISSION_SET_CURRENT: u16 = 102;
     /// Payload `{"command": n, "params": [p1..p7]}` (null for NaN), as `COMMAND_LONG`.
     pub const COMMAND: u16 = 103;
+    /// Open a geofence. Payload `{"circle": {"lat": deg, "lon": deg,
+    /// "radius_m": m}}` or `{"polygon": [[lon, lat], ...]}`, and optionally
+    /// `"minutes"` until it closes by itself. Refused if it would keep a
+    /// drone off its home pad.
+    pub const GEOFENCE_OPEN: u16 = 110;
+    /// Close a geofence. Payload `{"id": n}`.
+    pub const GEOFENCE_CLOSE: u16 = 111;
 }
 
 /// Salts that keep each use of the seed independent.
 const SPAWN_SALT: u64 = 0x0b5e_55ed_5a17_0001;
 pub(crate) const WANDER_SALT: u64 = 0x0b5e_55ed_5a17_0002;
 const ORDER_SALT: u64 = 0x0b5e_55ed_5a17_0003;
+const ATM_SALT: u64 = 0x0b5e_55ed_5a17_0004;
 
 /// Occupancy is re-resolved when an entity crosses into a new square of this
 /// many degrees × 10⁷ (≈4.5 m of latitude). Cells are tens of metres across or
@@ -222,6 +232,13 @@ impl Instruction {
     }
 }
 
+/// A geofence change asked for by intent, made at the start of the next step.
+#[derive(Debug, Clone)]
+enum FenceChange {
+    Open(Fence, Option<f64>),
+    Close(u32),
+}
+
 fn rejected(message: impl Into<String>) -> RejectReason {
     RejectReason::Rejected {
         message: message.into(),
@@ -238,6 +255,11 @@ pub struct World {
     roster_next_id: AgentId,
     roster_spares: Vec<Vec<AgentId>>,
     roster_next_sysid: u16,
+    /// Drones the operator flies from the start: couriers, and drones the
+    /// pack starts on a mission.
+    roster_ops: BTreeSet<AgentId>,
+    /// Where the scenario is centred: ATM opens fences round it.
+    origin: Point,
     pack_seed: u64,
 
     pub(crate) grid: SparseA5Grid<AgentId>,
@@ -284,6 +306,13 @@ pub struct World {
     /// New drones placed this step, to join the schedule on the next.
     recruits: Vec<Member>,
 
+    /// The geofences open now.
+    pub(crate) airspace: Airspace,
+    atm: AtmState,
+    fence_mail: Vec<FenceChange>,
+    /// The drones the operator flies, and its notes on each.
+    pub(crate) ops: BTreeMap<AgentId, Ops>,
+
     /// Grid cells a drone in a given cell could see into.
     caps: HashMap<GeoCell, Vec<A5Cell>>,
     scan_radius_m: f64,
@@ -319,6 +348,8 @@ impl World {
             roster_next_id: 1,
             roster_spares: Vec::new(),
             roster_next_sysid: 1,
+            roster_ops: BTreeSet::new(),
+            origin: Point::default(),
             pack_seed: seed,
             grid: new_grid(resolution, root),
             dispatch: Dispatch::new(book.depots.len()),
@@ -347,9 +378,15 @@ impl World {
             next_sysid: 1,
             call_ups: BTreeMap::new(),
             recruits: Vec::new(),
+            airspace: Airspace::default(),
+            atm: AtmState::default(),
+            fence_mail: Vec::new(),
+            ops: BTreeMap::new(),
             caps: HashMap::new(),
             scan_radius_m,
         };
+        world.origin = world.origin(blob)?;
+        world.airspace = Airspace::new(&world.origin, world.settings.geofence_margin_m);
         world.enrol(blob)?;
         world.begin();
         Ok(world)
@@ -380,6 +417,12 @@ impl World {
                     ),
                 }
                 self.roster_spares[usize::from(index)].push(id);
+            }
+            if let Member::Drone(d) = &member {
+                let autostart = seed.state.get("autostart").and_then(|v| v.as_bool()) == Some(true);
+                if autostart || d.courier.is_some() {
+                    self.roster_ops.insert(d.body.id);
+                }
             }
             self.admit(member, &mut ids)?;
         }
@@ -788,6 +831,9 @@ impl World {
             ReportKind::Delivery => "delivery",
             ReportKind::Landing => "landing",
             ReportKind::Crash => "crash",
+            ReportKind::Geofence => "geofence",
+            ReportKind::Breach => "breach",
+            ReportKind::Reroute => "reroute",
         };
         *self.report_counts.entry(kind).or_default() += 1;
         if let Some(sink) = self.sink.as_mut() {
@@ -824,6 +870,7 @@ impl World {
     /// has had before. `None` once there are no system ids left.
     pub(crate) fn replace(&mut self, wreck: &DroneAgent) -> Option<Replacement> {
         let id = wreck.body.id;
+        let operated = self.ops.remove(&id).is_some();
         if let Some(courier) = &wreck.courier {
             if let Some(mut order) = courier.order.clone().filter(|_| !courier.delivered) {
                 order.dispatched_tick = None;
@@ -847,6 +894,7 @@ impl World {
                 else {
                     continue;
                 };
+                self.ops.insert(spare, Ops::default());
                 self.call_ups.insert(
                     spare,
                     Courier {
@@ -895,6 +943,9 @@ impl World {
         if let Some(depot) = spare_for {
             self.spares[depot].push(new_id);
         }
+        if operated {
+            self.ops.insert(new_id, Ops::default());
+        }
         let replacement = Replacement {
             id: new_id,
             sysid,
@@ -925,6 +976,14 @@ impl World {
         self.next_sysid = self.roster_next_sysid;
         self.call_ups.clear();
         self.recruits.clear();
+        self.airspace.clear();
+        self.atm = AtmState::default();
+        self.fence_mail.clear();
+        self.ops = self
+            .roster_ops
+            .iter()
+            .map(|id| (*id, Ops::default()))
+            .collect();
         self.last_seen.clear();
         self.reports.clear();
         self.report_counts.clear();
@@ -1023,6 +1082,8 @@ impl World {
             return Err(RejectReason::OutOfBounds);
         }
         match intent.verb {
+            IntentVerb::Custom(codes::GEOFENCE_OPEN) => self.open_fence(intent),
+            IntentVerb::Custom(codes::GEOFENCE_CLOSE) => self.close_fence(intent),
             IntentVerb::Custom(code) => self.drone_intent(code, intent),
             IntentVerb::Spawn => self.spawn(intent),
             IntentVerb::Despawn => self.despawn(intent),
@@ -1126,6 +1187,280 @@ impl World {
         self.scratch.insert(agent, copy);
         self.mail.entry(agent).or_default().push(instruction);
         Ok(())
+    }
+
+    fn open_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
+        let p = &intent.payload;
+        let deg = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64);
+        let shape = if let Some(c) = p.get("circle") {
+            let (Some(lat), Some(lon), Some(radius_m)) =
+                (deg(c, "lat"), deg(c, "lon"), deg(c, "radius_m"))
+            else {
+                return Err(rejected("a circle needs lat, lon and radius_m"));
+            };
+            if !(1.0..=50_000.0).contains(&radius_m) {
+                return Err(rejected("radius_m must be between 1 and 50000"));
+            }
+            let at = Point::at(lon, lat, 0.0);
+            if !self.accepts(&at) {
+                return Err(RejectReason::OutOfBounds);
+            }
+            Shape::Circle {
+                lat_e7: at.lat_e7,
+                lon_e7: at.lon_e7,
+                radius_m,
+            }
+        } else if let Some(list) = p.get("polygon").and_then(|v| v.as_array()) {
+            let mut points = Vec::new();
+            for corner in list {
+                let pair = corner.as_array().map(|c| (c.first(), c.get(1)));
+                let Some((Some(lon), Some(lat))) = pair else {
+                    return Err(rejected("polygon corners are [lon, lat] pairs"));
+                };
+                let (Some(lon), Some(lat)) = (lon.as_f64(), lat.as_f64()) else {
+                    return Err(rejected("polygon corners are [lon, lat] pairs"));
+                };
+                let at = Point::at(lon, lat, 0.0);
+                if !self.accepts(&at) {
+                    return Err(RejectReason::OutOfBounds);
+                }
+                points.push([at.lat_e7, at.lon_e7]);
+            }
+            Shape::Polygon { points }
+        } else {
+            return Err(rejected("a geofence needs a circle or a polygon"));
+        };
+        if !self.airspace.usable(&shape) {
+            return Err(rejected("the geofence encloses no area"));
+        }
+        if let Some(pad) = self
+            .pads()
+            .find(|pad| self.airspace.would_cover(&shape, pad))
+        {
+            return Err(rejected(format!(
+                "the geofence would keep drones off the pad at {:.6}, {:.6}",
+                pad.lat(),
+                pad.lon()
+            )));
+        }
+        let minutes = deg(p, "minutes").filter(|m| *m > 0.0 && m.is_finite());
+        let fence = Fence {
+            id: self.airspace.take_id(),
+            shape,
+            source: "intent".into(),
+            opened_tick: 0,
+            closes_tick: None,
+        };
+        self.fence_mail.push(FenceChange::Open(fence, minutes));
+        Ok(())
+    }
+
+    fn close_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
+        let id = intent
+            .payload
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| rejected("closing a geofence needs its id"))?;
+        let id = u32::try_from(id).map_err(|_| rejected(format!("no geofence {id}")))?;
+        let open = self.airspace.fences().iter().any(|f| f.id == id);
+        let pending = self
+            .fence_mail
+            .iter()
+            .any(|c| matches!(c, FenceChange::Open(f, _) if f.id == id));
+        if !open && !pending {
+            return Err(rejected(format!("no geofence {id}")));
+        }
+        self.fence_mail.push(FenceChange::Close(id));
+        Ok(())
+    }
+
+    /// Every drone's home pad.
+    fn pads(&self) -> impl Iterator<Item = Point> + '_ {
+        self.board
+            .iter()
+            .filter_map(|r| r.saved.drone.as_ref().map(|d| d.home))
+    }
+
+    fn fence_report(&mut self, fence: &Fence, action: &str, reason: &str) {
+        let mut detail = serde_json::to_value(fence).unwrap_or_default();
+        detail["action"] = action.into();
+        detail["reason"] = reason.into();
+        let at = fence.centre();
+        self.report(Report {
+            seq: 0,
+            tick: self.tick,
+            kind: ReportKind::Geofence,
+            uid: format!("fence-{}-{action}", fence.id),
+            observer: None,
+            target: None,
+            target_kind: String::new(),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            alt_mm: 0,
+            detail,
+        });
+    }
+
+    /// Open and close the geofences due this tick: those whose time is up,
+    /// those asked for by intent, and ATM's requests. First thing in a step,
+    /// so every drone sees the same airspace.
+    pub(crate) fn update_airspace(&mut self) {
+        let tick = self.tick;
+        for fence in self.airspace.expire(tick) {
+            self.fence_report(&fence, "close", "expired");
+        }
+        for change in std::mem::take(&mut self.fence_mail) {
+            match change {
+                FenceChange::Open(mut fence, minutes) => {
+                    fence.opened_tick = tick;
+                    fence.closes_tick = minutes.map(|m| {
+                        tick + (libm::round(m * 60.0 / self.settings.tuning.dt) as u64).max(1)
+                    });
+                    self.fence_report(&fence, "open", "requested");
+                    self.airspace.open(fence);
+                }
+                FenceChange::Close(id) => {
+                    if let Some(fence) = self.airspace.close(id) {
+                        self.fence_report(&fence, "close", "requested");
+                    }
+                }
+            }
+        }
+
+        let atm = self.settings.atm;
+        if atm.per_tick <= 0.0 {
+            return;
+        }
+        let seed = self.seed ^ ATM_SALT;
+        let mut next = self
+            .atm
+            .next_tick
+            .unwrap_or_else(|| tick + atm.gap(draw_pair(seed, 0, 0).0));
+        while next <= tick {
+            self.atm.requests += 1;
+            let n = self.atm.requests;
+            let (a, b) = draw_pair(seed, n, 1);
+            let (c, d) = draw_pair(seed, n, 2);
+            let (gap, open_for) = draw_pair(seed, n, 3);
+            next += atm.gap(gap);
+            if self.airspace.fences().len() >= atm.max_open {
+                continue;
+            }
+            let shape = atm.shape(&self.origin, [a, b, c, d], |i| draw_pair(seed, n, 10 + i));
+            let inside = match &shape {
+                Shape::Circle { lat_e7, lon_e7, .. } => self.cell_of(*lat_e7, *lon_e7).is_some(),
+                Shape::Polygon { points } => {
+                    points.iter().all(|p| self.cell_of(p[0], p[1]).is_some())
+                }
+            };
+            // ATM keeps clear of the drone pads.
+            if !inside
+                || !self.airspace.usable(&shape)
+                || self
+                    .pads()
+                    .any(|pad| self.airspace.would_cover(&shape, &pad))
+            {
+                continue;
+            }
+            let fence = Fence {
+                id: self.airspace.take_id(),
+                shape,
+                source: "atm".into(),
+                opened_tick: tick,
+                closes_tick: Some(tick + atm.open_for(open_for)),
+            };
+            self.fence_report(&fence, "open", "ATM request");
+            self.airspace.open(fence);
+        }
+        self.atm.next_tick = Some(next);
+    }
+
+    /// The operator looks over every drone it flies and sends what it needs
+    /// to stay clear of the geofences. Its messages are applied by each
+    /// drone at the start of its step, like a ground station's.
+    pub(crate) fn operate(&mut self) {
+        if self.ops.is_empty() {
+            return;
+        }
+        let ids: Vec<AgentId> = self.ops.keys().copied().collect();
+        for id in ids {
+            let ops = &self.ops[&id];
+            if self.airspace.is_empty() && ops.is_clean() && ops.checked.is_none() {
+                continue;
+            }
+            let Some(record) = self.record(id).filter(|_| !self.retiring(id)).cloned() else {
+                continue;
+            };
+            let Some(drone) = record.saved.drone.as_ref() else {
+                continue;
+            };
+            let pose = record.saved.pose;
+            let airborne = !drone.grounded(&pose, &self.terrain);
+            let address = record
+                .saved
+                .courier
+                .as_ref()
+                .filter(|c| !c.delivered)
+                .and_then(|c| c.order.as_ref())
+                .map(|o| {
+                    let a = &self.book.addresses[o.address as usize];
+                    Point {
+                        lat_e7: a.lat_e7,
+                        lon_e7: a.lon_e7,
+                        alt_mm: 0,
+                    }
+                });
+            let mut ops = self.ops[&id].clone();
+            let orders = operator::orders(
+                drone,
+                &pose,
+                airborne,
+                address,
+                &mut ops,
+                &self.airspace,
+                &self.settings.tuning,
+                self.settings.max_mission_items,
+            );
+            self.ops.insert(id, ops);
+            let Some(orders) = orders else { continue };
+            self.report(Report {
+                seq: 0,
+                tick: self.tick,
+                kind: ReportKind::Reroute,
+                uid: format!("reroute-{id}-{}", self.tick),
+                observer: Some(id),
+                target: None,
+                target_kind: String::new(),
+                lat_e7: pose.lat_e7,
+                lon_e7: pose.lon_e7,
+                alt_mm: pose.alt_mm,
+                detail: serde_json::json!({
+                    "sysid": drone.sysid,
+                    "callsign": record.saved.callsign,
+                    "reason": orders.reason,
+                    "messages": orders.messages,
+                    "detours": orders.detours,
+                    "airspace_rev": self.airspace.rev(),
+                }),
+            });
+            self.mail.entry(id).or_default().extend(orders.instructions);
+        }
+    }
+
+    /// The geofences open now, for the published view: what the MAVLink
+    /// gateway serves as the fence plan and the dashboard can draw.
+    pub fn overlays(&self) -> serde_json::Value {
+        serde_json::json!({
+            "geofences": {
+                "rev": self.airspace.rev(),
+                "margin_m": self.airspace.margin_m,
+                "fences": self.airspace.fences(),
+            }
+        })
+    }
+
+    pub fn airspace(&self) -> &Airspace {
+        &self.airspace
     }
 
     fn spawn(&mut self, intent: &Intent) -> Result<(), RejectReason> {
@@ -1238,6 +1573,9 @@ impl World {
             "spares": self.spares,
             "next_sysid": self.next_sysid,
             "call_ups": self.call_ups.iter().collect::<Vec<_>>(),
+            "airspace": self.airspace.saved(),
+            "atm": self.atm,
+            "ops": self.ops.iter().collect::<Vec<_>>(),
         })
     }
 
@@ -1263,6 +1601,17 @@ impl World {
         if let Some(list) = fields.get("call_ups") {
             let list: Vec<(AgentId, Courier)> = serde_json::from_value(list.clone())?;
             self.call_ups = list.into_iter().collect();
+        }
+        if let Some(airspace) = fields.get("airspace") {
+            let saved: SavedAirspace = serde_json::from_value(airspace.clone())?;
+            self.airspace.restore(saved);
+        }
+        if let Some(atm) = fields.get("atm") {
+            self.atm = serde_json::from_value(atm.clone())?;
+        }
+        if let Some(list) = fields.get("ops") {
+            let list: Vec<(AgentId, Ops)> = serde_json::from_value(list.clone())?;
+            self.ops = list.into_iter().collect();
         }
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
@@ -1323,6 +1672,7 @@ impl World {
         self.clear_pending();
         self.call_ups.clear();
         self.recruits.clear();
+        self.fence_mail.clear();
         for member in &members {
             self.next_id = self.next_id.max(member.body().id + 1);
             if let Member::Drone(d) = member {

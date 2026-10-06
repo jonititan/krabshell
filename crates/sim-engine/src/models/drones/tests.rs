@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 use sim_core::config::Param;
+use sim_core::RejectReason;
 use sim_core::{ActorId, Config, IntentVerb, Profile, ReportKind, ScenarioManifest, SeedAgent};
 use sim_drones::Record;
 use uuid::Uuid;
@@ -598,4 +599,288 @@ fn a_checkpoint_after_a_crash_replays_the_replacements_exactly() {
     assert!(a.iter().any(|r| r.kind == ReportKind::Crash));
     assert_eq!(a, b);
     assert_eq!(hash(&original), hash(&restored));
+}
+
+/// A point `east`, `north` metres from the test origin.
+fn at(east: f64, north: f64) -> (f64, f64) {
+    let (lat, lon) = flight::displace(flight::to_e7(LAT), flight::to_e7(LON), east, north);
+    (f64::from(lon) * 1e-7, f64::from(lat) * 1e-7)
+}
+
+fn open_circle(
+    model: &mut Drones,
+    east: f64,
+    north: f64,
+    radius_m: f64,
+) -> Result<(), RejectReason> {
+    let (lon, lat) = at(east, north);
+    let payload = serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": radius_m } });
+    let fence = intent(model, 1, codes::GEOFENCE_OPEN, payload);
+    model.apply_intent(&Intent {
+        agent: None,
+        ..fence
+    })
+}
+
+fn distance_to(record: &Record, east: f64, north: f64) -> f64 {
+    let (lon, lat) = at(east, north);
+    flight::ground_distance_m(
+        &record.saved.pose.point(),
+        &flight::Point::at(lon, lat, 0.0),
+    )
+}
+
+#[test]
+fn the_operator_routes_a_patrol_round_a_new_geofence_by_mission_upload_and_back_when_it_closes() {
+    let mut model = drones(Profile::Gold);
+    run(&mut model, 1, 200);
+    // Across the patrol's east side, (150, 0) to (150, 150).
+    open_circle(&mut model, 150.0, 75.0, 20.0).unwrap();
+    let mut reports = Vec::new();
+    let mut closest = f64::INFINITY;
+    for tick in 201..4_000 {
+        model.step(tick);
+        model.drain_reports(&mut reports);
+        closest = closest.min(distance_to(record(&model, 1), 150.0, 75.0));
+    }
+    let fences = model.overlays();
+    assert_eq!(geofences_in(&fences).1.len(), 1);
+    let reroutes: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Reroute && r.observer == Some(1))
+        .collect();
+    assert!(!reroutes.is_empty());
+    let messages = reroutes[0].detail["messages"].to_string();
+    assert!(messages.contains("MISSION_ITEM_INT"), "{messages}");
+    assert!(
+        !reports.iter().any(|r| r.kind == ReportKind::Breach),
+        "the patrol never enters the fence"
+    );
+    // The margin is 30 m: it keeps about 50 m from the centre.
+    assert!(closest > 45.0, "came within {closest:.1} m");
+    let drone = record(&model, 1).saved.drone.clone().unwrap();
+    assert!(drone.mission.len() > 5, "detours were inserted");
+    // The loop still loops: the jump lands on the first patrol waypoint.
+    let jump = drone
+        .mission
+        .iter()
+        .find(|i| i.command == mission::DO_JUMP)
+        .unwrap();
+    assert_eq!(
+        drone.mission[jump.param1 as usize].x,
+        square_patrol()[1]["x"].as_i64().unwrap() as i32
+    );
+    let laps = reports
+        .iter()
+        .filter(|r| {
+            r.kind == ReportKind::Waypoint && r.observer == Some(1) && r.detail["seq"] == jump.seq
+        })
+        .count();
+    assert!(laps >= 2, "{laps} laps");
+
+    // Closed again, the operator takes its detours back out.
+    let id = geofences_in(&model.overlays()).1[0].id;
+    let close = intent(
+        &model,
+        1,
+        codes::GEOFENCE_CLOSE,
+        serde_json::json!({ "id": id }),
+    );
+    model.apply_intent(&close).unwrap();
+    run(&mut model, 4_000, 400);
+    let drone = record(&model, 1).saved.drone.clone().unwrap();
+    assert_eq!(drone.mission.len(), 5);
+    let base: Vec<MissionItem> = serde_json::from_value(square_patrol()).unwrap();
+    // MAVLink's NaN "leave as is" parameters never compare equal with ==.
+    assert!(
+        sim_drones::operator::same(&drone.mission, &base),
+        "{:?}",
+        drone.mission
+    );
+}
+
+#[test]
+fn a_fence_opened_round_a_drone_is_a_breach_and_the_operator_flies_it_out_and_carries_on() {
+    let mut model = drones(Profile::Gold);
+    // On to the far corner, (150, 150), well clear of both pads.
+    let mut tick = 1;
+    while distance_to(record(&model, 1), 150.0, 150.0) > 20.0 {
+        model.step(tick);
+        tick += 1;
+        assert!(tick < 3_000);
+    }
+    let pose = record(&model, 1).saved.pose;
+    let (lon, lat) = (pose.lon(), pose.lat());
+    let payload = serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 25.0 } });
+    let fence = Intent {
+        agent: None,
+        ..intent(&model, 1, codes::GEOFENCE_OPEN, payload)
+    };
+    model.apply_intent(&fence).unwrap();
+    let reports = run(&mut model, tick, 2_000);
+
+    let breaches: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Breach)
+        .collect();
+    assert_eq!(breaches.len(), 1, "{breaches:?}");
+    assert_eq!(breaches[0].detail["how"], "fence opened round it");
+    assert_eq!(breaches[0].detail["flown_by"], "operator");
+    let reasons: Vec<&str> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Reroute)
+        .map(|r| r.detail["reason"].as_str().unwrap())
+        .collect();
+    assert_eq!(reasons[0], "inside a geofence");
+    assert!(
+        reasons.contains(&"round the geofence, mission"),
+        "{reasons:?}"
+    );
+    let drone = record(&model, 1).saved.drone.clone().unwrap();
+    assert_eq!(drone.mode, mission::Mode::Auto, "back on its patrol");
+    assert!(drone.fenced.is_empty());
+    let after = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Waypoint && r.observer == Some(1) && r.tick > tick + 600)
+        .count();
+    assert!(after > 0, "it keeps patrolling");
+}
+
+#[test]
+fn a_ground_station_flying_into_a_fence_is_logged_and_left_alone() {
+    let mut model = drones(Profile::Gold);
+    // UAV-2 sits on its pad about 69 m east of the origin; a fence 150 m north.
+    open_circle(&mut model, 69.0, 150.0, 30.0).unwrap();
+    for command in [
+        serde_json::json!({ "command": 400, "params": [1, 0, 0, 0, 0, 0, 0] }),
+        serde_json::json!({ "command": 22, "params": [0, 0, 0, 0, 0, 0, 30] }),
+    ] {
+        model
+            .apply_intent(&intent(&model, 2, codes::COMMAND, command))
+            .unwrap();
+    }
+    run(&mut model, 1, 200);
+    let (lon, lat) = at(69.0, 300.0);
+    let go = serde_json::json!({ "command": 192, "params": [-1, 0, 0, 0, lat, lon, 30] });
+    model
+        .apply_intent(&intent(&model, 2, codes::COMMAND, go))
+        .unwrap();
+    let reports = run(&mut model, 201, 600);
+    let breaches: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Breach)
+        .collect();
+    assert_eq!(breaches.len(), 1);
+    assert_eq!(breaches[0].observer, Some(2));
+    assert_eq!(breaches[0].detail["how"], "flew in");
+    assert_eq!(breaches[0].detail["flown_by"], "ground station");
+    assert!(!reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Reroute && r.observer == Some(2)));
+}
+
+#[test]
+fn a_geofence_may_not_keep_a_drone_off_its_pad_or_enclose_nothing() {
+    let mut model = drones(Profile::Gold);
+    let err = open_circle(&mut model, 10.0, 0.0, 20.0).unwrap_err();
+    assert!(err.to_string().contains("pad"), "{err}");
+    let flat = serde_json::json!({ "polygon": [[LON, LAT + 0.002], [LON + 0.001, LAT + 0.002]] });
+    let fence = Intent {
+        agent: None,
+        ..intent(&model, 1, codes::GEOFENCE_OPEN, flat)
+    };
+    assert!(model.apply_intent(&fence).is_err());
+    let close = intent(
+        &model,
+        1,
+        codes::GEOFENCE_CLOSE,
+        serde_json::json!({ "id": 99 }),
+    );
+    assert!(model.apply_intent(&close).is_err());
+}
+
+fn atm_blob() -> ScenarioBlob {
+    let mut blob = blob(Profile::Gold);
+    for (key, value) in [
+        ("atm_fences_per_hour", 120.0),
+        ("atm_fence_mean_minutes", 3.0),
+        ("atm_fence_min_radius_m", 20.0),
+        ("atm_fence_max_radius_m", 60.0),
+        ("atm_area_radius_m", 300.0),
+        ("battery_drain_pct_s", 0.0),
+    ] {
+        blob.config.model.insert(key.into(), Param::Float(value));
+    }
+    blob
+}
+
+#[test]
+fn atm_opens_and_closes_fences_at_random_and_the_patrol_keeps_out_of_them() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&atm_blob()).unwrap();
+    let reports = run(&mut model, 1, 12_000);
+    let opened = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "open")
+        .count();
+    let closed = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "close")
+        .count();
+    // 20 minutes at two a minute, at most six open at once.
+    assert!(opened >= 10, "{opened} opened");
+    assert!(closed >= 5, "{closed} closed");
+    assert!(reports.iter().any(|r| r.kind == ReportKind::Reroute));
+    for breach in reports.iter().filter(|r| r.kind == ReportKind::Breach) {
+        assert_eq!(
+            breach.detail["how"], "fence opened round it",
+            "a drone the operator flies never flies into one: {breach:?}"
+        );
+    }
+    for r in reports.iter().filter(|r| r.kind == ReportKind::Geofence) {
+        assert_eq!(r.detail["source"], "atm");
+    }
+}
+
+#[test]
+fn a_checkpoint_with_fences_open_replays_exactly() {
+    let blob = atm_blob();
+    let mut original = drones(Profile::Gold);
+    original.reset(&blob).unwrap();
+    run(&mut original, 1, 4_000);
+    assert!(!geofences_in(&original.overlays()).1.is_empty());
+
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    let mut restored = drones(Profile::Gold);
+    restored.reset(&blob).unwrap();
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+    assert_eq!(restored.overlays(), original.overlays());
+
+    let a = run(&mut original, 4_001, 3_000);
+    let b = run(&mut restored, 4_001, 3_000);
+    assert!(a.iter().any(|r| r.kind == ReportKind::Geofence));
+    assert_eq!(a, b);
+    assert_eq!(hash(&original), hash(&restored));
+}
+
+#[test]
+fn a_courier_skips_orders_to_fenced_addresses() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&courier_blob()).unwrap();
+    // Over the address 500 m south: nothing goes there while it is open.
+    open_circle(&mut model, 0.0, -500.0, 60.0).unwrap();
+    let reports = run(&mut model, 1, 9_000);
+    let south = model.world().book().addresses[2].clone();
+    let deliveries: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .collect();
+    assert!(deliveries.len() >= 2);
+    assert!(deliveries
+        .iter()
+        .all(|d| (d.lat_e7, d.lon_e7) != (south.lat_e7, south.lon_e7)));
+    let queued = &model.world().dispatch().queues[0];
+    assert!(queued.iter().any(|o| o.address == 2), "its orders wait");
 }

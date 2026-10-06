@@ -30,6 +30,15 @@ pub enum ReportKind {
     /// `observer` ran out of battery in the air and fell at the given
     /// position. `detail` says what replaced it, if anything.
     Crash,
+    /// A geofence opened or closed. `detail` carries its id, shape and who
+    /// asked for it; the position is its centre.
+    Geofence,
+    /// `observer` was inside geofence `detail.fence` in the air: it flew in,
+    /// or the fence opened round it.
+    Breach,
+    /// The operator sent `observer` MAVLink messages to take it round a
+    /// geofence: `detail.messages` lists them.
+    Reroute,
 }
 
 /// One model-generated event.

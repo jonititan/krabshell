@@ -221,6 +221,14 @@ fn main() -> anyhow::Result<()> {
                     log.landings.crashes()
                 );
             }
+            if !log.geofences.is_empty() {
+                println!(
+                    "geofences:     {} opened, {} breaches, {} reroutes",
+                    log.geofences.fences.len(),
+                    log.geofences.breaches.len(),
+                    log.geofences.reroutes.len()
+                );
+            }
             if log.missed_reports > 0 {
                 println!(
                     "warning:       {} reports were dropped before they were read",

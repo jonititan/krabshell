@@ -35,11 +35,12 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, TryRecvError};
 use mavlink::dialects::common::{
     MavCmd, MavMessage, MavMissionResult, MavMissionType, MavResult, MavSeverity, COMMAND_ACK_DATA,
-    MISSION_ACK_DATA, MISSION_ITEM_REACHED_DATA, MISSION_REQUEST_INT_DATA,
+    MISSION_ACK_DATA, MISSION_ITEM_INT_DATA, MISSION_ITEM_REACHED_DATA, MISSION_REQUEST_INT_DATA,
 };
 use mavlink::{MavHeader, MavlinkVersion};
 use sim_core::{ActorId, Intent, IntentVerb, ReportKind};
-use sim_engine::models::drones::{codes, drones_in, DroneStatus};
+use sim_engine::models::drones::airspace::Fence;
+use sim_engine::models::drones::{codes, drones_in, geofences_in, DroneStatus};
 use sim_engine::{ActorLimiter, DriverHandle, IntentAck, Published, Submission};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
@@ -123,8 +124,13 @@ pub struct Gateway {
     sequence: [u8; 256],
     uploads: HashMap<(SocketAddr, u8), Upload>,
     pending: Vec<Pending>,
-    /// Last (seq, rev) announced in MISSION_CURRENT, per drone.
-    announced: BTreeMap<u8, (u16, u32)>,
+    /// Last (seq, rev, fence id) announced in MISSION_CURRENT, per drone.
+    announced: BTreeMap<u8, (u16, u32, u32)>,
+    /// The geofences open, and the airspace revision they are at.
+    fences: (u64, Vec<Fence>),
+    /// The fence plan as each ground station started downloading it, so a
+    /// change mid-download does not mix two plans.
+    fence_downloads: HashMap<(SocketAddr, u8), Vec<MISSION_ITEM_INT_DATA>>,
     last_report: u64,
     world: (String, u64),
     buf: Vec<u8>,
@@ -149,6 +155,8 @@ impl Gateway {
             limiter,
             started: Instant::now(),
             drones: drones_in(&view.cells),
+            fences: geofences_in(&view.overlays),
+            fence_downloads: HashMap::new(),
             view,
             peers: HashMap::new(),
             sequence: [0; 256],
@@ -243,10 +251,17 @@ impl Gateway {
         }
         self.world = world;
         self.drones = drones_in(&view.cells);
+        self.fences = geofences_in(&view.overlays);
         self.view = view;
         let now = Instant::now();
         self.peers
             .retain(|_, seen| now.duration_since(*seen) < PEER_TTL);
+    }
+
+    /// The fence plan's id: the airspace revision, which changes whenever a
+    /// geofence opens or closes.
+    fn fence_id(&self) -> u32 {
+        self.fences.0 as u32
     }
 
     fn destinations(&self) -> Vec<SocketAddr> {
@@ -300,10 +315,15 @@ impl Gateway {
                 .await;
             self.broadcast(drone.sysid, &telemetry::sys_status(drone))
                 .await;
-            self.broadcast(drone.sysid, &telemetry::mission_current(drone))
-                .await;
-            self.announced
-                .insert(drone.sysid, (drone.mission_seq, drone.mission_rev));
+            self.broadcast(
+                drone.sysid,
+                &telemetry::mission_current(drone, self.fence_id()),
+            )
+            .await;
+            self.announced.insert(
+                drone.sysid,
+                (drone.mission_seq, drone.mission_rev, self.fence_id()),
+            );
         }
     }
 
@@ -318,11 +338,14 @@ impl Gateway {
             self.broadcast(drone.sysid, &telemetry::vfr_hud(drone))
                 .await;
             // Announce a new current item as soon as it changes, not at 1 Hz.
-            let now = (drone.mission_seq, drone.mission_rev);
+            let now = (drone.mission_seq, drone.mission_rev, self.fence_id());
             if self.announced.get(&drone.sysid) != Some(&now) {
                 self.announced.insert(drone.sysid, now);
-                self.broadcast(drone.sysid, &telemetry::mission_current(drone))
-                    .await;
+                self.broadcast(
+                    drone.sysid,
+                    &telemetry::mission_current(drone, self.fence_id()),
+                )
+                .await;
             }
         }
 
@@ -639,9 +662,12 @@ impl Gateway {
         match msg {
             MavMessage::MISSION_COUNT(m) => {
                 if m.mission_type != MavMissionType::MAV_MISSION_TYPE_MISSION {
-                    // Fences and rally points are not simulated; an empty one
-                    // is harmless to accept, anything else is not supported.
-                    let result = if m.count == 0 {
+                    // Geofences are opened by ATM and by intent, not by a
+                    // ground station's fence plan, and rally points are not
+                    // simulated. An empty rally plan is harmless to accept.
+                    let result = if m.count == 0
+                        && m.mission_type == MavMissionType::MAV_MISSION_TYPE_RALLY
+                    {
                         MavMissionResult::MAV_MISSION_ACCEPTED
                     } else {
                         MavMissionResult::MAV_MISSION_UNSUPPORTED
@@ -689,14 +715,32 @@ impl Gateway {
                 }
             }
             MavMessage::MISSION_REQUEST_LIST(m) => {
-                let (count, rev) = if m.mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION {
-                    let d = &self.drones[&sysid];
-                    (d.mission.len() as u16, d.mission_rev)
-                } else {
-                    (0, 0)
+                let (count, rev) = match m.mission_type {
+                    MavMissionType::MAV_MISSION_TYPE_MISSION => {
+                        let d = &self.drones[&sysid];
+                        (d.mission.len() as u16, d.mission_rev)
+                    }
+                    MavMissionType::MAV_MISSION_TYPE_FENCE => {
+                        let plan = missions::fence_plan(&self.fences.1, gcs);
+                        let count = plan.len() as u16;
+                        self.fence_downloads.insert((peer, sysid), plan);
+                        (count, self.fence_id())
+                    }
+                    _ => (0, 0),
                 };
                 let msg = telemetry::mission_count(count, m.mission_type, rev, gcs);
                 self.send_to(sysid, &msg, peer).await;
+            }
+            MavMessage::MISSION_REQUEST_INT(m)
+                if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE =>
+            {
+                self.send_fence_item(sysid, peer, gcs, m.seq).await
+            }
+            #[allow(deprecated)]
+            MavMessage::MISSION_REQUEST(m)
+                if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE =>
+            {
+                self.send_fence_item(sysid, peer, gcs, m.seq).await
             }
             MavMessage::MISSION_REQUEST_INT(m) => self.send_item(sysid, peer, gcs, m.seq).await,
             #[allow(deprecated)]
@@ -705,12 +749,18 @@ impl Gateway {
                 if m.mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION {
                     self.finish_upload(sysid, peer, gcs, Vec::new()).await;
                 } else {
+                    // Geofences are not a ground station's to clear.
+                    let result = if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
+                        MavMissionResult::MAV_MISSION_DENIED
+                    } else {
+                        MavMissionResult::MAV_MISSION_ACCEPTED
+                    };
                     self.send_to(
                         sysid,
                         &MavMessage::MISSION_ACK(MISSION_ACK_DATA {
                             target_system: gcs.0,
                             target_component: gcs.1,
-                            mavtype: MavMissionResult::MAV_MISSION_ACCEPTED,
+                            mavtype: result,
                             mission_type: m.mission_type,
                             opaque_id: 0,
                         }),
@@ -767,6 +817,34 @@ impl Gateway {
                 }
             }
             _ => {}
+        }
+    }
+
+    async fn send_fence_item(&mut self, sysid: u8, peer: SocketAddr, gcs: (u8, u8), seq: u16) {
+        let item = self
+            .fence_downloads
+            .get(&(peer, sysid))
+            .and_then(|plan| plan.get(usize::from(seq)))
+            .cloned();
+        match item {
+            Some(item) => {
+                self.send_to(sysid, &MavMessage::MISSION_ITEM_INT(item), peer)
+                    .await
+            }
+            None => {
+                self.send_to(
+                    sysid,
+                    &MavMessage::MISSION_ACK(MISSION_ACK_DATA {
+                        target_system: gcs.0,
+                        target_component: gcs.1,
+                        mavtype: MavMissionResult::MAV_MISSION_INVALID_SEQUENCE,
+                        mission_type: MavMissionType::MAV_MISSION_TYPE_FENCE,
+                        opaque_id: 0,
+                    }),
+                    peer,
+                )
+                .await
+            }
         }
     }
 

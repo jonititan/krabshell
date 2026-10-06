@@ -219,8 +219,17 @@ The drone flies these mission items:
 | `DO_WINCH` | 42600 | Holds position while the winch runs. param2 `WINCH_DELIVER` (4) lowers from the drone's height, releases, reels up and locks, timed by the `winch_*` params; `WINCH_RELATIVE_LENGTH_CONTROL` (1) takes \|param3\| m at \|param4\| m/s. Other actions complete instantly |
 
 Other items (camera, gimbal, servo) complete instantly, so a mission containing
-them still runs. Geofences and rally points are not simulated: uploading an
-empty one succeeds, and a non-empty one is refused.
+them still runs. Rally points are not simulated: uploading an empty rally
+plan succeeds, and a non-empty one is refused.
+
+Geofences are simulated, but set by air traffic management and by intents,
+not by a ground station. Download the fence plan (Plan view → Fence, or
+`MISSION_REQUEST_LIST` with `mission_type` FENCE) to see them: each circle is
+a `NAV_FENCE_CIRCLE_EXCLUSION` item and each polygon corner a
+`NAV_FENCE_POLYGON_VERTEX_EXCLUSION`. `MISSION_CURRENT.fence_id` changes
+whenever a fence opens or closes, which tells QGroundControl to download it
+again. Uploading or clearing a fence plan is refused. A drone you fly is not
+rerouted for you: fly it into a fence and the breach is logged.
 
 Altitudes are above mean sea level. A pack can carry terrain (see the README);
 without it the ground is flat at 0 m. A drone's home is the pad it starts on,

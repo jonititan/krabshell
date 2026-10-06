@@ -152,6 +152,8 @@ pub struct Published {
     pub recent_intents: Vec<IntentRecord>,
     /// The most recent model reports, oldest first, by ascending `seq`.
     pub reports: Vec<Report>,
+    /// What the model publishes beside its agents; see [`Model::overlays`].
+    pub overlays: serde_json::Value,
 }
 
 impl Published {
@@ -178,6 +180,7 @@ impl Published {
             published_at_ms: now_ms(),
             recent_intents: Vec::new(),
             reports: Vec::new(),
+            overlays: serde_json::Value::Null,
         }
     }
 
@@ -917,6 +920,7 @@ impl DriverLoop {
             published_at_ms: now_ms(),
             recent_intents: self.recent.iter().cloned().collect(),
             reports: self.reports.iter().cloned().collect(),
+            overlays: self.model.overlays(),
         };
         (view, cells, limit)
     }

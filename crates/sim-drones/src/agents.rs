@@ -116,13 +116,18 @@ pub struct PoiAgent {
     pub body: Body,
 }
 
-/// Places the delivery orders due this tick, before any courier looks.
+/// First on every step: opens and closes the geofences due, places the
+/// delivery orders due, and has the operator reroute its drones round the
+/// fences, all before any drone moves.
 #[derive(Debug, Clone, Copy)]
 pub struct Dispatcher;
 
 impl Agent for Dispatcher {
     fn step(&mut self, state: &mut dyn State) {
-        world(state).place_orders();
+        let world = world(state);
+        world.update_airspace();
+        world.place_orders();
+        world.operate();
     }
 }
 
@@ -162,6 +167,7 @@ impl Agent for DroneAgent {
         }
 
         self.courier_duty(world, tick);
+        self.check_fences(world, tick);
 
         if world.settings.sensor.scans_on(tick)
             && !self.drone.grounded(&self.body.pose, &world.terrain)
@@ -222,6 +228,47 @@ impl DroneAgent {
             alt_mm: self.body.pose.alt_mm,
             detail: serde_json::json!({ "seq": item, "sysid": self.drone.sysid }),
         });
+    }
+
+    /// Report each geofence it is in the air inside, once on the way in.
+    fn check_fences(&mut self, world: &mut World, tick: u64) {
+        if world.airspace.is_empty() && self.drone.fenced.is_empty() {
+            return;
+        }
+        let inside = if self.drone.grounded(&self.body.pose, &world.terrain) {
+            Vec::new()
+        } else {
+            world.airspace.inside(&self.body.pose.point())
+        };
+        for &id in inside.iter().filter(|id| !self.drone.fenced.contains(id)) {
+            let opened_round = world
+                .airspace
+                .fences()
+                .iter()
+                .any(|f| f.id == id && f.opened_tick == tick);
+            let mut detail = self.flight_detail(world);
+            detail["fence"] = id.into();
+            detail["how"] = if opened_round {
+                "fence opened round it"
+            } else {
+                "flew in"
+            }
+            .into();
+            detail["flown_by"] = if world.ops.contains_key(&self.body.id) {
+                "operator"
+            } else {
+                "ground station"
+            }
+            .into();
+            detail["mode"] = self.drone.mode.name().into();
+            world.report(self.flight_report(
+                ReportKind::Breach,
+                format!("breach-{}-{id}-{tick}", self.body.id),
+                tick,
+                detail,
+            ));
+        }
+        self.drone.fenced = inside;
     }
 
     /// The end of a flight, with what is left in the battery.
@@ -334,7 +381,18 @@ impl DroneAgent {
         if !ready {
             return;
         }
-        let Some(mut order) = world.dispatch.queues[depot].pop_front() else {
+        // The oldest order whose address is not inside a geofence.
+        let next = world.dispatch.queues[depot].iter().position(|o| {
+            world.airspace.is_empty() || {
+                let a = &world.book.addresses[o.address as usize];
+                !world.airspace.blocks(&crate::flight::Point {
+                    lat_e7: a.lat_e7,
+                    lon_e7: a.lon_e7,
+                    alt_mm: 0,
+                })
+            }
+        });
+        let Some(mut order) = next.and_then(|i| world.dispatch.queues[depot].remove(i)) else {
             return;
         };
         let to = &world.book.addresses[order.address as usize];

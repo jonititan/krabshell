@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::common::{MavCmd, MavFrame, MavMissionType, MISSION_ITEM_INT_DATA};
 use num_traits::FromPrimitive;
+use sim_engine::models::drones::airspace::{Fence, Shape};
 use sim_engine::models::drones::mission::MissionItem;
 
 /// How long to wait for the next item before asking again (MAVLink default).
@@ -106,9 +107,96 @@ pub fn to_wire(item: &MissionItem, current: bool, gcs: (u8, u8)) -> Option<MISSI
     })
 }
 
+/// The geofences as a fence plan (`MAV_MISSION_TYPE_FENCE`), the way
+/// ArduPilot and PX4 hold one: a `NAV_FENCE_CIRCLE_EXCLUSION` per circle,
+/// and a `NAV_FENCE_POLYGON_VERTEX_EXCLUSION` per corner of each polygon,
+/// each carrying the polygon's corner count.
+pub fn fence_plan(fences: &[Fence], gcs: (u8, u8)) -> Vec<MISSION_ITEM_INT_DATA> {
+    let item = |command, param1: f32, x, y| MISSION_ITEM_INT_DATA {
+        param1,
+        param2: 0.0,
+        param3: 0.0,
+        param4: 0.0,
+        x,
+        y,
+        z: 0.0,
+        seq: 0,
+        command,
+        target_system: gcs.0,
+        target_component: gcs.1,
+        frame: MavFrame::MAV_FRAME_GLOBAL,
+        current: 0,
+        autocontinue: 0,
+        mission_type: MavMissionType::MAV_MISSION_TYPE_FENCE,
+    };
+    let mut out = Vec::new();
+    for fence in fences {
+        match &fence.shape {
+            Shape::Circle {
+                lat_e7,
+                lon_e7,
+                radius_m,
+            } => out.push(item(
+                MavCmd::MAV_CMD_NAV_FENCE_CIRCLE_EXCLUSION,
+                *radius_m as f32,
+                *lat_e7,
+                *lon_e7,
+            )),
+            Shape::Polygon { points } => {
+                for p in points {
+                    out.push(item(
+                        MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION,
+                        points.len() as f32,
+                        p[0],
+                        p[1],
+                    ));
+                }
+            }
+        }
+    }
+    for (i, item) in out.iter_mut().enumerate() {
+        item.seq = i as u16;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fence_plan_has_one_item_per_circle_and_per_polygon_corner() {
+        let circle = Fence {
+            id: 1,
+            shape: Shape::Circle {
+                lat_e7: 549_000_000,
+                lon_e7: 239_000_000,
+                radius_m: 150.0,
+            },
+            source: "atm".into(),
+            opened_tick: 0,
+            closes_tick: None,
+        };
+        let square = Fence {
+            id: 2,
+            shape: Shape::Polygon {
+                points: vec![[1, 1], [1, 2], [2, 2], [2, 1]],
+            },
+            ..circle.clone()
+        };
+        let plan = fence_plan(&[circle, square], (255, 190));
+        assert_eq!(plan.len(), 5);
+        assert_eq!(plan[0].command, MavCmd::MAV_CMD_NAV_FENCE_CIRCLE_EXCLUSION);
+        assert_eq!(plan[0].param1, 150.0);
+        assert!(plan[1..].iter().all(|i| i.command
+            == MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION
+            && i.param1 == 4.0
+            && i.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE));
+        assert_eq!(
+            plan.iter().map(|i| i.seq).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+    }
 
     #[allow(deprecated)]
     fn wire(seq: u16) -> MISSION_ITEM_INT_DATA {
