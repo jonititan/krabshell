@@ -230,9 +230,9 @@ whenever one opens or closes. Draw circular or polygon **exclusion** fences
 there and **Upload**: they open at once, and the drones the simulation flies
 route round them. The upload is the whole set of fences ground stations set:
 a fence you delete and re-upload without closes, and clearing the fence plan
-closes all of yours. Fences that air traffic management opened come down with
-the plan and go back up unchanged; deleting one in QGroundControl does not
-close it (ATM does, in its own time). Inclusion fences are not simulated, and
+closes all of yours. The scenario's fences, and those drawn on the
+dashboard, come down with the plan and go back up unchanged; deleting one in
+QGroundControl does not close it (the dashboard's Geofences tab does). Inclusion fences are not simulated, and
 a plan with one is refused with a message saying so. A fence over a drone's
 pad is refused too. Fences apply to every drone, not just the vehicle the
 plan was uploaded to.

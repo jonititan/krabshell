@@ -679,6 +679,22 @@ async fn submit_intent(state: &AppState, intent: Intent) -> ApiResult<Json<Inten
     }
 }
 
+// ------------------------------------------------------------- overlays
+
+/// What the model publishes beside its agents, as it publishes it: for the
+/// drones, the geofences and the addresses of open orders. Null for a model
+/// with none. The tick is in `x-sim-tick`.
+pub async fn state_overlays(
+    State(state): State<AppState>,
+) -> (axum::http::HeaderMap, Json<serde_json::Value>) {
+    let view = state.driver.view();
+    let mut headers = axum::http::HeaderMap::new();
+    if let Ok(tick) = axum::http::HeaderValue::from_str(&view.meta.tick.to_string()) {
+        headers.insert("x-sim-tick", tick);
+    }
+    (headers, Json(view.overlays.clone()))
+}
+
 // ------------------------------------------------------------- geofences
 
 /// `Custom` intent codes for geofences; see `sim_drones::codes`.

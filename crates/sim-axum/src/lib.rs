@@ -85,6 +85,7 @@ pub fn router(state: AppState) -> Router {
         .route("/state", get(routes::api::state_get))
         .route("/state/map", get(routes::api::state_map))
         .route("/state/entities", get(routes::api::state_entities))
+        .route("/state/overlays", get(routes::api::state_overlays))
         .route("/state/download", get(routes::api::state_download))
         .route("/state/upload", post(routes::api::state_upload))
         .route("/state/cells/{cell}", get(routes::api::state_cell))

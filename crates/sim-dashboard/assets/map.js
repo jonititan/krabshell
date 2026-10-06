@@ -30,7 +30,17 @@
   const basemapSelect = document.getElementById('map-basemap');
   const attribution = document.getElementById('map-attribution');
   const cellInput = document.getElementById('cell-input');
-  const entitiesToggle = document.getElementById('map-entities');
+  const layerInputs = [...document.querySelectorAll('input[data-layer]')];
+
+  // What the map shows, each switched by a `data-layer` checkbox and
+  // remembered across pages: drones and intruders; delivery locations
+  // (hubs and landmarks, open orders' addresses, recent drop-offs); people
+  // and vehicles (where they are, and camera sightings of them); geofences;
+  // and the A5 occupancy grid.
+  const layers = { drones: true, deliveries: true, people: true, fences: true, grid: true };
+  try {
+    Object.assign(layers, JSON.parse(localStorage.getItem('krabshell.layers') || '{}'));
+  } catch { /* no storage, or nonsense in it: everything on */ }
 
   // Colours the ramp goes through, cold to hot.
   const RAMP = [
@@ -63,6 +73,10 @@
   // points of interest from /state/entities, and recent sightings from /reports.
   let entities = [];
   let sightings = [];     // { lat, lon, kind, at }
+  let people = [];        // persons and vehicles, polled while their layer is on
+  let orders = [];        // open orders' addresses: [lat_e7, lon_e7, in_flight]
+  let drops = [];         // recent deliveries: { lat, lon, at }
+  const DROP_MS = 120_000;
   let lastReport = null;  // seq of the newest report seen; null until primed
   const SIGHTING_MS = 30_000;
 
@@ -323,7 +337,7 @@
     // Let the basemap show through when there is one.
     const alpha = basemap ? 0.62 : 0.82;
     let selectedRing = null;
-    for (const cell of cells) {
+    for (const cell of layers.grid ? cells : []) {
       const ring = cell.boundary;
       if (!ring || ring.length < 3) continue;
       trace(ring);
@@ -355,13 +369,13 @@
       ctx.setLineDash([]);
     }
 
-    drawFences(style);
+    if (layers.fences) drawFences(style);
 
-    if (!entitiesToggle || entitiesToggle.checked) drawEntities(style, ink);
+    drawEntities(style, ink);
 
     if (tool && tool.draw) tool.draw(ctx, project, style);
 
-    if (hover && !tool) {
+    if (hover && !tool && layers.grid) {
       const label = `${hover.cell} · ${hover.count} agent${hover.count === 1 ? '' : 's'}`;
       ctx.font = '12px ui-monospace, monospace';
       const width = ctx.measureText(label).width + 12;
@@ -580,9 +594,59 @@
     const bad = token('--bad', '#a4232b');
     const warn = token('--warn', '#8a6100');
     const panel = token('--panel', '#fff');
+    const ok = token('--ok', '#1f7a4d');
     const now = performance.now();
 
-    for (const s of sightings) {
+    if (layers.people) {
+      for (const e of people) {
+        const [x, y] = project(e.lon, e.lat);
+        ctx.fillStyle = e.kind === 'vehicle' ? accent : warn;
+        ctx.globalAlpha = 0.55;
+        if (e.kind === 'vehicle') ctx.fillRect(x - 2, y - 2, 4, 4);
+        else {
+          ctx.beginPath();
+          ctx.arc(x, y, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    if (layers.deliveries) {
+      // Open orders: a ring while waiting for a drone, filled once one is
+      // on its way. Recent drop-offs fade out over two minutes.
+      for (const [lat, lon, flying] of orders) {
+        const [x, y] = project(lon * 1e-7, lat * 1e-7);
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.strokeStyle = ok;
+        ctx.lineWidth = 1.75;
+        if (flying) {
+          ctx.fillStyle = ok;
+          ctx.fill();
+        } else {
+          ctx.fillStyle = panel;
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      for (const d of drops) {
+        const age = (now - d.at) / DROP_MS;
+        if (age >= 1) continue;
+        const [x, y] = project(d.lon, d.lat);
+        ctx.globalAlpha = 0.9 * (1 - age);
+        ctx.strokeStyle = ok;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - 4, y);
+        ctx.lineTo(x - 1, y + 3);
+        ctx.lineTo(x + 4, y - 3);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    for (const s of layers.people ? sightings : []) {
       const age = (now - s.at) / SIGHTING_MS;
       if (age >= 1) continue;
       const [x, y] = project(s.lon, s.lat);
@@ -601,7 +665,8 @@
     const pxPerKm = camera.scale / 40_075;
     const namePois = pxPerKm > 400;
     // POIs first, so drones draw on top of them.
-    const ordered = [...entities].sort((a, b) => (a.kind === 'poi' ? 0 : 1) - (b.kind === 'poi' ? 0 : 1));
+    const shown = entities.filter((e) => (e.kind === 'poi' ? layers.deliveries : layers.drones));
+    const ordered = shown.sort((a, b) => (a.kind === 'poi' ? 0 : 1) - (b.kind === 'poi' ? 0 : 1));
     for (const e of ordered) {
       const at = e.kind === 'poi' ? null : predicted(e, now);
       const [x, y] = at ? project(at.lon, at.lat) : project(e.lon, e.lat);
@@ -654,10 +719,16 @@
   }
 
   async function refreshEntities() {
-    if (entitiesToggle && !entitiesToggle.checked) return;
     try {
-      const response = await fetch('/api/v1/state/entities?kind=drone,intruder,poi');
-      if (response.ok) {
+      const kinds = [
+        ...(layers.drones ? ['drone', 'intruder'] : []),
+        ...(layers.deliveries ? ['poi'] : []),
+      ];
+      const response = kinds.length
+        ? await fetch(`/api/v1/state/entities?kind=${kinds.join(',')}`)
+        : null;
+      if (!response) entities = [];
+      if (response && response.ok) {
         entities = await response.json();
         const tick = Number(response.headers.get('x-sim-tick'));
         updateClock(
@@ -678,17 +749,44 @@
         if (lastReport !== null) {
           const now = performance.now();
           for (const r of body.reports) {
-            if (r.kind !== 'detection') continue;
-            sightings.push({ lat: r.lat_e7 * 1e-7, lon: r.lon_e7 * 1e-7, kind: r.target_kind, at: now });
+            const at = { lat: r.lat_e7 * 1e-7, lon: r.lon_e7 * 1e-7, at: now };
+            if (r.kind === 'detection') sightings.push({ ...at, kind: r.target_kind });
+            else if (r.kind === 'delivery') drops.push(at);
           }
         }
         lastReport = body.last_seq;
         const cutoff = performance.now() - SIGHTING_MS;
         sightings = sightings.filter((s) => s.at > cutoff).slice(-2000);
+        drops = drops.filter((d) => d.at > performance.now() - DROP_MS).slice(-500);
       }
       if (camera) draw();
     } catch {
       // The occupancy map keeps working without the overlay.
+    }
+  }
+
+  // People, vehicles and open orders change less often and cost more to
+  // send, so they come once a second, and only while their layer is on.
+  async function refreshSlow() {
+    try {
+      if (layers.people) {
+        const response = await fetch('/api/v1/state/entities?kind=person,vehicle');
+        if (response.ok) people = await response.json();
+      } else {
+        people = [];
+      }
+      if (layers.deliveries) {
+        const response = await fetch('/api/v1/state/overlays');
+        if (response.ok) {
+          const body = await response.json();
+          orders = (body && body.orders) || [];
+        }
+      } else {
+        orders = [];
+      }
+      if (camera) draw();
+    } catch {
+      // The map works without them.
     }
   }
 
@@ -757,6 +855,7 @@
         `resolution ${body.resolution} · busiest holds ${body.max_count.toLocaleString()}` +
         (body.truncated ? ' · view was capped, some cells are missing' : '');
       if (legend) {
+        legend.hidden = !layers.grid;
         legend.innerHTML = `<span>0</span><span class="ramp"></span><span>${body.max_count.toLocaleString()}</span>`;
       }
       draw();
@@ -900,7 +999,20 @@
 
   window.addEventListener('resize', draw);
 
-  if (entitiesToggle) entitiesToggle.addEventListener('change', () => { refreshEntities(); draw(); });
+  for (const input of layerInputs) {
+    input.checked = layers[input.dataset.layer] !== false;
+    input.addEventListener('change', () => {
+      layers[input.dataset.layer] = input.checked;
+      try {
+        localStorage.setItem('krabshell.layers', JSON.stringify(layers));
+      } catch { /* not remembered, still applied */ }
+      if (legend) legend.hidden = !layers.grid;
+      if (!layers.grid) hover = null;
+      refreshEntities();
+      refreshSlow();
+      draw();
+    });
+  }
 
   // For pages that build on the map.
   window.krabshellMap = {
@@ -954,6 +1066,7 @@
   refresh();
   refreshEntities();
   refreshFences();
+  refreshSlow();
   // Occupancy once a second; drones several times a second, so a correction
   // is never more than a quarter of a second of prediction.
   setInterval(() => {
@@ -961,6 +1074,7 @@
     // Fences keep coming whether or not the map follows the run, so the
     // list beside it stays true.
     refreshFences();
+    if (!follow || follow.checked) refreshSlow();
   }, 1000);
   let entitiesInFlight = false;
   setInterval(async () => {

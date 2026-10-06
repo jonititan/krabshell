@@ -847,7 +847,8 @@ impl Gateway {
                 if m.mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION {
                     self.finish_upload(sysid, peer, gcs, Vec::new()).await;
                 } else if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
-                    // Clears the fences ground stations set; ATM's stay.
+                    // Clears the fences ground stations set; the scenario's and the
+                    // dashboard's stay.
                     self.finish_fence_upload(sysid, peer, gcs, Vec::new()).await;
                 } else {
                     let result = MavMissionResult::MAV_MISSION_ACCEPTED;

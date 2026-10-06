@@ -1,0 +1,47 @@
+[
+  {
+    "name": "Kaunas Castle and Old Town",
+    "circle": {
+      "lat": 54.8985,
+      "lon": 23.886,
+      "radius_m": 350
+    }
+  },
+  {
+    "name": "Kauno klinikos hospital (air ambulance)",
+    "circle": {
+      "lat": 54.9224,
+      "lon": 23.9228,
+      "radius_m": 250
+    }
+  },
+  {
+    "name": "Žalgiris Arena",
+    "circle": {
+      "lat": 54.8905,
+      "lon": 23.9142,
+      "radius_m": 150
+    }
+  },
+  {
+    "name": "Ąžuolynas park and Dainų slėnis",
+    "polygon": [
+      [
+        23.933,
+        54.9035
+      ],
+      [
+        23.95,
+        54.9045
+      ],
+      [
+        23.9525,
+        54.8975
+      ],
+      [
+        23.9355,
+        54.8962
+      ]
+    ]
+  }
+]

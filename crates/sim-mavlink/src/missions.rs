@@ -234,7 +234,8 @@ mod tests {
                 lon_e7: 239_000_000,
                 radius_m: 150.0,
             },
-            source: "atm".into(),
+            name: String::new(),
+            source: "scenario".into(),
             opened_tick: 0,
             closes_tick: None,
         };
@@ -274,7 +275,8 @@ mod tests {
                 lon_e7: 239_000_000,
                 radius_m: 150.0,
             },
-            source: "atm".into(),
+            name: String::new(),
+            source: "scenario".into(),
             opened_tick: 0,
             closes_tick: None,
         };

@@ -799,56 +799,91 @@ fn a_geofence_may_not_keep_a_drone_off_its_pad_or_enclose_nothing() {
     assert!(model.apply_intent(&close).is_err());
 }
 
-fn atm_blob() -> ScenarioBlob {
+/// The test world with a fence of its own across the patrol's east side,
+/// and the battery that would otherwise send the patrol home.
+fn fenced_blob() -> ScenarioBlob {
     let mut blob = blob(Profile::Gold);
-    for (key, value) in [
-        ("atm_fences_per_hour", 120.0),
-        ("atm_fence_mean_minutes", 3.0),
-        ("atm_fence_min_radius_m", 20.0),
-        ("atm_fence_max_radius_m", 60.0),
-        ("atm_area_radius_m", 300.0),
-        ("battery_drain_pct_s", 0.0),
-    ] {
-        blob.config.model.insert(key.into(), Param::Float(value));
-    }
+    let (lon, lat) = at(150.0, 75.0);
+    blob.fields = serde_json::json!({ "geofences": [
+        { "name": "East side", "circle": { "lat": lat, "lon": lon, "radius_m": 20.0 } },
+    ]});
+    blob.config
+        .model
+        .insert("battery_drain_pct_s".into(), Param::Float(0.0));
     blob
 }
 
 #[test]
-fn atm_opens_and_closes_fences_at_random_and_the_patrol_keeps_out_of_them() {
+fn a_packs_fences_open_from_the_start_the_patrol_keeps_out_and_a_reset_reopens_them() {
     let mut model = drones(Profile::Gold);
-    model.reset(&atm_blob()).unwrap();
-    let reports = run(&mut model, 1, 12_000);
-    let opened = reports
-        .iter()
-        .filter(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "open")
-        .count();
-    let closed = reports
-        .iter()
-        .filter(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "close")
-        .count();
-    // 20 minutes at two a minute, at most six open at once.
-    assert!(opened >= 10, "{opened} opened");
-    assert!(closed >= 5, "{closed} closed");
+    model.reset(&fenced_blob()).unwrap();
+    let (_, fences) = geofences_in(&model.overlays());
+    assert_eq!(fences.len(), 1);
+    assert_eq!(fences[0].source, "scenario");
+    assert_eq!(fences[0].name, "East side");
+    assert_eq!(fences[0].opened_tick, 0);
+
+    let mut reports = Vec::new();
+    let mut closest = f64::INFINITY;
+    for tick in 1..4_000 {
+        model.step(tick);
+        model.drain_reports(&mut reports);
+        closest = closest.min(distance_to(record(&model, 1), 150.0, 75.0));
+    }
+    assert!(closest > 45.0, "came within {closest:.1} m");
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Breach));
     assert!(reports.iter().any(|r| r.kind == ReportKind::Reroute));
-    for breach in reports.iter().filter(|r| r.kind == ReportKind::Breach) {
-        assert_eq!(
-            breach.detail["how"], "fence opened round it",
-            "a drone the operator flies never flies into one: {breach:?}"
-        );
-    }
-    for r in reports.iter().filter(|r| r.kind == ReportKind::Geofence) {
-        assert_eq!(r.detail["source"], "atm");
-    }
+    // Opened when the run began, and reported then.
+    assert!(reports.iter().any(|r| r.kind == ReportKind::Geofence
+        && r.detail["reason"] == "scenario"
+        && r.detail["name"] == "East side"));
+
+    // Closed during the run; a reset brings it back.
+    let close = intent(
+        &model,
+        1,
+        codes::GEOFENCE_CLOSE,
+        serde_json::json!({ "id": fences[0].id }),
+    );
+    model.apply_intent(&close).unwrap();
+    run(&mut model, 4_000, 1);
+    assert!(geofences_in(&model.overlays()).1.is_empty());
+    model.reset(&fenced_blob()).unwrap();
+    assert_eq!(geofences_in(&model.overlays()).1, fences);
+}
+
+#[test]
+fn a_pack_fence_over_a_pad_or_outside_the_world_stops_the_pack_loading() {
+    let mut blob = blob(Profile::Gold);
+    let (lon, lat) = at(0.0, 0.0);
+    blob.fields = serde_json::json!({ "geofences": [
+        { "circle": { "lat": lat, "lon": lon, "radius_m": 50.0 } },
+    ]});
+    let err = Drones::new(&blob).err().expect("refused").to_string();
+    assert!(
+        err.contains("geofences.json fence 0") && err.contains("pad"),
+        "{err}"
+    );
+    blob.fields = serde_json::json!({ "geofences": { "not": "a list" } });
+    assert!(Drones::new(&blob).is_err());
 }
 
 #[test]
 fn a_checkpoint_with_fences_open_replays_exactly() {
-    let blob = atm_blob();
+    let blob = fenced_blob();
     let mut original = drones(Profile::Gold);
     original.reset(&blob).unwrap();
-    run(&mut original, 1, 4_000);
-    assert!(!geofences_in(&original.overlays()).1.is_empty());
+    run(&mut original, 1, 1_500);
+    // One more by hand, on the far side, for a while.
+    let (lon, lat) = at(0.0, 150.0);
+    let payload = serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 15.0 }, "minutes": 4, "name": "North" });
+    let fence = Intent {
+        agent: None,
+        ..intent(&original, 1, codes::GEOFENCE_OPEN, payload)
+    };
+    original.apply_intent(&fence).unwrap();
+    run(&mut original, 1_501, 1_500);
+    assert_eq!(geofences_in(&original.overlays()).1.len(), 2);
 
     let mut cells = Vec::new();
     original.snapshot(&mut cells, usize::MAX);
@@ -858,9 +893,12 @@ fn a_checkpoint_with_fences_open_replays_exactly() {
     restored.restore_fields(&original.fields()).unwrap();
     assert_eq!(restored.overlays(), original.overlays());
 
-    let a = run(&mut original, 4_001, 3_000);
-    let b = run(&mut restored, 4_001, 3_000);
-    assert!(a.iter().any(|r| r.kind == ReportKind::Geofence));
+    // The hand-made fence closes by itself in this stretch.
+    let a = run(&mut original, 3_001, 2_000);
+    let b = run(&mut restored, 3_001, 2_000);
+    assert!(a
+        .iter()
+        .any(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "close"));
     assert_eq!(a, b);
     assert_eq!(hash(&original), hash(&restored));
 }

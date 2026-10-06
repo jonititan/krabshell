@@ -2,8 +2,9 @@
 //! routing around them.
 //!
 //! A [`Fence`] is a circle or a polygon, closed to drones at every altitude.
-//! Air traffic management opens them at random (see [`Atm`]); anything else
-//! can open or close one with an intent (see [`crate::codes`]).
+//! A scenario pack lists the fences it starts with (`world/geofences.json`);
+//! while it runs, intents open and close them (see [`crate::codes`]): from
+//! the dashboard, the API, or a ground station's fence plan.
 //!
 //! Drones route around every fence by a margin ([`Airspace::margin_m`]): each
 //! fence is grown by the margin into a convex outline, and a leg that would
@@ -48,7 +49,11 @@ pub struct Fence {
     pub id: u32,
     #[serde(flatten)]
     pub shape: Shape,
-    /// Who asked for it: `atm`, or `intent`.
+    /// What it is, for people: "Kaunas Old Town". May be empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Who opened it: `scenario`, `dashboard`, `gcs` (a ground station's
+    /// fence plan) or `intent`.
     pub source: String,
     pub opened_tick: u64,
     /// When it closes by itself, if ever.
@@ -496,6 +501,7 @@ impl Airspace {
         self.obstacle(&Fence {
             id: 0,
             shape: shape.clone(),
+            name: String::new(),
             source: String::new(),
             opened_tick: 0,
             closes_tick: None,
@@ -508,6 +514,7 @@ impl Airspace {
         let fence = Fence {
             id: 0,
             shape: shape.clone(),
+            name: String::new(),
             source: String::new(),
             opened_tick: 0,
             closes_tick: None,
@@ -665,90 +672,6 @@ impl Airspace {
     }
 }
 
-/// Settings for the fences air traffic management opens at random, from a
-/// pack's params.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Atm {
-    /// New fences per tick. Zero means none.
-    pub per_tick: f64,
-    /// Mean time a fence stays open, ticks. Each is drawn from an
-    /// exponential distribution.
-    pub mean_open_ticks: f64,
-    pub min_radius_m: f64,
-    pub max_radius_m: f64,
-    /// Fences open at once, at most. A request past it is turned down.
-    pub max_open: usize,
-    /// Fences open within this distance of the scenario's origin.
-    pub area_radius_m: f64,
-}
-
-/// Where the ATM request stream stands. Checkpointed.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AtmState {
-    /// Requests made so far.
-    pub requests: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_tick: Option<u64>,
-}
-
-impl Atm {
-    /// A request's shape from five uniform draws: where, how big, circle or
-    /// polygon, and (for a polygon) its corners, from `corners`.
-    pub fn shape(
-        &self,
-        origin: &Point,
-        draws: [f64; 4],
-        corners: impl Fn(u64) -> (f64, f64),
-    ) -> Shape {
-        let angle = draws[0] * core::f64::consts::TAU;
-        let reach = libm::sqrt(draws[1]) * self.area_radius_m;
-        let (lat_e7, lon_e7) = flight::displace(
-            origin.lat_e7,
-            origin.lon_e7,
-            libm::sin(angle) * reach,
-            libm::cos(angle) * reach,
-        );
-        let radius_m = self.min_radius_m + draws[2] * (self.max_radius_m - self.min_radius_m);
-        if draws[3] < 0.5 {
-            return Shape::Circle {
-                lat_e7,
-                lon_e7,
-                radius_m,
-            };
-        }
-        // Five to eight corners at random bearings and 60–100 % of the
-        // radius; the fence is their convex hull.
-        let count = 5 + (corners(0).0 * 4.0) as u64;
-        let pts: Vec<Xy> = (1..=count)
-            .map(|i| {
-                let (a, r) = corners(i);
-                let a = a * core::f64::consts::TAU;
-                let r = radius_m * (0.6 + 0.4 * r);
-                (r * libm::sin(a), r * libm::cos(a))
-            })
-            .collect();
-        let points = Hull::of(&pts)
-            .0
-            .into_iter()
-            .map(|(e, n)| {
-                let (lat, lon) = flight::displace(lat_e7, lon_e7, e, n);
-                [lat, lon]
-            })
-            .collect();
-        Shape::Polygon { points }
-    }
-
-    /// Ticks until the next request, from a uniform draw.
-    pub fn gap(&self, u: f64) -> u64 {
-        libm::round(-libm::log(1.0 - u) / self.per_tick).max(1.0) as u64
-    }
-
-    /// Ticks a fence stays open, from a uniform draw.
-    pub fn open_for(&self, u: f64) -> u64 {
-        libm::round(-libm::log(1.0 - u) * self.mean_open_ticks).max(1.0) as u64
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,6 +699,7 @@ mod tests {
                 lon_e7: c.lon_e7,
                 radius_m: r,
             },
+            name: String::new(),
             source: "test".into(),
             opened_tick: 0,
             closes_tick: None,
@@ -885,6 +809,7 @@ mod tests {
         air.open(Fence {
             id: 7,
             shape: Shape::Polygon { points },
+            name: String::new(),
             source: "test".into(),
             opened_tick: 0,
             closes_tick: None,
@@ -915,25 +840,5 @@ mod tests {
         assert!(air.close(2).is_some() && air.close(2).is_none());
         assert!(air.is_empty());
         assert_eq!(air.take_id(), 3, "ids are never reused");
-    }
-
-    #[test]
-    fn atm_polygons_are_convex_and_usable() {
-        let atm = Atm {
-            per_tick: 1e-3,
-            mean_open_ticks: 1e4,
-            min_radius_m: 100.0,
-            max_radius_m: 400.0,
-            max_open: 4,
-            area_radius_m: 2_000.0,
-        };
-        let air = Airspace::new(&origin(), 30.0);
-        let mut rng = sim_core::rng::Rng::new(5);
-        for _ in 0..50 {
-            let draws = [rng.unit(), rng.unit(), rng.unit(), rng.unit()];
-            let corners: Vec<(f64, f64)> = (0..10).map(|_| (rng.unit(), rng.unit())).collect();
-            let shape = atm.shape(&origin(), draws, |i| corners[i as usize]);
-            assert!(air.usable(&shape), "{shape:?}");
-        }
     }
 }

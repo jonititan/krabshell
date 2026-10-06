@@ -234,7 +234,7 @@ mod tests {
     fn fences_breaches_and_reroutes_are_logged() {
         let fence = serde_json::json!({
             "id": 3, "shape": "circle", "lat_e7": 549_000_000, "lon_e7": 239_000_000,
-            "radius_m": 200.0, "source": "atm", "opened_tick": 10, "closes_tick": 500,
+            "radius_m": 200.0, "source": "scenario", "opened_tick": 10, "closes_tick": 500,
         });
         let mut log = GeofenceLog::default();
         let mut open = fence.clone();

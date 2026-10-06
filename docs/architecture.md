@@ -123,8 +123,9 @@ that applies it instead of walking off it.
   - **Missions.** They execute MAVLink commands (see `sim-drones/src/mission.rs`) and
     arrive as `Custom` intents 100–103 carrying `MISSION_ITEM_INT` /
     `COMMAND_LONG` fields. Intents 110 and 111 open and close geofences
-    (`sim-drones/src/airspace.rs`), which the dispatcher applies with ATM's
-    random ones at the start of a step. The operator
+    (`sim-drones/src/airspace.rs`), which the dispatcher applies at the start
+    of a step; a pack's own fences (`world/geofences.json`) open with the
+    run. The operator
     (`sim-drones/src/operator.rs`) then reroutes the drones the simulation
     flies by queuing the same mission uploads and commands a ground station's
     intents would. The fences reach gateways through `Model::overlays`, a

@@ -290,6 +290,8 @@
     } else {
       body.polygon = draft.corners.map(([lon, lat]) => [lon, lat]);
     }
+    const name = $('draft-name').value.trim();
+    if (name) body.name = name;
     const minutesText = minutesInput.value.trim();
     if (minutesText) {
       const minutes = Number(minutesText);
@@ -319,6 +321,7 @@
         say('Fence opened. The drones the simulation flies are being rerouted round it.', 'ok');
       }
       minutesInput.value = '';
+      $('draft-name').value = '';
       setMode(mode);
       map.refreshFences();
     } catch (err) {
@@ -337,7 +340,7 @@
     say.timer = setTimeout(() => { flash.hidden = true; }, 6000);
   }
 
-  const SOURCES = { atm: 'ATM', gcs: 'Ground station', dashboard: 'Dashboard', intent: 'API' };
+  const SOURCES = { scenario: 'Scenario', gcs: 'Ground station', dashboard: 'Dashboard', intent: 'API' };
 
   function simTime(tick) {
     const s = last && last.tick_seconds ? tick * last.tick_seconds : null;
@@ -371,6 +374,16 @@
     const td = document.createElement('td');
     td.textContent = text;
     if (cls) td.className = cls;
+    return td;
+  }
+
+  function nameCell(f) {
+    const td = document.createElement('td');
+    const id = document.createElement('span');
+    id.className = 'mono';
+    id.textContent = `#${f.id}`;
+    td.append(id);
+    if (f.name) td.append(` ${f.name}`);
     return td;
   }
 
@@ -423,7 +436,7 @@
         tr.tabIndex = 0;
         tr.title = 'Show on the map';
         tr.append(
-          cell(`#${f.id}`, 'mono'),
+          nameCell(f),
           cell(shapeText(f)),
           cell(SOURCES[f.source] || f.source),
           cell(simTime(f.opened_tick), 'mono small'),
@@ -435,7 +448,9 @@
         button.type = 'button';
         button.className = 'danger';
         button.textContent = 'Close';
-        button.title = f.source === 'atm' ? 'Close this ATM fence early' : 'Close this fence';
+        button.title = f.source === 'scenario'
+          ? 'Close this fence of the scenario\'s (a reset opens it again)'
+          : 'Close this fence';
         button.addEventListener('click', (event) => {
           event.stopPropagation();
           close(f.id, button);
@@ -461,13 +476,17 @@
       case 'geofence': {
         const opened = d.action === 'open';
         const who = SOURCES[d.source] || d.source;
+        const shape = d.shape === 'circle'
+          ? `circle r ${fmtLength(d.radius_m)}`
+          : `polygon, ${(d.points || []).length} corners`;
+        const named = d.name ? `${d.name} · ` : '';
         return [
           opened ? 'Opened' : 'Closed',
           d.id,
           opened
-            ? `${who}${d.shape === 'circle' ? ` · circle r ${fmtLength(d.radius_m)}` : ` · polygon, ${(d.points || []).length} corners`}`
-            : d.reason === 'expired' ? 'its time was up' : 'on request',
-          opened ? '' : '',
+            ? `${named}${who} · ${shape}`
+            : `${named}${d.reason === 'expired' ? 'its time was up' : 'on request'}`,
+          '',
         ];
       }
       case 'breach':

@@ -3,10 +3,11 @@
 {% block content %}
 <h1>Geofences</h1>
 <p class="lede">
-  Keep-out zones at every altitude. Air traffic management opens and closes
-  them at random, ground stations upload them as a fence plan, and you can
-  draw them here. The drones the simulation flies are rerouted round each one
-  by MAVLink; a drone found inside one in the air is a breach.
+  Keep-out zones at every altitude. The scenario starts with its own
+  (<span class="mono">world/geofences.json</span>); draw more here, close any
+  of them, and ground stations can upload their own as a fence plan. The
+  drones the simulation flies are rerouted round each one by MAVLink; a drone
+  found inside one in the air is a breach.
 </p>
 
 {% include "fragments/control.html" %}
@@ -29,11 +30,18 @@
           {% endfor %}
         </select>
       </label>
-      <label><input id="map-entities" type="checkbox" checked> Drones</label>
       <label><input id="map-follow" type="checkbox" checked> Live</label>
       <button id="map-fit" type="button">Fit</button>
     </div>
   </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label title="Hubs and landmarks, the addresses of open orders, and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Delivery locations</label>
+    <label title="Where people and vehicles are, and camera sightings of them"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
+  </fieldset>
 
   <div class="fence-tools" role="toolbar" aria-label="Map tool">
     <div class="segmented">
@@ -54,6 +62,9 @@
   <form id="fence-draft" class="draft" hidden>
     <h3 id="draft-title">New fence</h3>
     <div class="row">
+      <label>Name
+        <input id="draft-name" type="text" size="24" maxlength="80" placeholder="optional" autocomplete="off">
+      </label>
       <label id="draft-radius-field">Radius, m
         <input id="draft-radius" type="text" inputmode="decimal" size="8" autocomplete="off">
       </label>
@@ -77,6 +88,21 @@
     <li>
       <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-drone" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
       Drone
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true">
+        <circle class="k-order" cx="7" cy="10" r="4"/>
+        <circle class="k-order flying" cx="20" cy="10" r="4"/>
+        <path class="k-drop" d="M29 10 L32 13 L37 7"/>
+      </svg>
+      Order waiting, order on its way, parcel just delivered
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true">
+        <circle class="k-person" cx="12" cy="10" r="2"/>
+        <rect class="k-vehicle" x="24" y="8" width="4" height="4"/>
+      </svg>
+      Person, vehicle
     </li>
   </ul>
   <p class="dim small" id="map-status">Loading the map&hellip;</p>

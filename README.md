@@ -124,16 +124,24 @@ battery left.
 
 ### Geofences
 
-Geofences are keep-out zones, at every altitude, that open and close while a
-run goes on: circles and polygons. Air traffic management opens them at random
-when a pack sets `atm_fences_per_hour` (with `atm_fence_mean_minutes`,
-`atm_fence_min_radius_m`/`atm_fence_max_radius_m`, `atm_max_fences` and
-`atm_area_radius_m`), never over a drone's pad, and closes each after an
-exponentially distributed time. Intents open and close them by hand: `Custom`
-110 with `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
-...]}` and optionally `"minutes"`; `Custom` 111 with `{"id"}`. A ground
-station's fence plan (see below) arrives as `Custom` 112 and replaces the
-fences ground stations set before.
+Geofences are keep-out zones, at every altitude: circles and polygons. A
+pack lists the ones it starts with in `world/geofences.json`, each with an
+optional `name` and `minutes` (until it closes by itself):
+
+```json
+[
+  { "name": "Kaunas Castle and Old Town", "circle": { "lat": 54.8985, "lon": 23.8860, "radius_m": 350 } },
+  { "name": "Ąžuolynas park", "polygon": [[23.9330, 54.9035], [23.9500, 54.9045], [23.9525, 54.8975], [23.9355, 54.8962]] }
+]
+```
+
+A fence over a drone's pad, or outside the world, stops the pack loading. A
+reset opens the pack's fences again. While the run goes on, the dashboard's
+Geofences tab, the API and intents open and close fences: `Custom` 110 with
+`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
+...]}` and optionally `"name"` and `"minutes"`; `Custom` 111 with `{"id"}`.
+A ground station's fence plan (see below) arrives as `Custom` 112 and
+replaces the fences ground stations set before.
 
 The autopilot knows nothing of fences. The operator, who flies the drones the
 simulation flies itself (couriers, and drones a pack starts on a mission),
@@ -180,7 +188,10 @@ often it has been breached), and the latest opens, closes, breaches and
 reroutes. Draw a circle (centre, then edge) or a polygon (corners, then click
 the first again or press Enter) to open one, optionally for a set number of
 minutes, and close any fence from the list. The State page's map draws the
-fences too.
+fences too. Both maps have layers to show or hide: drones; delivery locations
+(hubs and landmarks, open orders' addresses, recent drop-offs); people and
+vehicles (where they are, and camera sightings); geofences; and the A5
+occupancy grid. The choice is remembered in the browser.
 
 ### Drones: MAVLink and CoT
 
@@ -199,8 +210,8 @@ address, and to any ground station that has sent it a packet. What works:
 - the geofences as a fence plan (`MAV_MISSION_TYPE_FENCE`), advertised in
   AUTOPILOT_VERSION: download all of them as `NAV_FENCE_CIRCLE_EXCLUSION` and
   `NAV_FENCE_POLYGON_VERTEX_EXCLUSION` items; upload a plan to set the
-  ground stations' own fences (ATM's stay as they are; inclusion fences are
-  refused); clear it to close them. `MISSION_CURRENT.fence_id` changes
+  ground stations' own fences (the scenario's and the dashboard's stay as they
+  are; inclusion fences are refused); clear it to close them. `MISSION_CURRENT.fence_id` changes
   whenever a fence opens or closes;
 - commands (`COMMAND_LONG`/`COMMAND_INT`): arm/disarm, takeoff, mission start,
   RTL, land, DO_SET_MODE, DO_REPOSITION, DO_PAUSE_CONTINUE, DO_SET_MISSION_CURRENT;
@@ -330,6 +341,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/metrics` | Prometheus text. |
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
+| GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
 | GET POST | `/geofences` | Open geofences, with breach counts and recent fence activity; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"minutes"`). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |

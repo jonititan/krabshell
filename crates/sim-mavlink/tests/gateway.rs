@@ -310,17 +310,14 @@ async fn a_ground_station_can_upload_download_and_fly_a_mission() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
-    use sim_core::config::Param;
     let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/london-patrol");
     let mut blob = sim_engine::read_pack(&pack).expect("london-patrol pack");
-    // ATM opening fences often, and keeping them open.
-    for (key, value) in [
-        ("atm_fences_per_hour", 600.0),
-        ("atm_fence_mean_minutes", 600.0),
-        ("atm_max_fences", 3.0),
-    ] {
-        blob.config.model.insert(key.into(), Param::Float(value));
-    }
+    // Three fences of the scenario's own, as world/geofences.json gives them.
+    blob.fields = serde_json::json!({ "geofences": [
+        { "name": "Regent's Park", "circle": { "lat": 51.5313, "lon": -0.1527, "radius_m": 200 } },
+        { "name": "Buckingham Palace", "circle": { "lat": 51.5014, "lon": -0.1419, "radius_m": 150 } },
+        { "name": "Tower of London", "polygon": [[-0.0785, 51.5095], [-0.0740, 51.5095], [-0.0740, 51.5070], [-0.0785, 51.5070]] },
+    ]});
     let driver = Driver::spawn(ModelRegistry::with_builtins(), blob).unwrap();
     let handle = driver.handle();
     handle.command(Control::Start { target_tps: None }).unwrap();
@@ -330,7 +327,10 @@ async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
         if fences.len() == 3 {
             break fences;
         }
-        assert!(Instant::now() < deadline, "ATM opened no fences");
+        assert!(
+            Instant::now() < deadline,
+            "the scenario's fences never appeared"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     handle.command(Control::Pause).unwrap();
@@ -418,7 +418,7 @@ async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
             || *c == MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION as u32));
 
     // Upload what was downloaded plus one circle of our own over Hyde Park:
-    // ATM's fences stay as they are, and ours opens beside them.
+    // the scenario's fences stay as they are, and ours opens beside them.
     let mut plan: Vec<MISSION_ITEM_INT_DATA> = Vec::new();
     for seq in 0..count {
         station
@@ -459,7 +459,7 @@ async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
     assert_eq!(mine.len(), 1);
     assert!(
         fences.iter().all(|f| now.contains(f)),
-        "ATM's fences are untouched"
+        "the scenario's fences are untouched"
     );
 
     // Inclusion fences are not simulated: the plan is refused whole.
@@ -468,7 +468,7 @@ async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
     let result = upload_fences(&mut station, &inclusion).await;
     assert_eq!(result, MavMissionResult::MAV_MISSION_UNSUPPORTED);
 
-    // Clearing the fence plan closes ours; ATM's stay open.
+    // Clearing the fence plan closes ours; the scenario's stay open.
     station
         .send(MavMessage::MISSION_CLEAR_ALL(MISSION_CLEAR_ALL_DATA {
             target_system: UAV,
