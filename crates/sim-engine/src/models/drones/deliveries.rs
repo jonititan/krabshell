@@ -28,9 +28,24 @@ pub struct Delivery {
     pub total_s: f64,
 }
 
+/// An order turned away when it was placed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rejected {
+    pub order: u64,
+    pub depot: String,
+    pub address: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub ordered_tick: u64,
+    pub fence: Option<u64>,
+    pub fence_name: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryLog {
     pub deliveries: Vec<Delivery>,
+    pub rejected: Vec<Rejected>,
 }
 
 /// Bin widths a histogram picks from, seconds: whole, readable minutes.
@@ -42,10 +57,31 @@ const MAX_BINS: f64 = 30.0;
 impl DeliveryLog {
     /// Keep a report if it is a delivery. True if it was.
     pub fn add(&mut self, report: &Report) -> bool {
+        let d = &report.detail;
+        if report.kind == ReportKind::OrderRejected {
+            let text = |k: &str| {
+                d.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let int = |k: &str| d.get(k).and_then(serde_json::Value::as_u64);
+            self.rejected.push(Rejected {
+                order: int("order").unwrap_or(0),
+                depot: text("depot"),
+                address: text("label"),
+                lat: report.lat(),
+                lon: report.lon(),
+                ordered_tick: int("ordered_tick").unwrap_or(report.tick),
+                fence: int("fence"),
+                fence_name: text("fence_name"),
+                reason: text("reason"),
+            });
+            return true;
+        }
         if report.kind != ReportKind::Delivery {
             return false;
         }
-        let d = &report.detail;
         let text = |k: &str| {
             d.get(k)
                 .and_then(|v| v.as_str())
@@ -97,6 +133,27 @@ impl DeliveryLog {
                 d.wait_s,
                 d.flight_s,
                 d.total_s
+            ));
+        }
+        out
+    }
+
+    /// Every order turned away, one row each, with why.
+    pub fn rejected_csv(&self) -> String {
+        let mut out =
+            String::from("order,depot,address,lat,lon,ordered_tick,fence,fence_name,reason\n");
+        for r in &self.rejected {
+            out.push_str(&format!(
+                "{},{},{},{:.7},{:.7},{},{},{},{}\n",
+                r.order,
+                csv_field(&r.depot),
+                csv_field(&r.address),
+                r.lat,
+                r.lon,
+                r.ordered_tick,
+                r.fence.map(|f| f.to_string()).unwrap_or_default(),
+                csv_field(&r.fence_name),
+                csv_field(&r.reason),
             ));
         }
         out

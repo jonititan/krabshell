@@ -1248,3 +1248,53 @@ fn the_buffer_drones_keep_from_a_geofence_is_the_geofence_margin_parameter() {
     let wide = closest(Some(60.0));
     assert!(wide > 68.0, "came within {wide:.1} m");
 }
+
+#[test]
+fn with_rejection_on_an_order_to_a_fenced_address_is_turned_away_and_logged_why() {
+    let mut blob = courier_blob();
+    // Over the address 500 m south, named.
+    let (lon, lat) = at(0.0, -500.0);
+    blob.fields["geofences"] = serde_json::json!([
+        { "name": "Stadium", "circle": { "lat": lat, "lon": lon, "radius_m": 60.0 } },
+    ]);
+    blob.config
+        .model
+        .insert("reject_orders_in_geofences".into(), Param::Bool(true));
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    let reports = run(&mut model, 1, 9_000);
+
+    let rejected: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::OrderRejected)
+        .collect();
+    assert!(!rejected.is_empty());
+    let south = model.world().book().addresses[2].clone();
+    for r in &rejected {
+        assert_eq!(r.detail["address"], 2);
+        assert_eq!((r.lat_e7, r.lon_e7), (south.lat_e7, south.lon_e7));
+        assert_eq!(r.detail["fence"], 1);
+        assert_eq!(
+            r.detail["reason"],
+            "the delivery address is inside geofence #1 (Stadium)"
+        );
+    }
+    // Never queued, never delivered; the other addresses carry on.
+    let dispatch = model.world().dispatch();
+    assert!(dispatch.queues[0].iter().all(|o| o.address != 2));
+    assert_eq!(dispatch.rejected as usize, rejected.len());
+    let deliveries: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .collect();
+    assert!(deliveries.len() >= 2);
+    assert!(deliveries.iter().all(|d| d.detail["address"] != 2));
+
+    // The run log lists them.
+    let mut log = deliveries::DeliveryLog::default();
+    for r in &reports {
+        log.add(r);
+    }
+    assert_eq!(log.rejected.len(), rejected.len());
+    assert!(log.rejected_csv().contains("geofence #1 (Stadium)"));
+}

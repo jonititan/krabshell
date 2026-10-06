@@ -114,6 +114,13 @@ and delivered. A courier that comes home without delivering (low battery, a
 ground station took it) puts its order back at the front of the queue. Orders
 come from the run's seed, so `gold` runs place and deliver the same orders.
 
+An order whose address is inside a geofence waits in the queue until the
+fence closes. A pack that sets `reject_orders_in_geofences = true` turns such
+orders away when they are placed instead: an `order_rejected` report gives
+the order, the address and the reason ("the delivery address is inside
+geofence #3 (Žalgiris Arena)"), and the run log lists them in
+`rejected-orders.csv`. `kaunas-deliveries` does.
+
 A drone whose battery reaches 0 % in the air crashes where it is: it leaves
 the world, a `crash` report is logged, and the order it carried goes back to
 the front of the queue. A crashed courier's duty goes to its hub's spare (a
@@ -170,6 +177,7 @@ another scenario starts a new one. It holds:
 |---|---|
 | `heatmap.geojson` | Drone-seconds of flight per A5 cell of `heatmap_resolution`, as a styled choropleth (log-scale YlOrRd classes in simplestyle `fill`/`stroke`, legend in the collection's `properties`). geojson.io shows it as it is; QGIS can style on `class`. Time parked or disarmed is not flight. |
 | `deliveries.csv` | Every delivered order: depot, drone, address, ticks, and seconds waiting for a drone, flying, and in total. |
+| `rejected-orders.csv` | Every order turned away when it was placed, with the geofence its address was inside and the reason. |
 | `delivery-times.csv`, `delivery-times.svg` | Histogram of time from order to delivery, in whole-minute bins, with mean, median, 90th percentile and slowest. |
 | `landings.csv` | The end of every flight: drone, landed or crashed, and the battery percentage it touched down with (-1 for a crash), with what replaced a crashed drone. |
 | `landing-battery.csv`, `landing-battery.svg` | Histogram of battery at touchdown in 5 % bins, one sample per flight, crashes in a bin of their own at -1. |
@@ -408,7 +416,8 @@ below which a takeoff from the ground waits or is refused), the winch
 `p_detect`, `sensor_period_s`, `report_interval_s`) and generated targets
 (`persons`, `vehicles`, `wander_radius_m`, `origin_lon`, `origin_lat`),
 deliveries (`order_rate_per_address_day`, `dispatch_takeoff_m`,
-`dispatch_approach_m`, `dispatch_load_s`), `heatmap_resolution` (see
+`dispatch_approach_m`, `dispatch_load_s`, `reject_orders_in_geofences`),
+`heatmap_resolution` (see
 [Deliveries and run logs](#deliveries-and-run-logs)), and
 `geofence_margin_m`: the buffer, in metres, the drones the simulation flies
 keep from every geofence (default 30, from 2 to 1000; see

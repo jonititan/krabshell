@@ -289,6 +289,16 @@ fn fence_name(p: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// Where an address in the book is, on the ground.
+fn address_point(book: &AddressBook, address: u32) -> Point {
+    let a = &book.addresses[address as usize];
+    Point {
+        lat_e7: a.lat_e7,
+        lon_e7: a.lon_e7,
+        alt_mm: 0,
+    }
+}
+
 fn reason_text(reason: &RejectReason) -> String {
     match reason {
         RejectReason::Rejected { message } => message.clone(),
@@ -932,6 +942,7 @@ impl World {
             ReportKind::Geofence => "geofence",
             ReportKind::Breach => "breach",
             ReportKind::Reroute => "reroute",
+            ReportKind::OrderRejected => "order_rejected",
         };
         *self.report_counts.entry(kind).or_default() += 1;
         if let Some(sink) = self.sink.as_mut() {
@@ -953,10 +964,61 @@ impl World {
             return;
         }
         let seed = self.seed ^ ORDER_SALT;
-        self.dispatch
-            .place_orders(self.tick, &self.book, &self.settings.dispatch, |n| {
-                draw_pair(seed, n, 0)
-            });
+        let reject = self.settings.reject_orders_in_geofences && !self.airspace.is_empty();
+        let (book, airspace) = (&self.book, &self.airspace);
+        let rejected = self.dispatch.place_orders(
+            self.tick,
+            book,
+            &self.settings.dispatch,
+            |n| draw_pair(seed, n, 0),
+            |address| !reject || !airspace.blocks(&address_point(book, address)),
+        );
+        for order in rejected {
+            self.order_rejected(&order);
+        }
+    }
+
+    /// Log an order turned away because its address is inside a geofence.
+    fn order_rejected(&mut self, order: &crate::dispatch::Order) {
+        let at = address_point(&self.book, order.address);
+        let address = &self.book.addresses[order.address as usize];
+        let fence = self
+            .airspace
+            .inside(&at)
+            .first()
+            .and_then(|id| self.airspace.fences().iter().find(|f| f.id == *id))
+            .cloned();
+        let (fence_id, fence_name) = fence
+            .as_ref()
+            .map_or((None, String::new()), |f| (Some(f.id), f.name.clone()));
+        let fence_text = match (&fence_id, fence_name.is_empty()) {
+            (Some(id), true) => format!("geofence #{id}"),
+            (Some(id), false) => format!("geofence #{id} ({fence_name})"),
+            (None, _) => "a geofence".to_owned(),
+        };
+        let detail = serde_json::json!({
+            "order": order.id,
+            "address": order.address,
+            "label": address.label,
+            "depot": self.book.depots[usize::from(address.depot)],
+            "ordered_tick": order.ordered_tick,
+            "fence": fence_id,
+            "fence_name": fence_name,
+            "reason": format!("the delivery address is inside {fence_text}"),
+        });
+        self.report(Report {
+            seq: 0,
+            tick: self.tick,
+            kind: ReportKind::OrderRejected,
+            uid: format!("order-{}", order.id),
+            observer: None,
+            target: None,
+            target_kind: String::new(),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            alt_mm: 0,
+            detail,
+        });
     }
 
     /// A drone crashed: put the order it was carrying back at the front of

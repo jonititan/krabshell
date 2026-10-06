@@ -214,6 +214,12 @@ fn main() -> anyhow::Result<()> {
                     s.max_s / 60.0
                 );
             }
+            if !log.deliveries.rejected.is_empty() {
+                println!(
+                    "rejected:      {} orders (address inside a geofence)",
+                    log.deliveries.rejected.len()
+                );
+            }
             if !log.landings.is_empty() {
                 println!(
                     "flights:       {} ({} crashed)",

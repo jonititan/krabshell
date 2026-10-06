@@ -7,7 +7,8 @@
 //!
 //! - `heatmap.geojson`: drone-seconds of flight per A5 cell (see
 //!   [`super::heatmap`]), when `heatmap_resolution` is set;
-//! - `deliveries.csv`: every delivered order;
+//! - `deliveries.csv`: every delivered order; `rejected-orders.csv`, every
+//!   order turned away when placed (its address inside a geofence) and why;
 //! - `delivery-times.csv` and `delivery-times.svg`: a histogram of time from
 //!   order to delivery;
 //! - `landings.csv`: every flight's end, landed or crashed, with the battery
@@ -109,6 +110,9 @@ impl RunLog {
                     .histogram_svg(&format!("{}: time from order to delivery", self.scenario)),
             ));
         }
+        if !self.deliveries.rejected.is_empty() {
+            out.push(("rejected-orders.csv", self.deliveries.rejected_csv()));
+        }
         if !self.landings.is_empty() {
             out.push(("landings.csv", self.landings.to_csv()));
             out.push(("landing-battery.csv", self.landings.histogram_csv()));
@@ -137,6 +141,7 @@ impl RunLog {
                     "last_tick": self.last_tick,
                     "flight_drone_seconds": self.heatmap.as_ref().map(Heatmap::drone_seconds),
                     "deliveries": self.deliveries.len(),
+                    "rejected_orders": self.deliveries.rejected.len(),
                     "order_to_delivery_s": summary.map(|s| serde_json::json!({
                         "mean": s.mean_s, "median": s.median_s, "p90": s.p90_s, "max": s.max_s,
                         "mean_wait_for_drone": s.mean_wait_s, "mean_flight": s.mean_flight_s,

@@ -39,6 +39,9 @@ pub enum ReportKind {
     /// The operator sent `observer` MAVLink messages to take it round a
     /// geofence: `detail.messages` lists them.
     Reroute,
+    /// An order was turned away when it was placed, at the given address:
+    /// `detail.reason` says why (inside a geofence, say).
+    OrderRejected,
 }
 
 /// One model-generated event.

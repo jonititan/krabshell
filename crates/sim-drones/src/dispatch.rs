@@ -133,6 +133,9 @@ pub struct Dispatch {
     /// Orders placed so far; also the last order's id (ids start at 1).
     pub placed: u64,
     pub delivered: u64,
+    /// Orders turned away when placed (see [`Dispatch::place_orders`]).
+    #[serde(default)]
+    pub rejected: u64,
     /// When the next order comes. None until the first draw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_order_tick: Option<u64>,
@@ -162,16 +165,21 @@ impl Dispatch {
 
     /// Place every order due at or before `tick`. `draw(n)` gives two
     /// uniform numbers for order `n`: the gap after it, and which address
-    /// places it. Draw 0 only sets when the first order comes.
+    /// places it. Draw 0 only sets when the first order comes. An order
+    /// `accept` turns down (by address index) joins no queue; those are
+    /// returned. The draws are the same either way, so turning orders away
+    /// changes no other order.
     pub fn place_orders(
         &mut self,
         tick: u64,
         book: &AddressBook,
         settings: &DispatchSettings,
         draw: impl Fn(u64) -> (f64, f64),
-    ) {
+        mut accept: impl FnMut(u32) -> bool,
+    ) -> Vec<Order> {
+        let mut rejected = Vec::new();
         if settings.orders_per_tick <= 0.0 || book.addresses.is_empty() {
-            return;
+            return rejected;
         }
         let gap =
             |u: f64| libm::round(-libm::log(1.0 - u) / settings.orders_per_tick).max(0.0) as u64;
@@ -183,15 +191,22 @@ impl Dispatch {
             let (after, pick) = draw(self.placed);
             let address =
                 ((pick * book.addresses.len() as f64) as usize).min(book.addresses.len() - 1);
-            self.queues[usize::from(book.addresses[address].depot)].push_back(Order {
+            let order = Order {
                 id: self.placed,
                 address: address as u32,
                 ordered_tick: next,
                 dispatched_tick: None,
-            });
+            };
+            if accept(order.address) {
+                self.queues[usize::from(book.addresses[address].depot)].push_back(order);
+            } else {
+                self.rejected += 1;
+                rejected.push(order);
+            }
             next += gap(after);
         }
         self.next_order_tick = Some(next);
+        rejected
     }
 }
 
@@ -279,10 +294,20 @@ mod tests {
         let mut rng = sim_core::rng::Rng::new(3);
         let draws: Vec<(f64, f64)> = (0..10_000).map(|_| (rng.unit(), rng.unit())).collect();
         // The first call schedules the first order from tick 0.
-        d.place_orders(0, &book, &settings, |n| draws[n as usize]);
-        d.place_orders(100_000, &book, &settings, |n| draws[n as usize]);
+        d.place_orders(0, &book, &settings, |n| draws[n as usize], |_| true);
+        // Every tenth address turned away: the rest are placed as before.
+        let rejected = d.place_orders(
+            100_000,
+            &book,
+            &settings,
+            |n| draws[n as usize],
+            |a| a % 10 != 0,
+        );
+        assert!(!rejected.is_empty() && rejected.iter().all(|o| o.address % 10 == 0));
+        assert_eq!(d.rejected as usize, rejected.len());
+        assert_eq!(d.placed as usize, d.queued() + rejected.len());
         // About 1000 expected; Poisson spread is about ±32.
-        let placed = d.queued() as f64;
+        let placed = d.placed as f64;
         assert!((850.0..1150.0).contains(&placed), "{placed}");
         assert!(d.queues[0].len() > 300 && d.queues[1].len() > 300);
         // Each queue is oldest first.

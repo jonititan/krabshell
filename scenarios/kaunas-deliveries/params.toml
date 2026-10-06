@@ -56,9 +56,13 @@ winch_lock_s = 3.0
 # flying the couriers keeps them geofence_margin_m clear of every fence by
 # MAVLink: re-uploading missions with detour waypoints, DO_REPOSITION out of
 # a fence opened round a drone, and RTL for a courier whose address is
-# fenced (orders to fenced addresses wait until the fence closes). Breaches
-# are logged.
+# fenced. Breaches are logged.
 geofence_margin_m = 30.0
+# An order whose address is inside a geofence when it is placed is turned
+# away, not queued: an order_rejected report (and rejected-orders.csv in the
+# run log) says which fence. Orders already queued when a fence opens over
+# their address wait for it to close.
+reject_orders_in_geofences = true
 
 # Camera
 hfov_deg = 80.0
