@@ -382,13 +382,106 @@
     return td;
   }
 
+  // The fence being renamed, if any. Neither table is rebuilt meanwhile,
+  // so what is typed stays put.
+  let renaming = null;
+
+  function rerender() {
+    renderFences.key = null;
+    renderPrevious.key = null;
+    if (last) {
+      renderFences(last);
+      renderPrevious(last);
+    }
+  }
+
+  async function rename(f, name, button) {
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/v1/geofences/${f.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        say(`Fence ${f.id} could not be renamed: ${reason(result.detail || response.status)}`, 'bad');
+        return;
+      }
+      const what = name ? `renamed “${name}”` : 'no longer named';
+      if (result.status === 'queued') {
+        pending.set(result.id, { what: `Renaming fence ${f.id}`, at: Date.now() });
+        say(`Fence ${f.id} is ${what} once the simulation next steps.`, 'warn');
+      } else {
+        say(`Fence ${f.id} ${what}.`, 'ok');
+      }
+      renaming = null;
+      rerender();
+      map.refreshFences();
+    } catch (err) {
+      say(`Fence ${f.id} could not be renamed: ${err}`, 'bad');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // The fence's number and name, with a button to rename it; or, while it
+  // is being renamed, the editor.
   function nameCell(f) {
     const td = document.createElement('td');
     const id = document.createElement('span');
     id.className = 'mono';
     id.textContent = `#${f.id}`;
     td.append(id);
+    if (renaming === f.id) {
+      const form = document.createElement('form');
+      form.className = 'rename';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 80;
+      input.value = f.name || '';
+      input.placeholder = 'no name';
+      input.setAttribute('aria-label', `New name for fence ${f.id}`);
+      const save = document.createElement('button');
+      save.type = 'submit';
+      save.className = 'primary';
+      save.textContent = 'Save';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'ghost';
+      cancel.textContent = 'Cancel';
+      const stop = () => {
+        renaming = null;
+        rerender();
+      };
+      cancel.addEventListener('click', stop);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') stop();
+      });
+      form.addEventListener('click', (event) => event.stopPropagation());
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        rename(f, input.value.trim(), save);
+      });
+      form.append(input, save, cancel);
+      td.append(form);
+      requestAnimationFrame(() => input.select());
+      return td;
+    }
     if (f.name) td.append(` ${f.name}`);
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'ghost rename-button';
+    edit.textContent = '✎';
+    edit.title = 'Rename';
+    edit.setAttribute('aria-label', `Rename fence ${f.id}`);
+    edit.addEventListener('click', (event) => {
+      event.stopPropagation();
+      renaming = f.id;
+      extending = null;
+      rerender();
+    });
+    td.append(' ', edit);
     return td;
   }
 
@@ -512,6 +605,7 @@
       : '';
     // Rebuild only when something changed, so a button being pressed is not
     // swept away by the next poll.
+    if (renaming !== null && fences.some((f) => f.id === renaming) && renderFences.key !== null) return;
     if (extending !== null && fences.some((f) => f.id === extending && !f.waiting)) return;
     extending = null;
     const key = JSON.stringify(fences) + body.tick_seconds + Math.floor(body.tick / 10);
@@ -658,7 +752,8 @@
     const previous = body.previous || [];
     $('previous-empty').hidden = previous.length > 0;
     $('previous-table').hidden = previous.length === 0;
-    const key = previous.map((f) => f.id).join(',') + body.tick_seconds;
+    if (renaming !== null && previous.some((f) => f.id === renaming) && renderPrevious.key !== null) return;
+    const key = JSON.stringify(previous.map((f) => [f.id, f.name])) + body.tick_seconds;
     if (renderPrevious.key === key) return;
     renderPrevious.key = key;
     const tbody = document.querySelector('#previous-table tbody');

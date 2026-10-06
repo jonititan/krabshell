@@ -76,6 +76,10 @@ pub mod codes {
     /// Change how long an open geofence stays open. Payload `{"id": n,
     /// "minutes": m}`: `m` minutes from now, or -1 until it is closed.
     pub const GEOFENCE_EXTEND: u16 = 113;
+    /// Rename a geofence: open, waiting to open, or closed (so it reopens
+    /// under the new name). Payload `{"id": n, "name": "..."}`; an empty
+    /// name clears it.
+    pub const GEOFENCE_RENAME: u16 = 114;
 }
 
 /// Salts that keep each use of the seed independent.
@@ -321,6 +325,7 @@ enum FenceChange {
     Schedule(Fence, f64, Option<f64>),
     /// Stay open this many minutes from now, or until closed.
     Extend(u32, Option<f64>),
+    Rename(u32, String),
     Close(u32),
 }
 
@@ -1187,6 +1192,7 @@ impl World {
             IntentVerb::Custom(codes::GEOFENCE_CLOSE) => self.close_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_SET) => self.set_fences(intent),
             IntentVerb::Custom(codes::GEOFENCE_EXTEND) => self.extend_fence(intent),
+            IntentVerb::Custom(codes::GEOFENCE_RENAME) => self.rename_fence(intent),
             IntentVerb::Custom(code) => self.drone_intent(code, intent),
             IntentVerb::Spawn => self.spawn(intent),
             IntentVerb::Despawn => self.despawn(intent),
@@ -1368,7 +1374,7 @@ impl World {
                 FenceChange::Open(f, _) => {
                     current.push((f.id, f.shape.clone(), f.source == GCS_SOURCE))
                 }
-                FenceChange::Schedule(..) | FenceChange::Extend(..) => {}
+                FenceChange::Schedule(..) | FenceChange::Extend(..) | FenceChange::Rename(..) => {}
                 FenceChange::Close(id) => current.retain(|c| c.0 != *id),
             }
         }
@@ -1479,6 +1485,36 @@ impl World {
             return Err(rejected(format!("no open geofence {id}")));
         }
         self.fence_mail.push(FenceChange::Extend(id, minutes));
+        Ok(())
+    }
+
+    fn rename_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
+        let id = intent
+            .payload
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| rejected("renaming a geofence needs its id"))?;
+        if !intent
+            .payload
+            .get("name")
+            .is_some_and(serde_json::Value::is_string)
+        {
+            return Err(rejected(
+                "renaming a geofence needs a name (empty clears it)",
+            ));
+        }
+        let known = self.airspace.fences().iter().any(|f| f.id == id)
+            || self.scheduled.iter().any(|f| f.id == id)
+            || self.previous.iter().any(|p| p.fence.id == id)
+            || self.fence_mail.iter().any(|c| {
+                matches!(c, FenceChange::Open(f, _) | FenceChange::Schedule(f, _, _) if f.id == id)
+            });
+        if !known {
+            return Err(rejected(format!("no geofence {id}")));
+        }
+        self.fence_mail
+            .push(FenceChange::Rename(id, fence_name(&intent.payload)));
         Ok(())
     }
 
@@ -1609,6 +1645,17 @@ impl World {
                         .scheduled
                         .partition_point(|f| (f.opened_tick, f.id) < (fence.opened_tick, fence.id));
                     self.scheduled.insert(at, fence);
+                }
+                FenceChange::Rename(id, name) => {
+                    if let Some(fence) = self.airspace.rename(id, &name) {
+                        self.fence_report(&fence, "rename", "requested");
+                    } else if let Some(f) = self.scheduled.iter_mut().find(|f| f.id == id) {
+                        f.name = name;
+                        let fence = f.clone();
+                        self.fence_report(&fence, "rename", "requested");
+                    } else if let Some(p) = self.previous.iter_mut().find(|p| p.fence.id == id) {
+                        p.fence.name = name;
+                    }
                 }
                 FenceChange::Extend(id, minutes) => {
                     let closes = minutes.map(|m| tick + self.ticks_for(m));

@@ -143,7 +143,7 @@ Geofences tab, the API and intents open and close fences: `Custom` 110 with
 `"after_minutes"` (it waits to open until then); `Custom` 111 with `{"id"}`
 closes one, or cancels one still waiting; `Custom` 113 with `{"id",
 "minutes"}` changes how long an open one stays open (from now; -1: until
-closed).
+closed); `Custom` 114 with `{"id", "name"}` renames one.
 A ground station's fence plan (see below) arrives as `Custom` 112 and
 replaces the fences ground stations set before.
 
@@ -190,7 +190,8 @@ The dashboard's **Geofences** tab manages them. **Current fences** lists
 every fence open or waiting to open (shape and area, who opened it, when it
 opened or will, when it closes, breaches), each with Close (or Cancel), and
 Extend for one due to close: a number of minutes from now, or -1 to keep it
-open until closed. Draw
+open until closed. The ✎ beside a fence's name renames it, current or
+previous. Draw
 a circle (centre, then edge) or a polygon (corners, then click the first
 again or press Enter) on the map to open one, with a name and optionally a
 number of minutes. **Previous fences** lists those that have closed: reopen
@@ -353,6 +354,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
 | GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed) and `"after_minutes"`). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
+| PATCH | `/geofences/{id}` | `{"name": "..."}`: rename a geofence, open, waiting or previously closed (empty clears the name). |
 | POST | `/geofences/{id}/extend` | `{"minutes": m}`: keep an open geofence open `m` minutes from now, or with -1 until it is closed. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 

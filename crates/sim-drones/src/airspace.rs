@@ -414,6 +414,14 @@ impl Airspace {
         Some(fence.clone())
     }
 
+    /// Rename an open fence. Its shape is unchanged, so nothing needs
+    /// replanning. The fence as it now is.
+    pub fn rename(&mut self, id: u32, name: &str) -> Option<Fence> {
+        let fence = self.fences.iter_mut().find(|f| f.id == id)?;
+        fence.name = name.to_owned();
+        Some(fence.clone())
+    }
+
     /// Close every fence due to close by `tick`.
     pub fn expire(&mut self, tick: u64) -> Vec<Fence> {
         let (done, open): (Vec<Fence>, Vec<Fence>) = std::mem::take(&mut self.fences)

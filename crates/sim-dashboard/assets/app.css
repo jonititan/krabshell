@@ -457,3 +457,8 @@ rect.k-vehicle { fill: var(--accent); }
 #fence-table form.extend { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 #fence-table form.extend input { width: 6ch; }
 #fence-table form.extend button { padding: 3px 10px; }
+button.rename-button { padding: 0 6px; font-size: 13px; line-height: 1.4; opacity: 0.55; }
+tr:hover button.rename-button, button.rename-button:focus-visible { opacity: 1; }
+form.rename { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; white-space: nowrap; }
+form.rename input { width: 22ch; }
+form.rename button { padding: 3px 10px; }

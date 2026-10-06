@@ -1134,3 +1134,77 @@ fn an_open_fence_can_be_given_more_time_from_now_or_kept_open_until_closed() {
         ))
         .is_err());
 }
+
+#[test]
+fn a_fence_can_be_renamed_open_waiting_or_closed() {
+    let mut model = drones(Profile::Gold);
+    let (lon, lat) = at(-300.0, 300.0);
+    let circle = serde_json::json!({ "lat": lat, "lon": lon, "radius_m": 30.0 });
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({ "after_minutes": 10 }),
+    ] {
+        let mut payload = serde_json::json!({ "circle": circle, "name": "Old" });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        model
+            .apply_intent(&Intent {
+                agent: None,
+                ..intent(&model, 1, codes::GEOFENCE_OPEN, payload)
+            })
+            .unwrap();
+    }
+    run(&mut model, 1, 1);
+    let g = model.overlays()["geofences"].clone();
+    let open = g["fences"][0]["id"].as_u64().unwrap();
+    let waiting = g["scheduled"][0]["id"].as_u64().unwrap();
+    let rename = |model: &Drones, id: u64, name: &str| {
+        intent(
+            model,
+            1,
+            codes::GEOFENCE_RENAME,
+            serde_json::json!({ "id": id, "name": name }),
+        )
+    };
+    model
+        .apply_intent(&rename(&model, open, "  Stadium  "))
+        .unwrap();
+    model
+        .apply_intent(&rename(&model, waiting, "Later"))
+        .unwrap();
+    let reports = run(&mut model, 2, 1);
+    let g = model.overlays()["geofences"].clone();
+    assert_eq!(g["fences"][0]["name"], "Stadium", "trimmed");
+    assert_eq!(g["scheduled"][0]["name"], "Later");
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "rename"));
+    // Renaming changes no shape, so nothing replans.
+    assert_eq!(geofences_in(&model.overlays()).0, 1);
+
+    // Closed, then renamed: it reopens under the new name. Empty clears it.
+    let close = intent(
+        &model,
+        1,
+        codes::GEOFENCE_CLOSE,
+        serde_json::json!({ "id": open }),
+    );
+    model.apply_intent(&close).unwrap();
+    run(&mut model, 3, 1);
+    model.apply_intent(&rename(&model, open, "")).unwrap();
+    run(&mut model, 4, 1);
+    let previous = &model.overlays()["geofences"]["previous"][0];
+    assert_eq!(previous["id"], open);
+    assert!(previous.get("name").is_none(), "{previous}");
+
+    assert!(model.apply_intent(&rename(&model, 99, "x")).is_err());
+    let nameless = intent(
+        &model,
+        1,
+        codes::GEOFENCE_RENAME,
+        serde_json::json!({ "id": open }),
+    );
+    assert!(model.apply_intent(&nameless).is_err());
+}

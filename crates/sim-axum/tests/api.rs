@@ -1100,6 +1100,28 @@ async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
     let (status, _, _) = call(&h, post("/api/v1/geofences", json!({ "square": 1 }))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
+    // Renamed.
+    let rename = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/v1/geofences/{id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Regent's Park" }).to_string()))
+        .unwrap();
+    let (status, _, text) = call(&h, rename).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"][0]["name"], "Regent's Park");
+    let missing = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/geofences/999")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "x" }).to_string()))
+        .unwrap();
+    assert_eq!(call(&h, missing).await.0, StatusCode::NOT_FOUND);
+
     // Kept open until closed instead of 30 minutes.
     let (status, _, text) = call(
         &h,

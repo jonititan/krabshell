@@ -701,6 +701,7 @@ pub async fn state_overlays(
 const GEOFENCE_OPEN: u16 = 110;
 const GEOFENCE_CLOSE: u16 = 111;
 const GEOFENCE_EXTEND: u16 = 113;
+const GEOFENCE_RENAME: u16 = 114;
 
 #[derive(Serialize)]
 pub struct GeofencesBody {
@@ -880,6 +881,33 @@ pub async fn geofences_extend(
     let cell = fence_cell(&view, fence)?;
     let verb = sim_core::IntentVerb::Custom(GEOFENCE_EXTEND);
     let payload = serde_json::json!({ "id": id, "minutes": body.minutes });
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+#[derive(Deserialize)]
+pub struct RenameBody {
+    /// The new name; empty clears it.
+    pub name: String,
+}
+
+/// Rename a geofence, open, waiting to open or previously closed:
+/// `{"name": "..."}`. From the next tick.
+pub async fn geofences_rename(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(body): Json<RenameBody>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let g = &view.overlays["geofences"];
+    let fence = ["fences", "scheduled", "previous"]
+        .iter()
+        .filter_map(|k| g[*k].as_array())
+        .flatten()
+        .find(|f| f["id"].as_u64() == Some(id))
+        .ok_or_else(|| ApiError::not_found(format!("no geofence {id}")))?;
+    let cell = fence_cell(&view, fence)?;
+    let verb = sim_core::IntentVerb::Custom(GEOFENCE_RENAME);
+    let payload = serde_json::json!({ "id": id, "name": body.name });
     submit_intent(&state, Intent::operator(cell, verb, payload)).await
 }
 

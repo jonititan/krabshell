@@ -98,7 +98,10 @@ pub fn router(state: AppState) -> Router {
             "/geofences",
             get(routes::api::geofences_list).post(routes::api::geofences_open),
         )
-        .route("/geofences/{id}", delete(routes::api::geofences_close))
+        .route(
+            "/geofences/{id}",
+            delete(routes::api::geofences_close).patch(routes::api::geofences_rename),
+        )
         .route(
             "/geofences/{id}/extend",
             post(routes::api::geofences_extend),
