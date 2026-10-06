@@ -1225,10 +1225,24 @@ impl World {
             .get("minutes")
             .and_then(serde_json::Value::as_f64)
             .filter(|m| *m > 0.0 && m.is_finite());
+        // Who asked, for the log: "dashboard", say. ATM's and ground
+        // stations' names are their own.
+        let source = p
+            .get("source")
+            .and_then(|v| v.as_str())
+            .filter(|s| {
+                !s.is_empty()
+                    && s.len() <= 24
+                    && *s != "atm"
+                    && *s != GCS_SOURCE
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            })
+            .unwrap_or("intent");
         let fence = Fence {
             id: self.airspace.take_id(),
             shape,
-            source: "intent".into(),
+            source: source.into(),
             opened_tick: 0,
             closes_tick: None,
         };

@@ -13,7 +13,7 @@ pub mod runlog;
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use sim_engine::{DriverHandle, ScenarioStore};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -93,6 +93,11 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(routes::api::metrics))
         .route("/reports", get(routes::api::reports))
         .route("/cells/lookup", get(routes::api::cells_lookup))
+        .route(
+            "/geofences",
+            get(routes::api::geofences_list).post(routes::api::geofences_open),
+        )
+        .route("/geofences/{id}", delete(routes::api::geofences_close))
         .route("/ws", get(routes::ws::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Geofences &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Geofences</h1>
+<p class="lede">
+  Keep-out zones at every altitude. Air traffic management opens and closes
+  them at random, ground stations upload them as a fence plan, and you can
+  draw them here. The drones the simulation flies are rerouted round each one
+  by MAVLink; a drone found inside one in the air is a breach.
+</p>
+
+{% include "fragments/control.html" %}
+
+<div id="fence-unavailable" class="banner warn" hidden>
+  This scenario's model has no geofences. Load a drones scenario to use them.
+</div>
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Airspace</h2>
+    <div class="map-controls">
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-entities" type="checkbox" checked> Drones</label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+
+  <div class="fence-tools" role="toolbar" aria-label="Map tool">
+    <div class="segmented">
+      <button type="button" data-tool="select" aria-pressed="true">Select</button>
+      <button type="button" data-tool="circle" aria-pressed="false">Draw circle</button>
+      <button type="button" data-tool="polygon" aria-pressed="false">Draw polygon</button>
+    </div>
+    <p id="fence-hint" class="dim small">Click a fence to pick it out in the list. Drag to pan, scroll to zoom.</p>
+  </div>
+
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" aria-label="Geofences over the occupancy map"></canvas>
+    <div id="map-legend" class="legend"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map and the fence list need JavaScript.</p></noscript>
+  </div>
+
+  <form id="fence-draft" class="draft" hidden>
+    <h3 id="draft-title">New fence</h3>
+    <div class="row">
+      <label id="draft-radius-field">Radius, m
+        <input id="draft-radius" type="text" inputmode="decimal" size="8" autocomplete="off">
+      </label>
+      <label>Closes after, minutes
+        <input id="draft-minutes" type="text" inputmode="decimal" size="8" placeholder="until closed" autocomplete="off">
+      </label>
+      <p id="draft-summary" class="dim small mono"></p>
+    </div>
+    <div id="draft-error" class="banner bad" hidden></div>
+    <div class="row">
+      <button id="draft-open" type="submit" class="primary">Open fence</button>
+      <button id="draft-undo" type="button">Undo corner</button>
+      <button id="draft-cancel" type="button" class="ghost">Cancel</button>
+    </div>
+  </form>
+
+  <ul class="map-key" aria-label="Map key">
+    <li><span class="swatch fence" aria-hidden="true"></span>Geofence, with its number</li>
+    <li><span class="swatch fence picked" aria-hidden="true"></span>Picked out in the list</li>
+    <li><span class="swatch draft" aria-hidden="true"></span>Fence being drawn</li>
+    <li>
+      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-drone" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
+      Drone
+    </li>
+  </ul>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Open fences</h2>
+    <p id="fence-meta" class="dim small"></p>
+  </div>
+  <div id="fence-flash" class="banner" hidden></div>
+  <div class="table-scroll">
+    <table class="grid" id="fence-table">
+      <thead>
+        <tr>
+          <th>Fence</th><th>Shape</th><th>Opened by</th><th>Opened</th>
+          <th>Closes</th><th>Breaches</th><th><span class="visually-hidden">Close</span></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="fence-empty" class="dim">No fences open.</p>
+</section>
+
+<section class="panel">
+  <h2>Recent activity</h2>
+  <p class="dim small">Fences opening and closing, breaches, and the reroutes the operator sent, newest first, from the run's latest reports.</p>
+  <div class="table-scroll">
+    <table class="grid" id="fence-events">
+      <thead><tr><th>Sim time</th><th>Event</th><th>Fence</th><th>Detail</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="events-empty" class="dim">Nothing yet.</p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/map.js" defer></script>
+<script src="/assets/geofences.js" defer></script>
+{% endblock %}

@@ -29,6 +29,7 @@ use crate::AppState;
 /// cannot drift from the server that serves it.
 const APP_CSS: &str = include_str!("../../../sim-dashboard/assets/app.css");
 const MAP_JS: &str = include_str!("../../../sim-dashboard/assets/map.js");
+const GEOFENCES_JS: &str = include_str!("../../../sim-dashboard/assets/geofences.js");
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
 
@@ -38,6 +39,10 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/logout", post(logout))
         .route("/assets/app.css", get(|| asset(APP_CSS, "text/css")))
         .route("/assets/map.js", get(|| asset(MAP_JS, "text/javascript")))
+        .route(
+            "/assets/geofences.js",
+            get(|| asset(GEOFENCES_JS, "text/javascript")),
+        )
         .route("/assets/live.js", get(|| asset(LIVE_JS, "text/javascript")))
         .route(
             "/assets/htmx.min.js",
@@ -49,6 +54,7 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/run", get(run_page))
         .route("/scenarios", get(scenarios_page))
         .route("/state", get(state_page))
+        .route("/geofences", get(geofences_page))
         .route("/intents", get(intents_page))
         .route("/io", get(io_page))
         .route("/fragments/control", get(control_fragment))
@@ -308,6 +314,14 @@ struct StateTemplate {
     basemaps: &'static [Basemap],
 }
 
+#[derive(Template)]
+#[template(path = "geofences.html")]
+struct GeofencesTemplate {
+    nav: &'static str,
+    control: ControlView,
+    basemaps: &'static [Basemap],
+}
+
 /// A raster tile layer the map can draw under the cells.
 ///
 /// Tiles are fetched by the operator's browser straight from the provider, so
@@ -483,6 +497,14 @@ async fn state_page(State(state): State<AppState>, Query(query): Query<CellQuery
         cell: cell_view(&view, query.cell.as_deref()),
         view_resolution: view.config.grid.view_resolution.to_string(),
         resolution: view.meta.resolution.to_string(),
+        basemaps: BASEMAPS,
+    })
+}
+
+async fn geofences_page(State(state): State<AppState>) -> Response {
+    render(GeofencesTemplate {
+        nav: "geofences",
+        control: ControlView::build(&state, None),
         basemaps: BASEMAPS,
     })
 }

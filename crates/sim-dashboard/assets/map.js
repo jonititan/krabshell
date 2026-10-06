@@ -5,6 +5,11 @@
 // projects, draws, optionally lays a raster basemap underneath, and turns a
 // click into the display cell to inspect.
 //
+// Open geofences (`/api/v1/geofences`) are drawn over the cells. Each poll's
+// body goes out as a `krabshell:geofences` event, and `window.krabshellMap`
+// lets a page hand clicks to a tool of its own (the Geofences page draws
+// new fences with one) instead of the cell inspector.
+//
 // Projection is Web Mercator, because that is what every XYZ tile server
 // renders; cells and tiles only line up if both use it. It does not wrap the
 // antimeridian and clips at ±85°, both fine for an operator view.
@@ -46,6 +51,13 @@
   let hover = null;
   let selected = null;    // { cell, lon, lat }: the inspected cell and where it was picked
   let inFlight = false;
+
+  // Geofences open now, the one picked out, and a page's tool, if any: an
+  // object with optional click(lon, lat) -> handled, move(lon, lat) and
+  // draw(ctx, project, style).
+  let fences = [];
+  let fenceSelected = null;
+  let tool = null;
 
   // Individual things drawn over the occupancy cells: drones, intruders and
   // points of interest from /state/entities, and recent sightings from /reports.
@@ -343,9 +355,13 @@
       ctx.setLineDash([]);
     }
 
+    drawFences(style);
+
     if (!entitiesToggle || entitiesToggle.checked) drawEntities(style, ink);
 
-    if (hover) {
+    if (tool && tool.draw) tool.draw(ctx, project, style);
+
+    if (hover && !tool) {
       const label = `${hover.cell} · ${hover.count} agent${hover.count === 1 ? '' : 's'}`;
       ctx.font = '12px ui-monospace, monospace';
       const width = ctx.measureText(label).width + 12;
@@ -360,6 +376,130 @@
       ctx.stroke();
       ctx.fillStyle = ink;
       ctx.fillText(label, x + 6, y + 15);
+    }
+  }
+
+  // ----------------------------------------------------------- geofences
+
+  // A circle on the ground as a ring of [lon, lat], for drawing.
+  function circleRing(lon, lat, radiusM, sides = 64) {
+    const k = 180 / Math.PI / 6_371_000;
+    const ring = [];
+    for (let i = 0; i < sides; i++) {
+      const a = (i / sides) * Math.PI * 2;
+      ring.push([
+        lon + (Math.sin(a) * radiusM * k) / Math.cos((lat * Math.PI) / 180),
+        lat + Math.cos(a) * radiusM * k,
+      ]);
+    }
+    return ring;
+  }
+
+  function fenceRing(f) {
+    if (f.shape === 'circle') return circleRing(f.lon_e7 * 1e-7, f.lat_e7 * 1e-7, f.radius_m);
+    return (f.points || []).map(([lat, lon]) => [lon * 1e-7, lat * 1e-7]);
+  }
+
+  // Diagonal hatching in the fence colour, so a fence reads as a fence over
+  // any cell shading or basemap, red cells included.
+  let hatch = null;
+  function hatching(colour) {
+    if (hatch && hatch.colour === colour) return hatch.pattern;
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 10;
+    const t = tile.getContext('2d');
+    t.strokeStyle = colour;
+    t.lineWidth = 2;
+    t.beginPath();
+    t.moveTo(-2, 12);
+    t.lineTo(12, -2);
+    t.moveTo(8, 12);
+    t.lineTo(12, 8);
+    t.moveTo(-2, 2);
+    t.lineTo(2, -2);
+    t.stroke();
+    hatch = { colour, pattern: ctx.createPattern(tile, 'repeat') };
+    return hatch.pattern;
+  }
+
+  function drawFences(style) {
+    if (fences.length === 0) return;
+    const bad = style.getPropertyValue('--bad').trim() || '#a4232b';
+    const accent = style.getPropertyValue('--accent').trim() || '#2b6cb0';
+    const panel = style.getPropertyValue('--panel').trim() || '#fff';
+    const ink = style.getPropertyValue('--ink').trim() || '#000';
+    const pxPerKm = camera.scale / 40_075;
+    for (const f of fences) {
+      const ring = fenceRing(f);
+      if (ring.length < 3) continue;
+      const picked = fenceSelected === f.id;
+      trace(ring);
+      ctx.fillStyle = panel;
+      ctx.globalAlpha = 0.35;
+      ctx.fill();
+      ctx.fillStyle = hatching(bad);
+      ctx.globalAlpha = picked ? 0.9 : 0.6;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // A light halo under the outline keeps it clear of what is beneath.
+      ctx.strokeStyle = panel;
+      ctx.lineWidth = picked ? 6 : 4.5;
+      ctx.stroke();
+      ctx.strokeStyle = picked ? accent : bad;
+      ctx.lineWidth = picked ? 3 : 2;
+      ctx.stroke();
+      // Its number, once it is big enough on screen to carry one.
+      if (pxPerKm > 20 || picked) {
+        let x = 0, y = 0;
+        for (const [lon, lat] of ring) {
+          const [px, py] = project(lon, lat);
+          x += px;
+          y += py;
+        }
+        x /= ring.length;
+        y /= ring.length;
+        const label = `#${f.id}`;
+        ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = panel;
+        ctx.strokeText(label, x - ctx.measureText(label).width / 2, y + 4);
+        ctx.fillStyle = ink;
+        ctx.fillText(label, x - ctx.measureText(label).width / 2, y + 4);
+      }
+    }
+  }
+
+  function insideRing(ring, x, y) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = project(ring[i][0], ring[i][1]);
+      const [xj, yj] = project(ring[j][0], ring[j][1]);
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  // The topmost fence under a screen point.
+  function fenceAt(lon, lat) {
+    if (!camera) return null;
+    const [x, y] = project(lon, lat);
+    for (let i = fences.length - 1; i >= 0; i--) {
+      if (insideRing(fenceRing(fences[i]), x, y)) return fences[i];
+    }
+    return null;
+  }
+
+  async function refreshFences() {
+    try {
+      const response = await fetch('/api/v1/geofences');
+      if (!response.ok) return;
+      const body = await response.json();
+      fences = body.fences || [];
+      if (fenceSelected !== null && !fences.some((f) => f.id === fenceSelected)) fenceSelected = null;
+      document.dispatchEvent(new CustomEvent('krabshell:geofences', { detail: body }));
+      if (camera) draw();
+    } catch {
+      // The map works without the fences.
     }
   }
 
@@ -672,6 +812,14 @@
       return;
     }
     if (!camera) return;
+    if (tool) {
+      if (tool.move) {
+        const [lon, lat] = unproject(event.offsetX, event.offsetY);
+        tool.move(lon, lat);
+        draw();
+      }
+      return;
+    }
     const found = cellAt(event.offsetX, event.offsetY);
     const next = found ? { ...found, x: event.offsetX, y: event.offsetY } : null;
     const changed = (next && next.cell) !== (hover && hover.cell);
@@ -687,6 +835,10 @@
     // Inspect exactly the polygon that was clicked: the cell at the display
     // resolution, whose count is what the map is showing.
     const [lon, lat] = unproject(event.offsetX, event.offsetY);
+    if (tool && tool.click && tool.click(lon, lat, event)) {
+      draw();
+      return;
+    }
     const found = cellAt(event.offsetX, event.offsetY);
     if (found) inspect(found.cell, lon, lat, found.boundary);
     else inspectAt(lon, lat);
@@ -750,12 +902,65 @@
 
   if (entitiesToggle) entitiesToggle.addEventListener('change', () => { refreshEntities(); draw(); });
 
+  // For pages that build on the map.
+  window.krabshellMap = {
+    setTool(next) {
+      tool = next;
+      hover = null;
+      canvas.classList.toggle('drawing', Boolean(next && next.drawing));
+      draw();
+    },
+    redraw: scheduleDraw,
+    refreshFences,
+    fenceAt,
+    circleRing,
+    // Screen distance in pixels between two [lon, lat] points.
+    pixels(a, b) {
+      if (!camera) return Infinity;
+      const [ax, ay] = project(a[0], a[1]);
+      const [bx, by] = project(b[0], b[1]);
+      return Math.hypot(ax - bx, ay - by);
+    },
+    selectFence(id) {
+      fenceSelected = id;
+      draw();
+    },
+    // Centre on a fence and zoom to show it whole.
+    showFence(id) {
+      const f = fences.find((x) => x.id === id);
+      if (!f) return;
+      fenceSelected = id;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const [lon, lat] of fenceRing(f)) {
+        const [x, y] = toWorld(lon, lat);
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      const { w, h } = cssSize();
+      const span = Math.max(maxX - minX, maxY - minY, 1e-9);
+      camera = {
+        cx: (minX + maxX) / 2,
+        cy: (minY + maxY) / 2,
+        scale: Math.min(Math.min(w, h) / span / 3, TILE * 2 ** 24),
+      };
+      draw();
+    },
+  };
+
+  window.addEventListener('keydown', (event) => {
+    if (tool && tool.key && tool.key(event)) draw();
+  });
+
   refresh();
   refreshEntities();
+  refreshFences();
   // Occupancy once a second; drones several times a second, so a correction
   // is never more than a quarter of a second of prediction.
   setInterval(() => {
     if (!follow || follow.checked) refresh();
+    // Fences keep coming whether or not the map follows the run, so the
+    // list beside it stays true.
+    refreshFences();
   }, 1000);
   let entitiesInFlight = false;
   setInterval(async () => {

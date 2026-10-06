@@ -65,6 +65,18 @@ fn scenario(profile: Profile, walkers: i64) -> ScenarioBlob {
 }
 
 fn harness(profile: Profile, walkers: i64) -> Harness {
+    harness_for(scenario(profile, walkers))
+}
+
+/// A harness running a scenario pack from `scenarios/`.
+fn pack_harness(name: &str) -> Harness {
+    let pack = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scenarios")
+        .join(name);
+    harness_for(sim_engine::read_pack(&pack).unwrap())
+}
+
+fn harness_for(blob: ScenarioBlob) -> Harness {
     let dir = std::env::temp_dir().join(format!(
         "krabshell-api-{}-{}",
         std::process::id(),
@@ -75,7 +87,7 @@ fn harness(profile: Profile, walkers: i64) -> Harness {
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let driver = Driver::spawn(ModelRegistry::with_builtins(), scenario(profile, walkers)).unwrap();
+    let driver = Driver::spawn(ModelRegistry::with_builtins(), blob).unwrap();
     let state = AppState::new(
         driver.handle(),
         ScenarioStore::new(&dir),
@@ -113,6 +125,15 @@ fn post(path: &str, body: Value) -> Request<Body> {
         .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn delete(path: &str) -> Request<Body> {
+    Request::builder()
+        .method("DELETE")
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::empty())
         .unwrap()
 }
 
@@ -1004,4 +1025,88 @@ async fn the_state_page_offers_basemaps_with_none_as_the_default() {
     assert!(html.contains("id=\"map-basemap\""));
     assert!(html.contains("<option value=\"\">None</option>"));
     assert!(html.contains("tile.openstreetmap.org"));
+}
+
+// ------------------------------------------------------------ geofences
+
+#[tokio::test]
+async fn a_model_without_geofences_lists_none() {
+    let h = harness(Profile::Fast, 10);
+    let (status, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["fences"], json!([]));
+    assert_eq!(body["margin_m"], 0.0);
+}
+
+#[tokio::test]
+async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
+    let h = pack_harness("london-patrol");
+    let (status, page_body, _) = call(&h, page("/geofences")).await;
+    assert_eq!(status, StatusCode::OK);
+    let _ = page_body;
+    let (_, _, html) = call(&h, page("/geofences")).await;
+    assert!(html.contains("Open fences") && html.contains("/assets/geofences.js"));
+    let (status, _, js) = call(&h, page("/assets/geofences.js")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(js.contains("krabshell:geofences"));
+
+    // Over Regent's Park, clear of every pad. The world is paused, so it
+    // queues and opens on the next step.
+    let circle =
+        json!({ "circle": { "lat": 51.5313, "lon": -0.1527, "radius_m": 150 }, "minutes": 30 });
+    let (status, body, text) = call(&h, post("/api/v1/geofences", circle)).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(body["status"], "queued");
+    let (status, _, _) = call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    let fences = body["fences"].as_array().unwrap();
+    assert_eq!(fences.len(), 1, "{body}");
+    assert_eq!(fences[0]["source"], "dashboard");
+    assert_eq!(fences[0]["shape"], "circle");
+    assert_eq!(fences[0]["breaches"], 0);
+    assert!(fences[0]["closes_tick"].as_u64().is_some());
+    assert_eq!(body["margin_m"], 30.0);
+    assert_eq!(body["recent"][0]["kind"], "geofence");
+    let id = fences[0]["id"].as_u64().unwrap();
+
+    // One over HAWK-1's pad is refused, with the reason. Paused, it is only
+    // queued; the refusal comes when the world steps, and the list says so.
+    let pad = json!({ "polygon": [[-0.1285, 51.5035], [-0.1275, 51.5035], [-0.1275, 51.5045], [-0.1285, 51.5045]] });
+    let (status, body, _) = call(&h, post("/api/v1/geofences", pad.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "queued");
+    let queued = body["id"].clone();
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    let refused = body["refused"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == queued)
+        .expect("the refusal is listed");
+    assert!(
+        refused["detail"].as_str().unwrap().contains("pad"),
+        "{refused}"
+    );
+    assert_eq!(body["fences"].as_array().unwrap().len(), 1);
+    // Running, the refusal comes straight back.
+    call(&h, post("/api/v1/run/start", json!({ "target_tps": 50 }))).await;
+    let (status, body, _) = call(&h, post("/api/v1/geofences", pad)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("pad"), "{body}");
+    call(&h, post("/api/v1/run/pause", json!({}))).await;
+    let (status, _, _) = call(&h, post("/api/v1/geofences", json!({ "square": 1 }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _, text) = call(&h, delete(&format!("/api/v1/geofences/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"], json!([]));
+    assert_eq!(body["recent"][0]["detail"]["action"], "close");
+
+    let (status, _, _) = call(&h, delete("/api/v1/geofences/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

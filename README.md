@@ -174,6 +174,14 @@ simulated hours as fast as it can and writes the same folder
 cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 8
 ```
 
+The dashboard's **Geofences** tab shows them: every open fence on the map
+(and in a list with its shape, area, who opened it, when it closes and how
+often it has been breached), and the latest opens, closes, breaches and
+reroutes. Draw a circle (centre, then edge) or a polygon (corners, then click
+the first again or press Enter) to open one, optionally for a set number of
+minutes, and close any fence from the list. The State page's map draws the
+fences too.
+
 ### Drones: MAVLink and CoT
 
 Step by step, with network layouts and troubleshooting:
@@ -322,6 +330,8 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/metrics` | Prometheus text. |
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
+| GET POST | `/geofences` | Open geofences, with breach counts and recent fence activity; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"minutes"`). |
+| DELETE | `/geofences/{id}` | Close a geofence, whoever opened it. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 
 Errors are `application/problem+json` with a stable `code`.
