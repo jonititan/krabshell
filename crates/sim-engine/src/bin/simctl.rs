@@ -68,8 +68,8 @@ enum Command {
         ticks: u64,
     },
     /// Fly a drones scenario for some simulated hours as fast as it goes and
-    /// write its run log: flight heatmap, deliveries, and a histogram of time
-    /// from order to delivery.
+    /// write its run log: flight heatmap, deliveries, a histogram of time
+    /// from order to delivery, and one of battery left at each landing.
     #[command(alias = "heatmap")]
     Fly {
         scenario: String,
@@ -183,9 +183,10 @@ fn main() -> anyhow::Result<()> {
                 log.observe(&view);
                 if tick >= next_report {
                     println!(
-                        "  {:>3.0}%  {} deliveries so far",
+                        "  {:>3.0}%  {} deliveries, {} crashes so far",
                         tick as f64 * 100.0 / total as f64,
-                        log.deliveries.len()
+                        log.deliveries.len(),
+                        log.landings.crashes()
                     );
                     next_report += total / 10;
                 }
@@ -211,6 +212,13 @@ fn main() -> anyhow::Result<()> {
                     s.median_s / 60.0,
                     s.p90_s / 60.0,
                     s.max_s / 60.0
+                );
+            }
+            if !log.landings.is_empty() {
+                println!(
+                    "flights:       {} ({} crashed)",
+                    log.landings.len(),
+                    log.landings.crashes()
                 );
             }
             if log.missed_reports > 0 {

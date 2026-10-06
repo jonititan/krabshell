@@ -428,3 +428,174 @@ fn a_checkpoint_mid_delivery_restores_the_queue_and_the_courier() {
     assert_eq!(hash(&original), hash(&restored));
     assert_eq!(a, b);
 }
+
+/// One courier and a spare at a hub whose batteries cannot finish a trip:
+/// 40 s of flight, no reserve, the nearest address a minute away.
+fn crashing_blob() -> ScenarioBlob {
+    let mut blob = courier_blob();
+    blob.agents.push(SeedAgent {
+        id: Some(6),
+        kind: "drone".into(),
+        cell: None,
+        lon: Some(LON - 0.0012),
+        lat: Some(LAT),
+        state: serde_json::json!({ "sysid": 6, "callsign": "HUB-SPARE", "spare": "HUB" }),
+    });
+    for (key, value) in [
+        ("battery_drain_pct_s", 2.5),
+        ("battery_reserve_pct", 0.0),
+        ("launch_battery_pct", 0.0),
+    ] {
+        blob.config.model.insert(key.into(), Param::Float(value));
+    }
+    blob
+}
+
+#[test]
+fn a_courier_that_runs_flat_crashes_and_the_spare_then_new_drones_replace_it() {
+    let blob = crashing_blob();
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    let drones_before = model
+        .world()
+        .records()
+        .iter()
+        .filter(|r| r.saved.drone.is_some())
+        .count();
+
+    let reports = run(&mut model, 1, 6_000);
+    let all_crashes: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Crash)
+        .collect();
+    // HAWK-1's patrol runs flat too; follow the hub's couriers.
+    let crashes: Vec<&Report> = all_crashes
+        .iter()
+        .copied()
+        .filter(|r| r.detail["depot"] == "HUB")
+        .collect();
+    assert!(crashes.len() >= 3, "{} crashes", crashes.len());
+    assert!(
+        !reports.iter().any(|r| r.kind == ReportKind::Delivery),
+        "nothing gets that far"
+    );
+
+    // The courier first, its spare next, then a new drone for each crash.
+    assert_eq!(crashes[0].observer, Some(5));
+    assert_eq!(crashes[0].detail["replaced_by"]["id"], 6);
+    assert_eq!(crashes[0].detail["replaced_by"]["spare"], true);
+    assert_eq!(crashes[1].observer, Some(6));
+    // Never an id or a system id anything has had before.
+    let mut ids: BTreeSet<u64> = model.world().records().iter().map(|r| r.id).collect();
+    ids.extend([1, 5, 6]);
+    let mut sysids = BTreeSet::from([1, 2, 5, 6]);
+    for crash in all_crashes
+        .iter()
+        .filter(|c| c.detail["replaced_by"]["spare"] == false)
+    {
+        let by = &crash.detail["replaced_by"];
+        assert!(
+            sysids.insert(by["sysid"].as_u64().unwrap()),
+            "{by} reuses a sysid"
+        );
+    }
+    let new_ids: Vec<u64> = all_crashes
+        .iter()
+        .filter(|c| c.detail["replaced_by"]["spare"] == false)
+        .map(|c| c.detail["replaced_by"]["id"].as_u64().unwrap())
+        .collect();
+    assert!(new_ids.windows(2).all(|w| w[0] < w[1]), "{new_ids:?}");
+    ids.extend(new_ids.iter().copied());
+    for (i, crash) in crashes.iter().enumerate().skip(1) {
+        let by = &crash.detail["replaced_by"];
+        assert_eq!(by["spare"], false);
+        let id = by["id"].as_u64().unwrap();
+        assert!(by["callsign"].as_str().unwrap().starts_with("HUB-SPARE-"));
+        if let Some(next) = crashes.get(i + 1) {
+            assert_eq!(
+                next.observer,
+                Some(id),
+                "the new drone flies the next order"
+            );
+        }
+        // Every crash put the order it carried back in the queue.
+        assert!(crash.detail["requeued_order"].as_u64().is_some());
+    }
+    // Wrecks leave. The spare was already in the fleet, so calling it up
+    // leaves one drone fewer; every crash after that brings a new one.
+    let live: Vec<&Record> = model
+        .world()
+        .records()
+        .iter()
+        .filter(|r| r.saved.drone.is_some())
+        .collect();
+    assert_eq!(live.len(), drones_before - 1);
+    assert!(model.world().record(5).is_none() && model.world().record(6).is_none());
+    // Each wreck lies where it fell, short of the address and away from home.
+    for crash in &crashes {
+        assert!(crash.alt_mm <= 1_000, "{} mm", crash.alt_mm);
+    }
+    // No order is lost: every one placed is queued or on board.
+    let dispatch = model.world().dispatch();
+    let carried = live
+        .iter()
+        .filter(|r| r.saved.courier.as_ref().is_some_and(|c| c.order.is_some()))
+        .count();
+    assert_eq!(dispatch.placed as usize, dispatch.queued() + carried);
+}
+
+#[test]
+fn every_flight_ends_in_a_landing_report_with_its_battery() {
+    let mut blob = courier_blob();
+    blob.config
+        .model
+        .insert("battery_drain_pct_s".into(), Param::Float(0.1));
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    let reports = run(&mut model, 1, 9_000);
+    let landings: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Landing && r.observer == Some(5))
+        .collect();
+    let deliveries = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .count();
+    // One flight per delivery, give or take the one in the air at the end.
+    assert!(
+        landings.len() + 1 >= deliveries && landings.len() <= deliveries + 1,
+        "{} landings, {deliveries} deliveries",
+        landings.len()
+    );
+    // No charger here, so each flight lands with less than the last.
+    let mut last = 100.0;
+    for l in &landings {
+        let pct = l.detail["battery_pct"].as_f64().unwrap();
+        assert!(pct > 0.0 && pct < last, "{pct} % after {last} %");
+        assert_eq!(l.detail["depot"], "HUB");
+        last = pct;
+    }
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash));
+}
+
+#[test]
+fn a_checkpoint_after_a_crash_replays_the_replacements_exactly() {
+    let blob = crashing_blob();
+    let mut original = drones(Profile::Gold);
+    original.reset(&blob).unwrap();
+    let before = run(&mut original, 1, 2_500);
+    assert!(before.iter().any(|r| r.kind == ReportKind::Crash));
+
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    let mut restored = drones(Profile::Gold);
+    restored.reset(&blob).unwrap();
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+
+    let a = run(&mut original, 2_501, 4_000);
+    let b = run(&mut restored, 2_501, 4_000);
+    assert!(a.iter().any(|r| r.kind == ReportKind::Crash));
+    assert_eq!(a, b);
+    assert_eq!(hash(&original), hash(&restored));
+}

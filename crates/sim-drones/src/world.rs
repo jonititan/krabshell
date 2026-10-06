@@ -236,6 +236,8 @@ pub struct World {
     /// The agents a fresh run starts with, built once from the pack.
     roster: Vec<Member>,
     roster_next_id: AgentId,
+    roster_spares: Vec<Vec<AgentId>>,
+    roster_next_sysid: u16,
     pack_seed: u64,
 
     pub(crate) grid: SparseA5Grid<AgentId>,
@@ -271,6 +273,17 @@ pub struct World {
     arrivals: Vec<Member>,
     retiring: BTreeSet<AgentId>,
 
+    /// Spares standing by at each depot, lowest id first, until one is
+    /// called up to replace a courier that crashed.
+    spares: Vec<Vec<AgentId>>,
+    /// The MAVLink system id the next new drone gets. It only goes up, so a
+    /// crashed drone's id is never handed out again.
+    next_sysid: u16,
+    /// Courier duties waiting for the spare that takes each over.
+    pub(crate) call_ups: BTreeMap<AgentId, Courier>,
+    /// New drones placed this step, to join the schedule on the next.
+    recruits: Vec<Member>,
+
     /// Grid cells a drone in a given cell could see into.
     caps: HashMap<GeoCell, Vec<A5Cell>>,
     scan_radius_m: f64,
@@ -304,6 +317,8 @@ impl World {
             root,
             roster: Vec::new(),
             roster_next_id: 1,
+            roster_spares: Vec::new(),
+            roster_next_sysid: 1,
             pack_seed: seed,
             grid: new_grid(resolution, root),
             dispatch: Dispatch::new(book.depots.len()),
@@ -328,6 +343,10 @@ impl World {
             scratch: BTreeMap::new(),
             arrivals: Vec::new(),
             retiring: BTreeSet::new(),
+            spares: Vec::new(),
+            next_sysid: 1,
+            call_ups: BTreeMap::new(),
+            recruits: Vec::new(),
             caps: HashMap::new(),
             scan_radius_m,
         };
@@ -343,10 +362,31 @@ impl World {
     fn enrol(&mut self, blob: &ScenarioBlob) -> anyhow::Result<()> {
         let mut sysids = BTreeSet::new();
         let mut ids = BTreeSet::new();
+        self.roster_spares = vec![Vec::new(); self.book.depots.len()];
         for seed in &blob.agents {
             let member = self.seed_member(seed, &mut sysids)?;
+            if let Some(depot) = seed.state.get("spare").and_then(|v| v.as_str()) {
+                let id = member.body().id;
+                let index = self.book.depot_index(depot).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "drone {id}: spare for depot '{depot}', which is not one of the address book's {:?}",
+                        self.book.depots
+                    )
+                })?;
+                match &member {
+                    Member::Drone(d) if d.courier.is_none() => {}
+                    _ => anyhow::bail!(
+                        "agent {id}: a spare must be a drone without a depot of its own"
+                    ),
+                }
+                self.roster_spares[usize::from(index)].push(id);
+            }
             self.admit(member, &mut ids)?;
         }
+        for spares in &mut self.roster_spares {
+            spares.sort_unstable();
+        }
+        self.roster_next_sysid = sysids.last().map_or(1, |s| u16::from(*s) + 1);
         let params = &blob.config.model;
         let origin = self.origin(blob)?;
         let count = |key: &str| params.get(key).and_then(Param::as_i64).unwrap_or(0).max(0) as u64;
@@ -485,6 +525,7 @@ impl World {
                     body,
                     drone,
                     courier,
+                    wrecked: false,
                 })
             }
             Kind::Intruder => {
@@ -745,6 +786,8 @@ impl World {
             ReportKind::Detection => "detection",
             ReportKind::Waypoint => "waypoint",
             ReportKind::Delivery => "delivery",
+            ReportKind::Landing => "landing",
+            ReportKind::Crash => "crash",
         };
         *self.report_counts.entry(kind).or_default() += 1;
         if let Some(sink) = self.sink.as_mut() {
@@ -772,6 +815,98 @@ impl World {
             });
     }
 
+    /// A drone crashed: put the order it was carrying back at the front of
+    /// its depot's queue, and bring in what replaces it. A courier's duty
+    /// goes to its depot's spare while one stands by; anything else (a
+    /// courier once the spares are gone, a spare, a drone of a ground
+    /// station's) is replaced by a new drone on the wreck's home pad, in the
+    /// same role. A new drone has an agent id and a MAVLink system id nothing
+    /// has had before. `None` once there are no system ids left.
+    pub(crate) fn replace(&mut self, wreck: &DroneAgent) -> Option<Replacement> {
+        let id = wreck.body.id;
+        if let Some(courier) = &wreck.courier {
+            if let Some(mut order) = courier.order.clone().filter(|_| !courier.delivered) {
+                order.dispatched_tick = None;
+                self.dispatch.queues[usize::from(courier.depot)].push_front(order);
+            }
+        }
+        // A crashed spare leaves the stand-by list; its replacement joins it.
+        let spare_for = self.spares.iter().position(|s| s.contains(&id));
+        if let Some(depot) = spare_for {
+            self.spares[depot].retain(|s| *s != id);
+        }
+
+        if let Some(courier) = &wreck.courier {
+            let depot = usize::from(courier.depot);
+            while !self.spares[depot].is_empty() {
+                let spare = self.spares[depot].remove(0);
+                let Some(drone) = self
+                    .record(spare)
+                    .filter(|_| !self.retiring(spare))
+                    .and_then(|r| Some((r.saved.drone.as_ref()?.sysid, r.saved.callsign.clone())))
+                else {
+                    continue;
+                };
+                self.call_ups.insert(
+                    spare,
+                    Courier {
+                        order: None,
+                        delivered: false,
+                        landed_tick: None,
+                        ..courier.clone()
+                    },
+                );
+                return Some(Replacement {
+                    id: spare,
+                    sysid: drone.0,
+                    callsign: drone.1,
+                    spare: true,
+                });
+            }
+        }
+
+        let sysid = u8::try_from(self.next_sysid)
+            .ok()
+            .filter(|s| *s <= HIGHEST_SYSID)?;
+        let new_id = self.next_id;
+        ordering(new_id).ok()?;
+        let home = wreck.drone.home;
+        let pose = Pose {
+            lat_e7: home.lat_e7,
+            lon_e7: home.lon_e7,
+            alt_mm: home.alt_mm,
+            ..Pose::default()
+        };
+        let mut body = self.body(new_id, Kind::Drone, pose).ok()?;
+        body.callsign = successor(&wreck.body.callsign, sysid);
+        self.next_sysid += 1;
+        self.next_id += 1;
+        let recruit = DroneAgent {
+            body,
+            drone: Drone::new(sysid, home, wreck.drone.cruise_cms),
+            courier: wreck.courier.clone().map(|c| Courier {
+                order: None,
+                delivered: false,
+                landed_tick: None,
+                ..c
+            }),
+            wrecked: false,
+        };
+        if let Some(depot) = spare_for {
+            self.spares[depot].push(new_id);
+        }
+        let replacement = Replacement {
+            id: new_id,
+            sysid,
+            callsign: recruit.body.callsign.clone(),
+            spare: false,
+        };
+        // On the board from this step, on the schedule from the next.
+        self.place(recruit.record());
+        self.recruits.push(Member::Drone(recruit));
+        Some(replacement)
+    }
+
     // -------------------------------------------------------- run control
 
     /// Clear everything a run changes, ready to populate a schedule.
@@ -786,6 +921,10 @@ impl World {
         self.tick = 0;
         self.pinned = None;
         self.next_id = self.roster_next_id;
+        self.spares = self.roster_spares.clone();
+        self.next_sysid = self.roster_next_sysid;
+        self.call_ups.clear();
+        self.recruits.clear();
         self.last_seen.clear();
         self.reports.clear();
         self.report_counts.clear();
@@ -1096,6 +1235,9 @@ impl World {
             "gold": self.gold,
             "last_seen": last_seen,
             "dispatch": self.dispatch,
+            "spares": self.spares,
+            "next_sysid": self.next_sysid,
+            "call_ups": self.call_ups.iter().collect::<Vec<_>>(),
         })
     }
 
@@ -1111,6 +1253,16 @@ impl World {
         }
         if let Some(dispatch) = fields.get("dispatch") {
             self.dispatch = serde_json::from_value(dispatch.clone())?;
+        }
+        if let Some(spares) = fields.get("spares") {
+            self.spares = serde_json::from_value(spares.clone())?;
+        }
+        if let Some(next) = fields.get("next_sysid").and_then(serde_json::Value::as_u64) {
+            self.next_sysid = self.next_sysid.max(next.min(u64::from(u16::MAX)) as u16);
+        }
+        if let Some(list) = fields.get("call_ups") {
+            let list: Vec<(AgentId, Courier)> = serde_json::from_value(list.clone())?;
+            self.call_ups = list.into_iter().collect();
         }
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
@@ -1169,8 +1321,13 @@ impl World {
         self.occupied_next.clear();
         self.reports.clear();
         self.clear_pending();
+        self.call_ups.clear();
+        self.recruits.clear();
         for member in &members {
             self.next_id = self.next_id.max(member.body().id + 1);
+            if let Member::Drone(d) = member {
+                self.next_sysid = self.next_sysid.max(u16::from(d.drone.sysid) + 1);
+            }
         }
         self.populate(schedule, members);
         Ok(())
@@ -1260,6 +1417,7 @@ impl State for World {
 
     fn before_step(&mut self, schedule: &mut Schedule) {
         self.tick = self.pinned.take().unwrap_or(self.tick + 1);
+        self.arrivals.append(&mut self.recruits);
         if self.arrivals.is_empty() {
             return;
         }
@@ -1279,6 +1437,31 @@ impl State for World {
     fn after_step(&mut self, _schedule: &mut Schedule) {
         self.commit();
         self.clear_pending();
+    }
+}
+
+/// What took over from a crashed drone.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Replacement {
+    pub(crate) id: AgentId,
+    pub(crate) sysid: u8,
+    pub(crate) callsign: String,
+    /// A spare that was standing by, rather than a new drone.
+    pub(crate) spare: bool,
+}
+
+/// A new drone's callsign: the wreck's, with its trailing number (if any)
+/// swapped for the new system id. `MEGA-7` is followed by `MEGA-43`,
+/// `MEGA-SPARE` by `MEGA-SPARE-44`.
+fn successor(callsign: &str, sysid: u8) -> String {
+    let stem = match callsign.rsplit_once('-') {
+        Some((stem, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => stem,
+        _ => callsign,
+    };
+    if stem.is_empty() {
+        format!("UAV-{sysid}")
+    } else {
+        format!("{stem}-{sysid}")
     }
 }
 

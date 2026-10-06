@@ -260,6 +260,11 @@ pub enum Event {
     Reached(u16),
     /// The battery hit the reserve and the drone started home on its own.
     LowBattery,
+    /// The drone touched down after flying.
+    Landed,
+    /// The battery ran flat in the air: the drone fell where it was and is
+    /// wrecked. Nothing else happens to it.
+    Crashed,
 }
 
 /// Per-run flight settings from the pack's params.
@@ -561,8 +566,31 @@ impl Drone {
         terrain: &Terrain,
         events: &mut Vec<Event>,
     ) {
+        let airborne = !self.grounded(pose, terrain);
+        if self.fly(pose, tuning, terrain, events) {
+            events.push(Event::Crashed);
+        } else if airborne && self.grounded(pose, terrain) {
+            events.push(Event::Landed);
+        }
+    }
+
+    /// One tick of battery and flight. True if the battery ran flat in the
+    /// air and the drone fell.
+    fn fly(
+        &mut self,
+        pose: &mut Pose,
+        tuning: &Tuning,
+        terrain: &Terrain,
+        events: &mut Vec<Event>,
+    ) -> bool {
         if !self.grounded(pose, terrain) {
             self.battery_ppm = self.battery_ppm.saturating_sub(tuning.drain_ppm_tick);
+            if tuning.drain_ppm_tick > 0 && self.battery_ppm == 0 {
+                pose.alt_mm = self.surface_mm(pose, terrain);
+                flight::hold(pose);
+                self.mode = Mode::Disarmed;
+                return true;
+            }
             if tuning.drain_ppm_tick > 0
                 && self.battery_ppm <= tuning.reserve_ppm
                 && !matches!(self.mode, Mode::Rtl | Mode::Land)
@@ -613,6 +641,7 @@ impl Drone {
             }
             Mode::Auto => self.run_mission(pose, limits, tuning, terrain, events),
         }
+        false
     }
 
     /// Descend onto whatever is below. True once on it.
@@ -897,7 +926,12 @@ mod tests {
         let events = fly(&mut drone, &mut pose, 600);
         assert_eq!(
             events,
-            vec![Event::Reached(0), Event::Reached(1), Event::Reached(2)]
+            vec![
+                Event::Reached(0),
+                Event::Reached(1),
+                Event::Reached(2),
+                Event::Landed
+            ]
         );
         assert_eq!(drone.mode, Mode::Disarmed);
         assert!(drone.grounded(&pose, &FLAT));
@@ -1207,6 +1241,58 @@ mod tests {
         }
         assert_eq!(drone.battery_ppm, 1_000_000);
         assert_eq!(drone.mode, Mode::Loiter);
+    }
+
+    #[test]
+    fn a_flat_battery_in_the_air_is_a_crash_where_the_drone_was() {
+        let mut pose = home();
+        pose.alt_mm = 40_000;
+        let (lat, lon) = north_of(&pose, 2_000.0);
+        // Far from home with no reserve left: the return home runs it flat.
+        let tuning = Tuning {
+            drain_ppm_tick: 1_000,
+            reserve_ppm: 100_000,
+            ..TUNING
+        };
+        pose.lat_e7 = lat;
+        pose.lon_e7 = lon;
+        let mut drone = Drone::new(1, home().point(), 1_000);
+        drone.mode = Mode::Loiter;
+        drone.battery_ppm = 150_000;
+        let mut events = Vec::new();
+        for _ in 0..1_000 {
+            drone.step(&mut pose, &tuning, &FLAT, &mut events);
+            if events.contains(&Event::Crashed) {
+                break;
+            }
+        }
+        assert_eq!(
+            events,
+            vec![Event::LowBattery, Event::Crashed],
+            "it never lands"
+        );
+        assert_eq!(drone.battery_ppm, 0);
+        assert_eq!(drone.mode, Mode::Disarmed);
+        assert_eq!(pose.alt_mm, 0, "on the ground");
+        assert!(flight::ground_distance_m(&pose.point(), &home().point()) > 1_000.0);
+    }
+
+    #[test]
+    fn a_landing_is_an_event_once_per_flight_and_never_without_one() {
+        let mut pose = home();
+        let mut drone = armed_drone(&pose);
+        drone
+            .command(NAV_TAKEOFF, [0.0; 7], &pose, &TUNING, &FLAT)
+            .unwrap();
+        let mut events = fly(&mut drone, &mut pose, 100);
+        drone
+            .command(NAV_LAND, [0.0; 7], &pose, &TUNING, &FLAT)
+            .unwrap();
+        events.extend(fly(&mut drone, &mut pose, 200));
+        assert_eq!(events, vec![Event::Landed]);
+        assert_eq!(drone.mode, Mode::Disarmed);
+        // Sitting on the pad is not landing again.
+        assert!(fly(&mut drone, &mut pose, 50).is_empty());
     }
 
     #[test]

@@ -20,8 +20,10 @@
 //! run to the wall clock — krabshell's gateways keep real-time protocols happy
 //! while the simulation runs as fast as it can.
 
+mod chart;
 pub mod deliveries;
 pub mod heatmap;
+pub mod landings;
 pub mod runlog;
 
 pub use sim_drones::{codes, dispatch, flight, mission, sensor, targets, terrain};

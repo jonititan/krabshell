@@ -24,6 +24,12 @@ pub enum ReportKind {
     /// `observer` delivered an order at the given position. `detail` carries
     /// the order and when it was placed, dispatched and delivered.
     Delivery,
+    /// `observer` touched down at the end of a flight. `detail.battery_pct`
+    /// is the charge it landed with.
+    Landing,
+    /// `observer` ran out of battery in the air and fell at the given
+    /// position. `detail` says what replaced it, if anything.
+    Crash,
 }
 
 /// One model-generated event.

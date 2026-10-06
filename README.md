@@ -124,7 +124,9 @@ another scenario starts a new one. It holds:
 | `heatmap.geojson` | Drone-seconds of flight per A5 cell of `heatmap_resolution`, as a styled choropleth (log-scale YlOrRd classes in simplestyle `fill`/`stroke`, legend in the collection's `properties`). geojson.io shows it as it is; QGIS can style on `class`. Time parked or disarmed is not flight. |
 | `deliveries.csv` | Every delivered order: depot, drone, address, ticks, and seconds waiting for a drone, flying, and in total. |
 | `delivery-times.csv`, `delivery-times.svg` | Histogram of time from order to delivery, in whole-minute bins, with mean, median, 90th percentile and slowest. |
-| `summary.json` | Totals, and any reports the logger missed. |
+| `landings.csv` | The end of every flight: drone, landed or crashed, and the battery percentage it touched down with (-1 for a crash), with what replaced a crashed drone. |
+| `landing-battery.csv`, `landing-battery.svg` | Histogram of battery at touchdown in 5 % bins, one sample per flight, crashes in a bin of their own at -1. |
+| `summary.json` | Totals (flights and crashes among them), and any reports the logger missed. |
 
 For a long run without the server, `simctl fly` flies the pack for some
 simulated hours as fast as it can and writes the same folder

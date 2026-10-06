@@ -91,6 +91,8 @@ pub struct DroneAgent {
     pub body: Body,
     pub drone: Drone,
     pub courier: Option<Courier>,
+    /// Crashed: off the board, and off the schedule after this step.
+    pub wrecked: bool,
 }
 
 /// A person or vehicle wandering near where it started.
@@ -133,6 +135,11 @@ impl Agent for DroneAgent {
         let tick = world.tick;
         let tuning = world.settings.tuning;
 
+        // A spare called up to replace a courier that crashed.
+        if let Some(courier) = world.call_ups.remove(&self.body.id) {
+            self.courier = Some(courier);
+        }
+
         // Instructions were checked against this same state when they
         // arrived, so they cannot fail now.
         for instruction in world.take_mail(self.body.id) {
@@ -143,8 +150,14 @@ impl Agent for DroneAgent {
         self.drone
             .step(&mut self.body.pose, &tuning, &world.terrain, &mut events);
         for event in events {
-            if let Event::Reached(item) = event {
-                self.reached(world, tick, item);
+            match event {
+                Event::Reached(item) => self.reached(world, tick, item),
+                Event::Landed => self.landed(world, tick),
+                Event::Crashed => {
+                    self.crashed(world, tick);
+                    return;
+                }
+                Event::LowBattery => {}
             }
         }
 
@@ -161,7 +174,7 @@ impl Agent for DroneAgent {
     }
 
     fn is_stopped(&mut self, state: &mut dyn State) -> bool {
-        world(state).retiring(self.body.id)
+        self.wrecked || world(state).retiring(self.body.id)
     }
 }
 
@@ -211,6 +224,78 @@ impl DroneAgent {
         });
     }
 
+    /// The end of a flight, with what is left in the battery.
+    fn landed(&self, world: &mut World, tick: u64) {
+        let mut detail = self.flight_detail(world);
+        detail["battery_pct"] = battery_pct(self.drone.battery_ppm).into();
+        world.report(self.flight_report(
+            ReportKind::Landing,
+            format!("land-{}-{tick}", self.body.id),
+            tick,
+            detail,
+        ));
+    }
+
+    /// Out of battery in the air. The wreck leaves the board; its order goes
+    /// back in the queue and a spare or a new drone takes its place.
+    fn crashed(&mut self, world: &mut World, tick: u64) {
+        self.wrecked = true;
+        let mut detail = self.flight_detail(world);
+        detail["cause"] = "battery exhausted".into();
+        if let Some(order) = self
+            .courier
+            .as_ref()
+            .and_then(|c| c.order.as_ref().filter(|_| !c.delivered))
+        {
+            detail["requeued_order"] = order.id.into();
+        }
+        detail["replaced_by"] = match world.replace(self) {
+            Some(r) => serde_json::json!({
+                "id": r.id, "sysid": r.sysid, "callsign": r.callsign, "spare": r.spare,
+            }),
+            None => serde_json::Value::Null,
+        };
+        world.report(self.flight_report(
+            ReportKind::Crash,
+            format!("crash-{}", self.body.id),
+            tick,
+            detail,
+        ));
+    }
+
+    fn flight_detail(&self, world: &World) -> serde_json::Value {
+        let mut detail = serde_json::json!({
+            "sysid": self.drone.sysid,
+            "callsign": self.body.callsign,
+        });
+        if let Some(courier) = &self.courier {
+            detail["depot"] = world.book.depots[usize::from(courier.depot)].clone().into();
+        }
+        detail
+    }
+
+    fn flight_report(
+        &self,
+        kind: ReportKind,
+        uid: String,
+        tick: u64,
+        detail: serde_json::Value,
+    ) -> Report {
+        Report {
+            seq: 0,
+            tick,
+            kind,
+            uid,
+            observer: Some(self.body.id),
+            target: None,
+            target_kind: String::new(),
+            lat_e7: self.body.pose.lat_e7,
+            lon_e7: self.body.pose.lon_e7,
+            alt_mm: self.body.pose.alt_mm,
+            detail,
+        }
+    }
+
     /// A courier that landed gives up or finishes its order; a ready one takes
     /// the oldest order at its depot.
     fn courier_duty(&mut self, world: &mut World, tick: u64) {
@@ -218,6 +303,7 @@ impl DroneAgent {
             body,
             drone,
             courier,
+            ..
         } = self;
         let Some(courier) = courier.as_mut() else {
             return;
@@ -457,6 +543,7 @@ impl Member {
                 body,
                 drone: saved.drone.ok_or_else(|| missing("drone"))?,
                 courier: saved.courier,
+                wrecked: false,
             }),
             Kind::Intruder => Member::Intruder(IntruderAgent {
                 body,
@@ -469,6 +556,11 @@ impl Member {
             Kind::Poi => Member::Poi(PoiAgent { body }),
         })
     }
+}
+
+/// Battery charge as a percentage, to two decimal places.
+fn battery_pct(ppm: u32) -> f64 {
+    f64::from(ppm / 100) / 100.0
 }
 
 #[allow(clippy::too_many_arguments)]

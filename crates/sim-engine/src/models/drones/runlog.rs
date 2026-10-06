@@ -10,6 +10,10 @@
 //! - `deliveries.csv`: every delivered order;
 //! - `delivery-times.csv` and `delivery-times.svg`: a histogram of time from
 //!   order to delivery;
+//! - `landings.csv`: every flight's end, landed or crashed, with the battery
+//!   percentage it touched down with (-1 for a crash);
+//! - `landing-battery.csv` and `landing-battery.svg`: a histogram of those
+//!   percentages, crashes in a bin of their own;
 //! - `summary.json`: the run's span and totals.
 
 use sim_core::config::{Config, Param};
@@ -17,6 +21,7 @@ use sim_core::config::{Config, Param};
 use super::deliveries::DeliveryLog;
 use super::drones_in;
 use super::heatmap::{self, Heatmap};
+use super::landings::LandingLog;
 use crate::Published;
 
 /// Does this config ask for a run log?
@@ -33,6 +38,7 @@ pub struct RunLog {
     pub scenario: String,
     pub heatmap: Option<Heatmap>,
     pub deliveries: DeliveryLog,
+    pub landings: LandingLog,
     last_tick: Option<u64>,
     last_report: u64,
     /// Reports that fell out of the driver's buffer before they were read.
@@ -45,6 +51,7 @@ impl RunLog {
             scenario: scenario.to_owned(),
             heatmap: heatmap::settings(config).map(|(res, dt)| Heatmap::new(res, dt)),
             deliveries: DeliveryLog::default(),
+            landings: LandingLog::default(),
             last_tick: None,
             // Only what happens from now on.
             last_report: view.reports.last().map_or(0, |r| r.seq),
@@ -67,6 +74,7 @@ impl RunLog {
         }
         for report in new {
             self.deliveries.add(report);
+            self.landings.add(report);
             self.last_report = report.seq;
         }
     }
@@ -94,6 +102,17 @@ impl RunLog {
                     .histogram_svg(&format!("{}: time from order to delivery", self.scenario)),
             ));
         }
+        if !self.landings.is_empty() {
+            out.push(("landings.csv", self.landings.to_csv()));
+            out.push(("landing-battery.csv", self.landings.histogram_csv()));
+            out.push((
+                "landing-battery.svg",
+                self.landings.histogram_svg(&format!(
+                    "{}: battery left at the end of each flight",
+                    self.scenario
+                )),
+            ));
+        }
         if !out.is_empty() {
             let summary = self.deliveries.summary();
             out.push((
@@ -107,6 +126,8 @@ impl RunLog {
                         "mean": s.mean_s, "median": s.median_s, "p90": s.p90_s, "max": s.max_s,
                         "mean_wait_for_drone": s.mean_wait_s, "mean_flight": s.mean_flight_s,
                     })),
+                    "flights": self.landings.len(),
+                    "crashes": self.landings.crashes(),
                     "missed_reports": self.missed_reports,
                 }))
                 .unwrap_or_default(),
