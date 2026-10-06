@@ -222,14 +222,23 @@ Other items (camera, gimbal, servo) complete instantly, so a mission containing
 them still runs. Rally points are not simulated: uploading an empty rally
 plan succeeds, and a non-empty one is refused.
 
-Geofences are simulated, but set by air traffic management and by intents,
-not by a ground station. Download the fence plan (Plan view → Fence, or
-`MISSION_REQUEST_LIST` with `mission_type` FENCE) to see them: each circle is
-a `NAV_FENCE_CIRCLE_EXCLUSION` item and each polygon corner a
-`NAV_FENCE_POLYGON_VERTEX_EXCLUSION`. `MISSION_CURRENT.fence_id` changes
-whenever a fence opens or closes, which tells QGroundControl to download it
-again. Uploading or clearing a fence plan is refused. A drone you fly is not
-rerouted for you: fly it into a fence and the breach is logged.
+Geofences are simulated, and the fence plan works both ways. In the **Plan**
+view, the **Fence** tab shows every geofence open (each circle a
+`NAV_FENCE_CIRCLE_EXCLUSION`, each polygon corner a
+`NAV_FENCE_POLYGON_VERTEX_EXCLUSION`); `MISSION_CURRENT.fence_id` changes
+whenever one opens or closes. Draw circular or polygon **exclusion** fences
+there and **Upload**: they open at once, and the drones the simulation flies
+route round them. The upload is the whole set of fences ground stations set:
+a fence you delete and re-upload without closes, and clearing the fence plan
+closes all of yours. Fences that air traffic management opened come down with
+the plan and go back up unchanged; deleting one in QGroundControl does not
+close it (ATM does, in its own time). Inclusion fences are not simulated, and
+a plan with one is refused with a message saying so. A fence over a drone's
+pad is refused too. Fences apply to every drone, not just the vehicle the
+plan was uploaded to.
+
+A drone you fly is not rerouted for you: fly it into a fence and the breach
+is logged.
 
 Altitudes are above mean sea level. A pack can carry terrain (see the README);
 without it the ground is flat at 0 m. A drone's home is the pad it starts on,

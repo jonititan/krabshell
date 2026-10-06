@@ -131,7 +131,9 @@ when a pack sets `atm_fences_per_hour` (with `atm_fence_mean_minutes`,
 `atm_area_radius_m`), never over a drone's pad, and closes each after an
 exponentially distributed time. Intents open and close them by hand: `Custom`
 110 with `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
-...]}` and optionally `"minutes"`; `Custom` 111 with `{"id"}`.
+...]}` and optionally `"minutes"`; `Custom` 111 with `{"id"}`. A ground
+station's fence plan (see below) arrives as `Custom` 112 and replaces the
+fences ground stations set before.
 
 The autopilot knows nothing of fences. The operator, who flies the drones the
 simulation flies itself (couriers, and drones a pack starts on a mission),
@@ -186,10 +188,12 @@ address, and to any ground station that has sent it a packet. What works:
   MISSION_CURRENT and MISSION_ITEM_REACHED;
 - the mission protocol: upload (`MISSION_COUNT` → `MISSION_REQUEST_INT` →
   `MISSION_ITEM_INT` → `MISSION_ACK`), download and clear;
-- the geofences as a fence plan (`MAV_MISSION_TYPE_FENCE`): download only,
-  as `NAV_FENCE_CIRCLE_EXCLUSION` and `NAV_FENCE_POLYGON_VERTEX_EXCLUSION`
-  items, with `MISSION_CURRENT.fence_id` changing whenever a fence opens or
-  closes;
+- the geofences as a fence plan (`MAV_MISSION_TYPE_FENCE`), advertised in
+  AUTOPILOT_VERSION: download all of them as `NAV_FENCE_CIRCLE_EXCLUSION` and
+  `NAV_FENCE_POLYGON_VERTEX_EXCLUSION` items; upload a plan to set the
+  ground stations' own fences (ATM's stay as they are; inclusion fences are
+  refused); clear it to close them. `MISSION_CURRENT.fence_id` changes
+  whenever a fence opens or closes;
 - commands (`COMMAND_LONG`/`COMMAND_INT`): arm/disarm, takeoff, mission start,
   RTL, land, DO_SET_MODE, DO_REPOSITION, DO_PAUSE_CONTINUE, DO_SET_MISSION_CURRENT;
 - the capability handshake QGroundControl needs for a generic autopilot

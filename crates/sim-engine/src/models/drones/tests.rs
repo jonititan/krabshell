@@ -884,3 +884,67 @@ fn a_courier_skips_orders_to_fenced_addresses() {
     let queued = &model.world().dispatch().queues[0];
     assert!(queued.iter().any(|o| o.address == 2), "its orders wait");
 }
+
+#[test]
+fn a_ground_station_fence_plan_replaces_only_its_own_fences_and_a_repeat_changes_nothing() {
+    let mut model = drones(Profile::Gold);
+    open_circle(&mut model, 300.0, 300.0, 30.0).unwrap();
+    run(&mut model, 1, 1);
+    let circle = |e: f64, n: f64| {
+        let (lon, lat) = at(e, n);
+        serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 40.0 } })
+    };
+    let set = |model: &mut Drones, fences: Vec<serde_json::Value>| {
+        let mut plan = intent(
+            model,
+            1,
+            codes::GEOFENCE_SET,
+            serde_json::json!({ "fences": fences }),
+        );
+        plan.agent = None;
+        model.apply_intent(&plan).unwrap();
+    };
+    let ids = |model: &Drones| -> Vec<(u32, String)> {
+        geofences_in(&model.overlays())
+            .1
+            .into_iter()
+            .map(|f| (f.id, f.source))
+            .collect()
+    };
+    set(
+        &mut model,
+        vec![circle(-300.0, 300.0), circle(-300.0, -300.0)],
+    );
+    run(&mut model, 2, 1);
+    let first = ids(&model);
+    assert_eq!(first.len(), 3);
+    assert_eq!(first.iter().filter(|f| f.1 == "gcs").count(), 2);
+    let rev = geofences_in(&model.overlays()).0;
+
+    // The same plan again: nothing opens or closes.
+    set(
+        &mut model,
+        vec![circle(-300.0, 300.0), circle(-300.0, -300.0)],
+    );
+    run(&mut model, 3, 1);
+    assert_eq!(ids(&model), first);
+    assert_eq!(geofences_in(&model.overlays()).0, rev);
+
+    // A smaller plan closes the one left out, and never the intent's fence.
+    set(&mut model, vec![circle(-300.0, 300.0)]);
+    run(&mut model, 4, 1);
+    let now = ids(&model);
+    assert_eq!(now.len(), 2);
+    assert!(now.contains(&first[0]) && now.contains(&first[1]));
+
+    // One bad fence refuses the whole plan.
+    let mut bad = intent(
+        &model,
+        1,
+        codes::GEOFENCE_SET,
+        serde_json::json!({ "fences": [circle(-300.0, -300.0), circle(10.0, 0.0)] }),
+    );
+    bad.agent = None;
+    let err = model.apply_intent(&bad).unwrap_err();
+    assert!(err.to_string().contains("fence 1"), "{err}");
+}

@@ -59,8 +59,9 @@ winch_lock_s = 3.0
 # missions with detour waypoints, DO_REPOSITION out of a fence opened round
 # a drone, and RTL for a courier whose address is fenced (its order waits
 # until the fence closes). Fences open and close as reports, breaches are
-# logged, and ground stations can download the fences as a fence plan.
-# Intents 110 and 111 open and close fences by hand.
+# logged. Ground stations download the fences as a fence plan, and upload
+# one to add fences of their own. Intents 110 and 111 open and close fences
+# by hand.
 atm_fences_per_hour = 6.0
 atm_fence_mean_minutes = 20.0
 atm_fence_min_radius_m = 150.0

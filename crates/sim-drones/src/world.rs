@@ -67,6 +67,10 @@ pub mod codes {
     pub const GEOFENCE_OPEN: u16 = 110;
     /// Close a geofence. Payload `{"id": n}`.
     pub const GEOFENCE_CLOSE: u16 = 111;
+    /// A ground station's whole fence plan. Payload `{"fences": [shape, ...]}`
+    /// with each shape as for [`GEOFENCE_OPEN`]. Replaces the fences ground
+    /// stations set before; leaves ATM's and other intents' alone.
+    pub const GEOFENCE_SET: u16 = 112;
 }
 
 /// Salts that keep each use of the seed independent.
@@ -229,6 +233,30 @@ impl Instruction {
                 drone.command(*command, *params, pose, tuning, terrain)
             }
         }
+    }
+}
+
+/// The `source` of a fence a ground station uploaded.
+const GCS_SOURCE: &str = "gcs";
+
+/// Same place and size, to within what MAVLink carries: a circle's radius
+/// travels as an `f32`.
+fn same_shape(a: &Shape, b: &Shape) -> bool {
+    match (a, b) {
+        (
+            Shape::Circle {
+                lat_e7: a1,
+                lon_e7: a2,
+                radius_m: ar,
+            },
+            Shape::Circle {
+                lat_e7: b1,
+                lon_e7: b2,
+                radius_m: br,
+            },
+        ) => a1 == b1 && a2 == b2 && (ar - br).abs() < 0.01,
+        (Shape::Polygon { points: a }, Shape::Polygon { points: b }) => a == b,
+        _ => false,
     }
 }
 
@@ -1084,6 +1112,7 @@ impl World {
         match intent.verb {
             IntentVerb::Custom(codes::GEOFENCE_OPEN) => self.open_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_CLOSE) => self.close_fence(intent),
+            IntentVerb::Custom(codes::GEOFENCE_SET) => self.set_fences(intent),
             IntentVerb::Custom(code) => self.drone_intent(code, intent),
             IntentVerb::Spawn => self.spawn(intent),
             IntentVerb::Despawn => self.despawn(intent),
@@ -1191,6 +1220,93 @@ impl World {
 
     fn open_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
         let p = &intent.payload;
+        let shape = self.shape_from(p)?;
+        let minutes = p
+            .get("minutes")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|m| *m > 0.0 && m.is_finite());
+        let fence = Fence {
+            id: self.airspace.take_id(),
+            shape,
+            source: "intent".into(),
+            opened_tick: 0,
+            closes_tick: None,
+        };
+        self.fence_mail.push(FenceChange::Open(fence, minutes));
+        Ok(())
+    }
+
+    /// Replace the geofences ground stations have set with a whole fence
+    /// plan, as a ground station uploads one. Fences in the plan that match
+    /// one ATM or an intent opened (a ground station sends back what it
+    /// downloaded) are left as they are: they are not a ground station's to
+    /// close. All or nothing: one bad fence refuses the plan.
+    fn set_fences(&mut self, intent: &Intent) -> Result<(), RejectReason> {
+        let list = intent
+            .payload
+            .get("fences")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| rejected("a fence plan needs a fences array"))?;
+        let shapes = list
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                self.shape_from(v).map_err(|e| match e {
+                    RejectReason::Rejected { message } => rejected(format!("fence {i}: {message}")),
+                    other => other,
+                })
+            })
+            .collect::<Result<Vec<Shape>, RejectReason>>()?;
+
+        // The fences as they will stand once what is already queued applies.
+        let mut current: Vec<(u32, Shape, bool)> = self
+            .airspace
+            .fences()
+            .iter()
+            .map(|f| (f.id, f.shape.clone(), f.source == GCS_SOURCE))
+            .collect();
+        for change in &self.fence_mail {
+            match change {
+                FenceChange::Open(f, _) => {
+                    current.push((f.id, f.shape.clone(), f.source == GCS_SOURCE))
+                }
+                FenceChange::Close(id) => current.retain(|c| c.0 != *id),
+            }
+        }
+        let wanted: Vec<Shape> = shapes
+            .into_iter()
+            .filter(|s| !current.iter().any(|(_, c, gcs)| !gcs && same_shape(c, s)))
+            .collect();
+        let mut kept = vec![false; wanted.len()];
+        for (id, shape, gcs) in &current {
+            if !gcs {
+                continue;
+            }
+            match (0..wanted.len()).find(|i| !kept[*i] && same_shape(&wanted[*i], shape)) {
+                Some(i) => kept[i] = true,
+                None => self.fence_mail.push(FenceChange::Close(*id)),
+            }
+        }
+        for (shape, kept) in wanted.into_iter().zip(kept) {
+            if kept {
+                continue;
+            }
+            let fence = Fence {
+                id: self.airspace.take_id(),
+                shape,
+                source: GCS_SOURCE.into(),
+                opened_tick: 0,
+                closes_tick: None,
+            };
+            self.fence_mail.push(FenceChange::Open(fence, None));
+        }
+        Ok(())
+    }
+
+    /// A fence's shape from `{"circle": {"lat", "lon", "radius_m"}}` or
+    /// `{"polygon": [[lon, lat], ...]}`, in degrees, checked: inside the
+    /// world, enclosing some area, and clear of every drone's pad.
+    fn shape_from(&self, p: &serde_json::Value) -> Result<Shape, RejectReason> {
         let deg = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64);
         let shape = if let Some(c) = p.get("circle") {
             let (Some(lat), Some(lon), Some(radius_m)) =
@@ -1243,16 +1359,7 @@ impl World {
                 pad.lon()
             )));
         }
-        let minutes = deg(p, "minutes").filter(|m| *m > 0.0 && m.is_finite());
-        let fence = Fence {
-            id: self.airspace.take_id(),
-            shape,
-            source: "intent".into(),
-            opened_tick: 0,
-            closes_tick: None,
-        };
-        self.fence_mail.push(FenceChange::Open(fence, minutes));
-        Ok(())
+        Ok(shape)
     }
 
     fn close_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {

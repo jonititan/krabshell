@@ -94,6 +94,8 @@ impl Default for MavlinkConfig {
 #[derive(Debug)]
 enum Awaiting {
     Mission,
+    /// A fence plan, as one `GEOFENCE_SET` intent.
+    Fence,
     Command(MavCmd),
 }
 
@@ -105,7 +107,8 @@ struct Pending {
     sysid: u8,
     gcs: (u8, u8),
     what: Awaiting,
-    /// The drone's `mission_rev` when the upload was submitted.
+    /// The drone's `mission_rev` (or for a fence plan, the fence id) when
+    /// the upload was submitted.
     rev_before: u32,
     /// The simulation has applied it; waiting for a publish to show it.
     applied: bool,
@@ -392,13 +395,36 @@ impl Gateway {
         gcs: (u8, u8),
         result: MavMissionResult,
     ) {
-        let rev = self.drones.get(&sysid).map_or(0, |d| d.mission_rev);
+        self.typed_ack(
+            sysid,
+            to,
+            gcs,
+            result,
+            MavMissionType::MAV_MISSION_TYPE_MISSION,
+        )
+        .await;
+    }
+
+    /// `MISSION_ACK` for a mission or a fence plan, carrying its id.
+    async fn typed_ack(
+        &mut self,
+        sysid: u8,
+        to: SocketAddr,
+        gcs: (u8, u8),
+        result: MavMissionResult,
+        mission_type: MavMissionType,
+    ) {
+        let opaque_id = if mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
+            self.fence_id()
+        } else {
+            self.drones.get(&sysid).map_or(0, |d| d.mission_rev)
+        };
         let msg = MavMessage::MISSION_ACK(MISSION_ACK_DATA {
             target_system: gcs.0,
             target_component: gcs.1,
             mavtype: result,
-            mission_type: MavMissionType::MAV_MISSION_TYPE_MISSION,
-            opaque_id: rev,
+            mission_type,
+            opaque_id,
         });
         self.send_to(sysid, &msg, to).await;
     }
@@ -422,12 +448,19 @@ impl Gateway {
         self.send_to(sysid, &msg, to).await;
     }
 
-    async fn request_item(&mut self, sysid: u8, to: SocketAddr, gcs: (u8, u8), seq: u16) {
+    async fn request_item(
+        &mut self,
+        sysid: u8,
+        to: SocketAddr,
+        gcs: (u8, u8),
+        seq: u16,
+        mission_type: MavMissionType,
+    ) {
         let msg = MavMessage::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
             seq,
             target_system: gcs.0,
             target_component: gcs.1,
-            mission_type: MavMissionType::MAV_MISSION_TYPE_MISSION,
+            mission_type,
         });
         self.send_to(sysid, &msg, to).await;
     }
@@ -486,13 +519,15 @@ impl Gateway {
         let mut still = Vec::with_capacity(self.pending.len());
         let mut done = Vec::new();
         for mut p in std::mem::take(&mut self.pending) {
-            // A mission is acknowledged only once a published view carries it,
-            // so a download straight after the ack returns the new mission, not
-            // the one it replaced.
-            let published = |p: &Pending| {
-                self.drones
+            // A mission or fence plan is acknowledged only once a published
+            // view carries it, so a download straight after the ack returns
+            // the new one, not the one it replaced.
+            let published = |p: &Pending| match p.what {
+                Awaiting::Fence => self.fence_id() != p.rev_before,
+                _ => self
+                    .drones
                     .get(&p.sysid)
-                    .is_some_and(|d| d.mission_rev != p.rev_before)
+                    .is_some_and(|d| d.mission_rev != p.rev_before),
             };
             if p.applied {
                 if published(&p) || now >= p.deadline {
@@ -504,7 +539,7 @@ impl Gateway {
             }
             match p.rx.try_recv() {
                 Ok(IntentAck::Applied { .. })
-                    if matches!(p.what, Awaiting::Mission) && !published(&p) =>
+                    if !matches!(p.what, Awaiting::Command(_)) && !published(&p) =>
                 {
                     p.applied = true;
                     still.push(p);
@@ -566,6 +601,50 @@ impl Gateway {
                 )
                 .await;
             }
+            (Awaiting::Fence, Some(IntentAck::Applied { .. })) => {
+                self.typed_ack(
+                    p.sysid,
+                    p.peer,
+                    p.gcs,
+                    MavMissionResult::MAV_MISSION_ACCEPTED,
+                    MavMissionType::MAV_MISSION_TYPE_FENCE,
+                )
+                .await;
+            }
+            (Awaiting::Fence, Some(IntentAck::Rejected(reason))) => {
+                let text = reason.to_string();
+                let text = text
+                    .strip_prefix("model rejected the intent: ")
+                    .unwrap_or(&text)
+                    .to_owned();
+                self.status(p.sysid, p.peer, MavSeverity::MAV_SEVERITY_ERROR, &text)
+                    .await;
+                self.typed_ack(
+                    p.sysid,
+                    p.peer,
+                    p.gcs,
+                    MavMissionResult::MAV_MISSION_DENIED,
+                    MavMissionType::MAV_MISSION_TYPE_FENCE,
+                )
+                .await;
+            }
+            (Awaiting::Fence, None) => {
+                self.status(
+                    p.sysid,
+                    p.peer,
+                    MavSeverity::MAV_SEVERITY_WARNING,
+                    "Fence plan queued: simulation paused",
+                )
+                .await;
+                self.typed_ack(
+                    p.sysid,
+                    p.peer,
+                    p.gcs,
+                    MavMissionResult::MAV_MISSION_ACCEPTED,
+                    MavMissionType::MAV_MISSION_TYPE_FENCE,
+                )
+                .await;
+            }
             (Awaiting::Command(cmd), Some(IntentAck::Applied { .. })) => {
                 self.command_ack(p.sysid, p.peer, p.gcs, cmd, MavResult::MAV_RESULT_ACCEPTED)
                     .await;
@@ -606,21 +685,23 @@ impl Gateway {
                 continue;
             };
             if upload.retries >= missions::MAX_RETRIES {
-                let gcs = upload.gcs;
+                let (gcs, mission_type) = (upload.gcs, upload.mission_type);
                 self.uploads.remove(&(peer, sysid));
-                self.mission_ack(
+                self.typed_ack(
                     sysid,
                     peer,
                     gcs,
                     MavMissionResult::MAV_MISSION_OPERATION_CANCELLED,
+                    mission_type,
                 )
                 .await;
                 continue;
             }
             upload.retries += 1;
             upload.last_io = now;
-            let (gcs, next) = (upload.gcs, upload.next());
-            self.request_item(sysid, peer, gcs, next).await;
+            let (gcs, next, mission_type) = (upload.gcs, upload.next(), upload.mission_type);
+            self.request_item(sysid, peer, gcs, next, mission_type)
+                .await;
         }
     }
 
@@ -661,13 +742,11 @@ impl Gateway {
 
         match msg {
             MavMessage::MISSION_COUNT(m) => {
-                if m.mission_type != MavMissionType::MAV_MISSION_TYPE_MISSION {
-                    // Geofences are opened by ATM and by intent, not by a
-                    // ground station's fence plan, and rally points are not
-                    // simulated. An empty rally plan is harmless to accept.
-                    let result = if m.count == 0
-                        && m.mission_type == MavMissionType::MAV_MISSION_TYPE_RALLY
-                    {
+                let fence = m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE;
+                if m.mission_type != MavMissionType::MAV_MISSION_TYPE_MISSION && !fence {
+                    // Rally points are not simulated. An empty rally plan is
+                    // harmless to accept.
+                    let result = if m.count == 0 {
                         MavMissionResult::MAV_MISSION_ACCEPTED
                     } else {
                         MavMissionResult::MAV_MISSION_UNSUPPORTED
@@ -687,17 +766,29 @@ impl Gateway {
                     return;
                 }
                 if m.count > missions::MAX_ITEMS {
-                    self.mission_ack(sysid, peer, gcs, MavMissionResult::MAV_MISSION_NO_SPACE)
-                        .await;
+                    self.typed_ack(
+                        sysid,
+                        peer,
+                        gcs,
+                        MavMissionResult::MAV_MISSION_NO_SPACE,
+                        m.mission_type,
+                    )
+                    .await;
                     return;
                 }
                 if m.count == 0 {
-                    self.finish_upload(sysid, peer, gcs, Vec::new()).await;
+                    if fence {
+                        self.finish_fence_upload(sysid, peer, gcs, Vec::new()).await;
+                    } else {
+                        self.finish_upload(sysid, peer, gcs, Vec::new()).await;
+                    }
                     return;
                 }
-                self.uploads
-                    .insert((peer, sysid), Upload::new(m.count, gcs, Instant::now()));
-                self.request_item(sysid, peer, gcs, 0).await;
+                self.uploads.insert(
+                    (peer, sysid),
+                    Upload::new(m.count, m.mission_type, gcs, Instant::now()),
+                );
+                self.request_item(sysid, peer, gcs, 0, m.mission_type).await;
             }
             MavMessage::MISSION_ITEM_INT(item) => {
                 let Some(upload) = self.uploads.get_mut(&(peer, sysid)) else {
@@ -707,11 +798,18 @@ impl Gateway {
                 // reply is a request for the item we still need.
                 upload.accept(&item, Instant::now());
                 let next = upload.next();
+                let mission_type = upload.mission_type;
                 if upload.complete() {
                     let upload = self.uploads.remove(&(peer, sysid)).expect("present");
-                    self.finish_upload(sysid, peer, gcs, upload.items).await;
+                    if mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
+                        self.finish_fence_upload(sysid, peer, gcs, upload.items)
+                            .await;
+                    } else {
+                        self.finish_upload(sysid, peer, gcs, upload.items).await;
+                    }
                 } else {
-                    self.request_item(sysid, peer, gcs, next).await;
+                    self.request_item(sysid, peer, gcs, next, mission_type)
+                        .await;
                 }
             }
             MavMessage::MISSION_REQUEST_LIST(m) => {
@@ -748,13 +846,11 @@ impl Gateway {
             MavMessage::MISSION_CLEAR_ALL(m) => {
                 if m.mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION {
                     self.finish_upload(sysid, peer, gcs, Vec::new()).await;
+                } else if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
+                    // Clears the fences ground stations set; ATM's stay.
+                    self.finish_fence_upload(sysid, peer, gcs, Vec::new()).await;
                 } else {
-                    // Geofences are not a ground station's to clear.
-                    let result = if m.mission_type == MavMissionType::MAV_MISSION_TYPE_FENCE {
-                        MavMissionResult::MAV_MISSION_DENIED
-                    } else {
-                        MavMissionResult::MAV_MISSION_ACCEPTED
-                    };
+                    let result = MavMissionResult::MAV_MISSION_ACCEPTED;
                     self.send_to(
                         sysid,
                         &MavMessage::MISSION_ACK(MISSION_ACK_DATA {
@@ -868,6 +964,54 @@ impl Gateway {
                     MavMissionResult::MAV_MISSION_INVALID_SEQUENCE,
                 )
                 .await
+            }
+        }
+    }
+
+    /// Hand a complete fence plan to the simulation as one `GEOFENCE_SET`
+    /// intent: the geofences ground stations set become exactly these.
+    async fn finish_fence_upload(
+        &mut self,
+        sysid: u8,
+        peer: SocketAddr,
+        gcs: (u8, u8),
+        items: Vec<sim_engine::models::drones::mission::MissionItem>,
+    ) {
+        let fence = MavMissionType::MAV_MISSION_TYPE_FENCE;
+        let shapes = match missions::fence_shapes(&items) {
+            Ok(shapes) => shapes,
+            Err(err) => {
+                self.status(sysid, peer, MavSeverity::MAV_SEVERITY_ERROR, &err)
+                    .await;
+                self.typed_ack(
+                    sysid,
+                    peer,
+                    gcs,
+                    MavMissionResult::MAV_MISSION_UNSUPPORTED,
+                    fence,
+                )
+                .await;
+                return;
+            }
+        };
+        let payload = serde_json::json!({ "fences": shapes });
+        let rev_before = self.fence_id();
+        match self.submit(sysid, peer, codes::GEOFENCE_SET, payload) {
+            Ok(rx) => self.pending.push(Pending {
+                rx,
+                deadline: Instant::now() + MISSION_ACK_WAIT,
+                peer,
+                sysid,
+                gcs,
+                what: Awaiting::Fence,
+                rev_before,
+                applied: false,
+            }),
+            Err(err) => {
+                self.status(sysid, peer, MavSeverity::MAV_SEVERITY_ERROR, &err)
+                    .await;
+                self.typed_ack(sysid, peer, gcs, MavMissionResult::MAV_MISSION_ERROR, fence)
+                    .await;
             }
         }
     }

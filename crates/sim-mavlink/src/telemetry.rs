@@ -209,6 +209,8 @@ pub fn autopilot_version(sysid: u8) -> MavMessage {
     MavMessage::AUTOPILOT_VERSION(AUTOPILOT_VERSION_DATA {
         capabilities: MavProtocolCapability::MAV_PROTOCOL_CAPABILITY_MISSION_INT
             | MavProtocolCapability::MAV_PROTOCOL_CAPABILITY_COMMAND_INT
+            // Without it QGroundControl never asks for the fence plan.
+            | MavProtocolCapability::MAV_PROTOCOL_CAPABILITY_MISSION_FENCE
             | MavProtocolCapability::MAV_PROTOCOL_CAPABILITY_MAVLINK2,
         uid: u64::from(sysid),
         flight_sw_version: 0x0001_0000,
