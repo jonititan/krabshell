@@ -1208,3 +1208,43 @@ fn a_fence_can_be_renamed_open_waiting_or_closed() {
     );
     assert!(model.apply_intent(&nameless).is_err());
 }
+
+#[test]
+fn the_buffer_drones_keep_from_a_geofence_is_the_geofence_margin_parameter() {
+    // A 10 m fence 40 m north of the patrol's top leg, (150, 150) to
+    // (0, 150): every waypoint and pad is outside even a 60 m buffer, so
+    // the buffer alone decides how close the patrol comes.
+    let closest = |margin: Option<f64>| {
+        let mut blob = blob(Profile::Gold);
+        let (lon, lat) = at(75.0, 190.0);
+        blob.fields = serde_json::json!({ "geofences": [
+            { "circle": { "lat": lat, "lon": lon, "radius_m": 10.0 } },
+        ]});
+        blob.config
+            .model
+            .insert("battery_drain_pct_s".into(), Param::Float(0.0));
+        if let Some(m) = margin {
+            blob.config
+                .model
+                .insert("geofence_margin_m".into(), Param::Float(m));
+        }
+        let mut model = drones(Profile::Gold);
+        model.reset(&blob).unwrap();
+        assert_eq!(
+            model.overlays()["geofences"]["margin_m"],
+            margin.unwrap_or(30.0)
+        );
+        let mut closest = f64::INFINITY;
+        for tick in 1..4_000 {
+            model.step(tick);
+            closest = closest.min(distance_to(record(&model, 1), 75.0, 190.0));
+        }
+        closest
+    };
+    // The default 30 m buffer reaches 40 m out: the leg passes at its edge.
+    let default = closest(None);
+    assert!((38.0..45.0).contains(&default), "{default:.1} m");
+    // A 60 m buffer reaches 70 m out, and the patrol goes round it.
+    let wide = closest(Some(60.0));
+    assert!(wide > 68.0, "came within {wide:.1} m");
+}

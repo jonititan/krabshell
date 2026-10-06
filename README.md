@@ -408,8 +408,11 @@ below which a takeoff from the ground waits or is refused), the winch
 `p_detect`, `sensor_period_s`, `report_interval_s`) and generated targets
 (`persons`, `vehicles`, `wander_radius_m`, `origin_lon`, `origin_lat`),
 deliveries (`order_rate_per_address_day`, `dispatch_takeoff_m`,
-`dispatch_approach_m`, `dispatch_load_s`) and `heatmap_resolution` (see
-[Deliveries and run logs](#deliveries-and-run-logs)).
+`dispatch_approach_m`, `dispatch_load_s`), `heatmap_resolution` (see
+[Deliveries and run logs](#deliveries-and-run-logs)), and
+`geofence_margin_m`: the buffer, in metres, the drones the simulation flies
+keep from every geofence (default 30, from 2 to 1000; see
+[Geofences](#geofences)).
 
 Terrain goes in `world/fields.json` as a regular latitude/longitude grid of
 elevations above mean sea level; the format is documented in
