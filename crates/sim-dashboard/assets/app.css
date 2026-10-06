@@ -415,7 +415,7 @@ circle.k-intruder { fill: var(--bad); opacity: 0.85; }
 
 #fence-table tbody tr { cursor: pointer; }
 #fence-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
-#fence-table td:last-child { text-align: right; padding-right: 0; }
+#fence-table td:last-child { text-align: right; padding-right: 0; white-space: nowrap; }
 #fence-table td.breach { color: var(--bad); font-weight: 600; }
 #fence-meta { margin: 0 0 0 auto; }
 
@@ -451,3 +451,9 @@ circle.k-intruder { fill: var(--bad); opacity: 0.85; }
 .k-drop { fill: none; stroke: var(--ok); stroke-width: 2; }
 rect.k-vehicle { fill: var(--accent); }
 .legend[hidden] { display: none; }
+#fence-table td.waiting { color: var(--warn); }
+#previous-table td:last-child { text-align: right; padding-right: 0; }
+#previous-table input { width: 6ch; }
+#fence-table form.extend { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+#fence-table form.extend input { width: 6ch; }
+#fence-table form.extend button { padding: 3px 10px; }

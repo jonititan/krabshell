@@ -139,7 +139,11 @@ A fence over a drone's pad, or outside the world, stops the pack loading. A
 reset opens the pack's fences again. While the run goes on, the dashboard's
 Geofences tab, the API and intents open and close fences: `Custom` 110 with
 `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
-...]}` and optionally `"name"` and `"minutes"`; `Custom` 111 with `{"id"}`.
+...]}` and optionally `"name"`, `"minutes"` (-1: until closed) and
+`"after_minutes"` (it waits to open until then); `Custom` 111 with `{"id"}`
+closes one, or cancels one still waiting; `Custom` 113 with `{"id",
+"minutes"}` changes how long an open one stays open (from now; -1: until
+closed).
 A ground station's fence plan (see below) arrives as `Custom` 112 and
 replaces the fences ground stations set before.
 
@@ -182,13 +186,18 @@ simulated hours as fast as it can and writes the same folder
 cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 8
 ```
 
-The dashboard's **Geofences** tab shows them: every open fence on the map
-(and in a list with its shape, area, who opened it, when it closes and how
-often it has been breached), and the latest opens, closes, breaches and
-reroutes. Draw a circle (centre, then edge) or a polygon (corners, then click
-the first again or press Enter) to open one, optionally for a set number of
-minutes, and close any fence from the list. The State page's map draws the
-fences too. Both maps have layers to show or hide: drones; delivery locations
+The dashboard's **Geofences** tab manages them. **Current fences** lists
+every fence open or waiting to open (shape and area, who opened it, when it
+opened or will, when it closes, breaches), each with Close (or Cancel), and
+Extend for one due to close: a number of minutes from now, or -1 to keep it
+open until closed. Draw
+a circle (centre, then edge) or a polygon (corners, then click the first
+again or press Enter) on the map to open one, with a name and optionally a
+number of minutes. **Previous fences** lists those that have closed: reopen
+any as it was, now or after some minutes (0 for now), for some minutes or
+until closed (-1). It opens with a new number. **Recent activity** shows
+breaches and the operator's reroutes. The State page's map draws the fences
+too. Both maps have layers to show or hide: drones; delivery locations
 (hubs and landmarks, open orders' addresses, recent drop-offs); people and
 vehicles (where they are, and camera sightings); geofences; and the A5
 occupancy grid. The choice is remembered in the browser.
@@ -342,8 +351,9 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
 | GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
-| GET POST | `/geofences` | Open geofences, with breach counts and recent fence activity; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"minutes"`). |
-| DELETE | `/geofences/{id}` | Close a geofence, whoever opened it. |
+| GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed) and `"after_minutes"`). |
+| DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
+| POST | `/geofences/{id}/extend` | `{"minutes": m}`: keep an open geofence open `m` minutes from now, or with -1 until it is closed. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 
 Errors are `application/problem+json` with a stable `code`.

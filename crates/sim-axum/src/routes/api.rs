@@ -700,6 +700,7 @@ pub async fn state_overlays(
 /// `Custom` intent codes for geofences; see `sim_drones::codes`.
 const GEOFENCE_OPEN: u16 = 110;
 const GEOFENCE_CLOSE: u16 = 111;
+const GEOFENCE_EXTEND: u16 = 113;
 
 #[derive(Serialize)]
 pub struct GeofencesBody {
@@ -714,7 +715,12 @@ pub struct GeofencesBody {
     /// The fences open now, as the model publishes them, each with
     /// `breaches`: how many the recent reports hold.
     pub fences: Vec<serde_json::Value>,
-    /// The latest geofence, breach and reroute reports, newest first.
+    /// Fences waiting to open, soonest first; `opened_tick` is when.
+    pub scheduled: Vec<serde_json::Value>,
+    /// Fences that have closed, newest first, with `closed_tick` and how
+    /// they `closed`: to open again.
+    pub previous: Vec<serde_json::Value>,
+    /// The latest breach and reroute reports, newest first.
     pub recent: Vec<Report>,
     /// Intents the model refused lately, so a client that submitted one
     /// while the world was paused (and got `queued`) learns why it never
@@ -744,9 +750,7 @@ pub async fn geofences_list(State(state): State<AppState>) -> Json<GeofencesBody
     let kind = |r: &Report| {
         matches!(
             r.kind,
-            sim_core::ReportKind::Geofence
-                | sim_core::ReportKind::Breach
-                | sim_core::ReportKind::Reroute
+            sim_core::ReportKind::Breach | sim_core::ReportKind::Reroute
         )
     };
     let breaches = |id: u64| {
@@ -777,6 +781,8 @@ pub async fn geofences_list(State(state): State<AppState>) -> Json<GeofencesBody
         rev: g["rev"].as_u64().unwrap_or(0),
         margin_m: g["margin_m"].as_f64().unwrap_or(0.0),
         fences,
+        scheduled: g["scheduled"].as_array().cloned().unwrap_or_default(),
+        previous: g["previous"].as_array().cloned().unwrap_or_default(),
         recent: view
             .reports
             .iter()
@@ -806,8 +812,9 @@ fn cell_near(view: &Published, lon: f64, lat: f64) -> ApiResult<GeoCell> {
 }
 
 /// Open a geofence: `{"circle": {"lat", "lon", "radius_m"}}` or
-/// `{"polygon": [[lon, lat], ...]}`, in degrees, and optionally `"minutes"`
-/// until it closes by itself. It opens on the next tick.
+/// `{"polygon": [[lon, lat], ...]}`, in degrees, with optionally a `"name"`,
+/// `"minutes"` it stays open (-1 or absent: until closed) and
+/// `"after_minutes"` before it opens (0 or absent: on the next tick).
 pub async fn geofences_open(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
@@ -852,17 +859,32 @@ pub async fn geofences_open(
     submit_intent(&state, Intent::operator(cell, verb, payload)).await
 }
 
-/// Close a geofence, whoever opened it. It closes on the next tick.
-pub async fn geofences_close(
+#[derive(Deserialize)]
+pub struct ExtendBody {
+    /// Minutes from now it stays open, or -1 until closed.
+    pub minutes: f64,
+}
+
+/// Change how long an open geofence stays open: `{"minutes": m}`, `m`
+/// minutes from now, or -1 until it is closed. From the next tick.
+pub async fn geofences_extend(
     State(state): State<AppState>,
     Path(id): Path<u64>,
+    Json(body): Json<ExtendBody>,
 ) -> ApiResult<Json<IntentAccepted>> {
     let view = state.driver.view();
     let fence = view.overlays["geofences"]["fences"]
         .as_array()
         .and_then(|list| list.iter().find(|f| f["id"].as_u64() == Some(id)))
         .ok_or_else(|| ApiError::not_found(format!("no open geofence {id}")))?;
-    // Address it to a cell the fence touches.
+    let cell = fence_cell(&view, fence)?;
+    let verb = sim_core::IntentVerb::Custom(GEOFENCE_EXTEND);
+    let payload = serde_json::json!({ "id": id, "minutes": body.minutes });
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+/// A cell the fence touches, to address an intent about it to.
+fn fence_cell(view: &Published, fence: &serde_json::Value) -> ApiResult<GeoCell> {
     let (lat_e7, lon_e7) = match (fence["lat_e7"].as_i64(), fence["lon_e7"].as_i64()) {
         (Some(lat), Some(lon)) => (lat, lon),
         _ => {
@@ -873,7 +895,24 @@ pub async fn geofences_close(
             )
         }
     };
-    let cell = cell_near(&view, lon_e7 as f64 * 1e-7, lat_e7 as f64 * 1e-7)?;
+    cell_near(view, lon_e7 as f64 * 1e-7, lat_e7 as f64 * 1e-7)
+}
+
+/// Close a geofence, whoever opened it, or cancel one waiting to open. It
+/// closes on the next tick.
+pub async fn geofences_close(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let g = &view.overlays["geofences"];
+    let fence = ["fences", "scheduled"]
+        .iter()
+        .filter_map(|k| g[*k].as_array())
+        .flatten()
+        .find(|f| f["id"].as_u64() == Some(id))
+        .ok_or_else(|| ApiError::not_found(format!("no open or scheduled geofence {id}")))?;
+    let cell = fence_cell(&view, fence)?;
     let verb = sim_core::IntentVerb::Custom(GEOFENCE_CLOSE);
     let payload = serde_json::json!({ "id": id });
     submit_intent(&state, Intent::operator(cell, verb, payload)).await

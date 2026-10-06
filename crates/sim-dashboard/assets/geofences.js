@@ -1,4 +1,5 @@
-// Geofences page: the list of open fences, recent fence activity, and tools
+// Geofences page: the fences open or waiting to open, those that have
+// closed (to reopen, now or later), recent breaches and reroutes, and tools
 // to draw new fences on the map.
 //
 // map.js draws the fences and polls `/api/v1/geofences` once a second; this
@@ -353,13 +354,17 @@
     return d > 0 ? `${d} d ${hms}` : hms;
   }
 
-  function closesIn(f) {
-    if (f.closes_tick == null) return 'when closed';
-    if (!last || !last.tick_seconds) return `tick ${f.closes_tick.toLocaleString()}`;
-    const s = Math.max(0, (f.closes_tick - last.tick) * last.tick_seconds);
+  // How long until `tick`, as "in 5 min".
+  function inTime(tick) {
+    if (!last || !last.tick_seconds) return `at tick ${tick.toLocaleString()}`;
+    const s = Math.max(0, (tick - last.tick) * last.tick_seconds);
     if (s < 60) return `in ${Math.round(s)} s`;
     if (s < 3600) return `in ${Math.round(s / 60)} min`;
     return `in ${(s / 3600).toFixed(1)} h`;
+  }
+
+  function closesIn(f) {
+    return f.closes_tick == null ? 'when closed' : inTime(f.closes_tick);
   }
 
   function shapeText(f) {
@@ -416,8 +421,90 @@
     }
   }
 
+  // The fence whose closing time is being changed, if any. The table is not
+  // rebuilt meanwhile, so what is typed stays put.
+  let extending = null;
+
+  async function extend(f, minutes, button) {
+    const m = Number(minutes);
+    if (!Number.isFinite(m) || !(m > 0 || m === -1)) {
+      say(`Fence ${f.id}: minutes must be more than 0, or -1 to stay open until closed.`, 'bad');
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/v1/geofences/${f.id}/extend`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ minutes: m }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        say(`Fence ${f.id} could not be extended: ${reason(result.detail || response.status)}`, 'bad');
+        return;
+      }
+      const label = f.name || `Fence ${f.id}`;
+      const what = m === -1 ? 'stays open until closed' : `stays open for ${m} min from now`;
+      if (result.status === 'queued') {
+        pending.set(result.id, { what: `Extending ${label}`, at: Date.now() });
+        say(`${label} ${what}, once the simulation next steps.`, 'warn');
+      } else {
+        say(`${label} ${what}.`, 'ok');
+      }
+      extending = null;
+      renderFences.key = null;
+      map.refreshFences();
+    } catch (err) {
+      say(`Fence ${f.id} could not be extended: ${err}`, 'bad');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // The Closes cell, or in its place the editor for a new closing time.
+  function closesCell(f) {
+    const td = document.createElement('td');
+    if (extending !== f.id) {
+      td.textContent = closesIn(f);
+      return td;
+    }
+    const form = document.createElement('form');
+    form.className = 'extend';
+    const input = numberInput('-1', `Fence ${f.id}: minutes from now it stays open, -1 for until closed`, () => {});
+    input.title = 'Minutes from now, or -1 to stay open until closed';
+    const set = document.createElement('button');
+    set.type = 'submit';
+    set.className = 'primary';
+    set.textContent = 'Set';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'ghost';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', (event) => {
+      event.stopPropagation();
+      extending = null;
+      renderFences.key = null;
+      renderFences(last);
+    });
+    form.addEventListener('click', (event) => event.stopPropagation());
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      extend(f, input.value, set);
+    });
+    const hint = document.createElement('span');
+    hint.className = 'dim small';
+    hint.textContent = 'min, -1 = until closed';
+    form.append(input, hint, set, cancel);
+    td.append(form);
+    requestAnimationFrame(() => input.select());
+    return td;
+  }
+
   function renderFences(body) {
-    const fences = body.fences || [];
+    const fences = [
+      ...(body.fences || []),
+      ...(body.scheduled || []).map((f) => ({ ...f, waiting: true })),
+    ];
     $('fence-empty').hidden = fences.length > 0;
     $('fence-table').hidden = fences.length === 0;
     $('fence-meta').textContent = body.margin_m
@@ -425,6 +512,8 @@
       : '';
     // Rebuild only when something changed, so a button being pressed is not
     // swept away by the next poll.
+    if (extending !== null && fences.some((f) => f.id === extending && !f.waiting)) return;
+    extending = null;
     const key = JSON.stringify(fences) + body.tick_seconds + Math.floor(body.tick / 10);
     if (renderFences.key === key) return;
     renderFences.key = key;
@@ -439,25 +528,49 @@
           nameCell(f),
           cell(shapeText(f)),
           cell(SOURCES[f.source] || f.source),
-          cell(simTime(f.opened_tick), 'mono small'),
-          cell(closesIn(f)),
-          cell(String(f.breaches || 0), f.breaches ? 'breach' : ''),
+          f.waiting
+            ? cell(`waiting, opens ${inTime(f.opened_tick)}`, 'waiting')
+            : cell(simTime(f.opened_tick), 'mono small'),
+          closesCell(f),
+          cell(f.waiting ? '' : String(f.breaches || 0), f.breaches ? 'breach' : ''),
         );
         const action = document.createElement('td');
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'danger';
-        button.textContent = 'Close';
-        button.title = f.source === 'scenario'
-          ? 'Close this fence of the scenario\'s (a reset opens it again)'
-          : 'Close this fence';
+        button.textContent = f.waiting ? 'Cancel' : 'Close';
+        button.title = f.waiting
+          ? 'Do not open this fence after all'
+          : f.source === 'scenario'
+            ? 'Close this fence of the scenario\'s (a reset opens it again)'
+            : 'Close this fence';
         button.addEventListener('click', (event) => {
           event.stopPropagation();
           close(f.id, button);
         });
+        if (!f.waiting && f.closes_tick != null) {
+          const more = document.createElement('button');
+          more.type = 'button';
+          more.textContent = 'Extend';
+          more.title = 'Change how long it stays open';
+          more.addEventListener('click', (event) => {
+            event.stopPropagation();
+            // One row at a time: put any other row's Closes back first.
+            if (extending !== null && extending !== f.id) {
+              extending = null;
+              renderFences.key = null;
+              renderFences(last);
+            }
+            extending = f.id;
+            const row = tableBody.querySelector(`tr[data-id="${f.id}"]`);
+            row?.cells[4].replaceWith(closesCell(f));
+          });
+          action.append(more, ' ');
+        }
         action.append(button);
         tr.append(action);
         const show = () => {
+          if (f.waiting) return;
           select(f.id);
           map.showFence(f.id);
         };
@@ -470,25 +583,118 @@
     );
   }
 
+  // ------------------------------------------------------- previous fences
+
+  const CLOSED = { expired: 'its time was up', closed: 'closed', cancelled: 'cancelled before it opened' };
+  // What has been typed into each previous fence's row, kept across polls.
+  const typed = new Map(); // id -> { after, duration }
+
+  // The fence as POST /api/v1/geofences takes it.
+  function shapeBody(f) {
+    if (f.shape === 'circle') {
+      return { circle: { lat: f.lat_e7 * 1e-7, lon: f.lon_e7 * 1e-7, radius_m: f.radius_m } };
+    }
+    return { polygon: (f.points || []).map(([lat, lon]) => [lon * 1e-7, lat * 1e-7]) };
+  }
+
+  function numberInput(value, label, onInput) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.size = 5;
+    input.value = value;
+    input.setAttribute('aria-label', label);
+    input.addEventListener('input', () => onInput(input.value));
+    // A click in the row is for the inputs, not the row.
+    input.addEventListener('click', (event) => event.stopPropagation());
+    return input;
+  }
+
+  async function reopen(f, button) {
+    const t = typed.get(f.id) || { after: '0', duration: '-1' };
+    const after = Number(t.after);
+    const duration = Number(t.duration);
+    if (!Number.isFinite(after) || after < 0) {
+      say(`Fence ${f.id}: "opens after" must be 0 or more minutes.`, 'bad');
+      return;
+    }
+    if (!Number.isFinite(duration) || !(duration > 0 || duration === -1)) {
+      say(`Fence ${f.id}: "open for" must be more than 0 minutes, or -1 for until closed.`, 'bad');
+      return;
+    }
+    const body = { ...shapeBody(f), after_minutes: after, minutes: duration };
+    if (f.name) body.name = f.name;
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/v1/geofences', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        say(`Fence ${f.id} could not be reopened: ${reason(result.detail || response.status)}`, 'bad');
+        return;
+      }
+      const label = f.name || `fence ${f.id}`;
+      const when = after > 0 ? `opens in ${after} min` : 'opens now';
+      if (result.status === 'queued') {
+        pending.set(result.id, { what: `Reopening ${label}`, at: Date.now() });
+        say(`Reopening ${label}: it ${when.replace('now', 'when the simulation next steps')}.`, 'warn');
+      } else {
+        say(`Reopening ${label}: it ${when}${duration > 0 ? `, for ${duration} min` : ''}.`, 'ok');
+      }
+      typed.delete(f.id);
+      renderPrevious.key = null;
+      map.refreshFences();
+    } catch (err) {
+      say(`Fence ${f.id} could not be reopened: ${err}`, 'bad');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function renderPrevious(body) {
+    const previous = body.previous || [];
+    $('previous-empty').hidden = previous.length > 0;
+    $('previous-table').hidden = previous.length === 0;
+    const key = previous.map((f) => f.id).join(',') + body.tick_seconds;
+    if (renderPrevious.key === key) return;
+    renderPrevious.key = key;
+    const tbody = document.querySelector('#previous-table tbody');
+    tbody.replaceChildren(
+      ...previous.map((f) => {
+        const t = typed.get(f.id) || { after: '0', duration: '-1' };
+        const tr = document.createElement('tr');
+        tr.append(
+          nameCell(f),
+          cell(shapeText(f)),
+          cell(SOURCES[f.source] || f.source),
+          cell(`${simTime(f.closed_tick)} · ${CLOSED[f.closed] || f.closed}`, 'small'),
+        );
+        const after = document.createElement('td');
+        after.append(numberInput(t.after, `Fence ${f.id}: minutes before it opens`, (v) => {
+          typed.set(f.id, { ...(typed.get(f.id) || t), after: v });
+        }));
+        const duration = document.createElement('td');
+        duration.append(numberInput(t.duration, `Fence ${f.id}: minutes it stays open, -1 for until closed`, (v) => {
+          typed.set(f.id, { ...(typed.get(f.id) || t), duration: v });
+        }));
+        const action = document.createElement('td');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Reopen';
+        button.addEventListener('click', () => reopen(f, button));
+        action.append(button);
+        tr.append(after, duration, action);
+        return tr;
+      }),
+    );
+  }
+
   function describe(r) {
     const d = r.detail || {};
     switch (r.kind) {
-      case 'geofence': {
-        const opened = d.action === 'open';
-        const who = SOURCES[d.source] || d.source;
-        const shape = d.shape === 'circle'
-          ? `circle r ${fmtLength(d.radius_m)}`
-          : `polygon, ${(d.points || []).length} corners`;
-        const named = d.name ? `${d.name} · ` : '';
-        return [
-          opened ? 'Opened' : 'Closed',
-          d.id,
-          opened
-            ? `${named}${who} · ${shape}`
-            : `${named}${d.reason === 'expired' ? 'its time was up' : 'on request'}`,
-          '',
-        ];
-      }
       case 'breach':
         return [
           'Breach',
@@ -550,6 +756,7 @@
     // A model without geofences publishes no `margin_m`.
     $('fence-unavailable').hidden = Boolean(last.margin_m);
     renderFences(last);
+    renderPrevious(last);
     renderEvents(last);
   });
 

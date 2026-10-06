@@ -22,7 +22,7 @@
 //! [`agents::Dispatcher`]: crate::agents::Dispatcher
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Arc;
 
@@ -62,16 +62,20 @@ pub mod codes {
     pub const COMMAND: u16 = 103;
     /// Open a geofence. Payload `{"circle": {"lat": deg, "lon": deg,
     /// "radius_m": m}}` or `{"polygon": [[lon, lat], ...]}`, and optionally
-    /// `"minutes"` until it closes by itself. Refused if it would keep a
-    /// drone off its home pad.
+    /// `"name"`, `"minutes"` it stays open (-1: until closed) and
+    /// `"after_minutes"` before it opens (it waits, scheduled, until then).
+    /// Refused if it would keep a drone off its home pad.
     pub const GEOFENCE_OPEN: u16 = 110;
-    /// Close a geofence. Payload `{"id": n}`.
+    /// Close a geofence, or cancel one waiting to open. Payload `{"id": n}`.
     pub const GEOFENCE_CLOSE: u16 = 111;
     /// A ground station's whole fence plan. Payload `{"fences": [shape, ...]}`
     /// with each shape as for [`GEOFENCE_OPEN`]. Replaces the fences ground
     /// stations set before; leaves the scenario's, the dashboard's and other
     /// intents' alone.
     pub const GEOFENCE_SET: u16 = 112;
+    /// Change how long an open geofence stays open. Payload `{"id": n,
+    /// "minutes": m}`: `m` minutes from now, or -1 until it is closed.
+    pub const GEOFENCE_EXTEND: u16 = 113;
 }
 
 /// Salts that keep each use of the seed independent.
@@ -236,6 +240,20 @@ impl Instruction {
     }
 }
 
+/// Closed fences remembered to open again, at most.
+const MAX_PREVIOUS_FENCES: usize = 100;
+
+/// A fence that has closed: what it was, when, and how ("expired",
+/// "closed", "cancelled" before it opened). Closed by a ground station's
+/// fence plan counts as "closed".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Previous {
+    #[serde(flatten)]
+    pub fence: Fence,
+    pub closed_tick: u64,
+    pub closed: String,
+}
+
 /// Open orders a published view lists at most.
 const MAX_PUBLISHED_ORDERS: usize = 2_000;
 
@@ -243,6 +261,21 @@ const MAX_PUBLISHED_ORDERS: usize = 2_000;
 const GCS_SOURCE: &str = "gcs";
 /// The `source` of a fence the scenario pack starts with.
 const SCENARIO_SOURCE: &str = "scenario";
+
+/// How long a fence stays open, from its payload: absent, null or -1 for
+/// until it is closed, otherwise more than 0 minutes.
+fn fence_minutes(p: &serde_json::Value, key: &str) -> Result<Option<f64>, RejectReason> {
+    match p.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => match v.as_f64() {
+            Some(-1.0) => Ok(None),
+            Some(m) if m > 0.0 && m.is_finite() => Ok(Some(m)),
+            _ => Err(rejected(format!(
+                "{key} must be more than 0, or -1 to stay open until closed"
+            ))),
+        },
+    }
+}
 
 /// A fence's name from its payload: trimmed, at most 80 characters.
 fn fence_name(p: &serde_json::Value) -> String {
@@ -284,6 +317,10 @@ fn same_shape(a: &Shape, b: &Shape) -> bool {
 #[derive(Debug, Clone)]
 enum FenceChange {
     Open(Fence, Option<f64>),
+    /// Open after this many minutes, for the given minutes (or until closed).
+    Schedule(Fence, f64, Option<f64>),
+    /// Stay open this many minutes from now, or until closed.
+    Extend(u32, Option<f64>),
     Close(u32),
 }
 
@@ -358,6 +395,12 @@ pub struct World {
     /// The geofences open now.
     pub(crate) airspace: Airspace,
     fence_mail: Vec<FenceChange>,
+    /// Fences waiting to open, each with `opened_tick` set to when it will
+    /// (and `closes_tick` to when it then closes), soonest first.
+    scheduled: Vec<Fence>,
+    /// Fences that have closed (or were cancelled before opening), newest
+    /// last, at most [`MAX_PREVIOUS_FENCES`]: what can be opened again.
+    previous: VecDeque<Previous>,
     /// The drones the operator flies, and its notes on each.
     pub(crate) ops: BTreeMap<AgentId, Ops>,
 
@@ -428,6 +471,8 @@ impl World {
             recruits: Vec::new(),
             airspace: Airspace::default(),
             fence_mail: Vec::new(),
+            scheduled: Vec::new(),
+            previous: VecDeque::new(),
             ops: BTreeMap::new(),
             caps: HashMap::new(),
             scan_radius_m,
@@ -1026,6 +1071,8 @@ impl World {
         self.recruits.clear();
         self.airspace.clear();
         self.fence_mail.clear();
+        self.scheduled.clear();
+        self.previous.clear();
         self.ops = self
             .roster_ops
             .iter()
@@ -1139,6 +1186,7 @@ impl World {
             IntentVerb::Custom(codes::GEOFENCE_OPEN) => self.open_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_CLOSE) => self.close_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_SET) => self.set_fences(intent),
+            IntentVerb::Custom(codes::GEOFENCE_EXTEND) => self.extend_fence(intent),
             IntentVerb::Custom(code) => self.drone_intent(code, intent),
             IntentVerb::Spawn => self.spawn(intent),
             IntentVerb::Despawn => self.despawn(intent),
@@ -1247,10 +1295,14 @@ impl World {
     fn open_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
         let p = &intent.payload;
         let shape = self.shape_from(p)?;
-        let minutes = p
-            .get("minutes")
-            .and_then(serde_json::Value::as_f64)
-            .filter(|m| *m > 0.0 && m.is_finite());
+        let minutes = fence_minutes(p, "minutes")?;
+        let after = match p.get("after_minutes") {
+            None | Some(serde_json::Value::Null) => 0.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|m| *m >= 0.0 && m.is_finite())
+                .ok_or_else(|| rejected("after_minutes must be 0 or more"))?,
+        };
         // Who asked, for the log: "dashboard", say. The scenario's and
         // ground stations' names are their own.
         let source = p
@@ -1273,7 +1325,11 @@ impl World {
             opened_tick: 0,
             closes_tick: None,
         };
-        self.fence_mail.push(FenceChange::Open(fence, minutes));
+        self.fence_mail.push(if after > 0.0 {
+            FenceChange::Schedule(fence, after, minutes)
+        } else {
+            FenceChange::Open(fence, minutes)
+        });
         Ok(())
     }
 
@@ -1312,6 +1368,7 @@ impl World {
                 FenceChange::Open(f, _) => {
                     current.push((f.id, f.shape.clone(), f.source == GCS_SOURCE))
                 }
+                FenceChange::Schedule(..) | FenceChange::Extend(..) => {}
                 FenceChange::Close(id) => current.retain(|c| c.0 != *id),
             }
         }
@@ -1405,6 +1462,26 @@ impl World {
         Ok(shape)
     }
 
+    fn extend_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
+        let id = intent
+            .payload
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| rejected("extending a geofence needs its id"))?;
+        if intent.payload.get("minutes").is_none() {
+            return Err(rejected(
+                "extending a geofence needs minutes: more than 0, or -1 until closed",
+            ));
+        }
+        let minutes = fence_minutes(&intent.payload, "minutes")?;
+        if !self.airspace.fences().iter().any(|f| f.id == id) {
+            return Err(rejected(format!("no open geofence {id}")));
+        }
+        self.fence_mail.push(FenceChange::Extend(id, minutes));
+        Ok(())
+    }
+
     fn close_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
         let id = intent
             .payload
@@ -1412,11 +1489,11 @@ impl World {
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| rejected("closing a geofence needs its id"))?;
         let id = u32::try_from(id).map_err(|_| rejected(format!("no geofence {id}")))?;
-        let open = self.airspace.fences().iter().any(|f| f.id == id);
-        let pending = self
-            .fence_mail
-            .iter()
-            .any(|c| matches!(c, FenceChange::Open(f, _) if f.id == id));
+        let open = self.airspace.fences().iter().any(|f| f.id == id)
+            || self.scheduled.iter().any(|f| f.id == id);
+        let pending = self.fence_mail.iter().any(
+            |c| matches!(c, FenceChange::Open(f, _) | FenceChange::Schedule(f, _, _) if f.id == id),
+        );
         if !open && !pending {
             return Err(rejected(format!("no geofence {id}")));
         }
@@ -1459,10 +1536,9 @@ impl World {
                 let shape = self.shape_from(v).map_err(|e| {
                     anyhow::anyhow!("world/geofences.json fence {i}: {}", reason_text(&e))
                 })?;
-                let minutes = v
-                    .get("minutes")
-                    .and_then(serde_json::Value::as_f64)
-                    .filter(|m| *m > 0.0 && m.is_finite());
+                let minutes = fence_minutes(v, "minutes").map_err(|e| {
+                    anyhow::anyhow!("world/geofences.json fence {i}: {}", reason_text(&e))
+                })?;
                 let fence = Fence {
                     id: 0,
                     shape,
@@ -1474,6 +1550,18 @@ impl World {
                 Ok((fence, minutes))
             })
             .collect()
+    }
+
+    /// Remember a fence that closed, to open again later.
+    fn remember(&mut self, fence: Fence, how: &str) {
+        if self.previous.len() >= MAX_PREVIOUS_FENCES {
+            self.previous.pop_front();
+        }
+        self.previous.push_back(Previous {
+            fence,
+            closed_tick: self.tick,
+            closed: how.to_owned(),
+        });
     }
 
     fn fence_report(&mut self, fence: &Fence, action: &str, reason: &str) {
@@ -1503,6 +1591,7 @@ impl World {
         let tick = self.tick;
         for fence in self.airspace.expire(tick) {
             self.fence_report(&fence, "close", "expired");
+            self.remember(fence, "expired");
         }
         for change in std::mem::take(&mut self.fence_mail) {
             match change {
@@ -1512,12 +1601,42 @@ impl World {
                     self.fence_report(&fence, "open", "requested");
                     self.airspace.open(fence);
                 }
+                FenceChange::Schedule(mut fence, after, minutes) => {
+                    fence.opened_tick = tick + self.ticks_for(after);
+                    fence.closes_tick = minutes.map(|m| fence.opened_tick + self.ticks_for(m));
+                    self.fence_report(&fence, "schedule", "requested");
+                    let at = self
+                        .scheduled
+                        .partition_point(|f| (f.opened_tick, f.id) < (fence.opened_tick, fence.id));
+                    self.scheduled.insert(at, fence);
+                }
+                FenceChange::Extend(id, minutes) => {
+                    let closes = minutes.map(|m| tick + self.ticks_for(m));
+                    if let Some(fence) = self.airspace.set_closes(id, closes) {
+                        self.fence_report(&fence, "extend", "requested");
+                    }
+                }
                 FenceChange::Close(id) => {
                     if let Some(fence) = self.airspace.close(id) {
                         self.fence_report(&fence, "close", "requested");
+                        self.remember(fence, "closed");
+                    } else if let Some(at) = self.scheduled.iter().position(|f| f.id == id) {
+                        let fence = self.scheduled.remove(at);
+                        self.fence_report(&fence, "cancel", "requested");
+                        self.remember(fence, "cancelled");
                     }
                 }
             }
+        }
+        // Those whose time has come.
+        while self
+            .scheduled
+            .first()
+            .is_some_and(|f| f.opened_tick <= tick)
+        {
+            let fence = self.scheduled.remove(0);
+            self.fence_report(&fence, "open", "scheduled");
+            self.airspace.open(fence);
         }
     }
 
@@ -1620,6 +1739,8 @@ impl World {
                 "rev": self.airspace.rev(),
                 "margin_m": self.airspace.margin_m,
                 "fences": self.airspace.fences(),
+                "scheduled": self.scheduled,
+                "previous": self.previous.iter().rev().collect::<Vec<_>>(),
             },
             "orders": orders,
         })
@@ -1740,6 +1861,8 @@ impl World {
             "next_sysid": self.next_sysid,
             "call_ups": self.call_ups.iter().collect::<Vec<_>>(),
             "airspace": self.airspace.saved(),
+            "scheduled_fences": self.scheduled,
+            "previous_fences": self.previous,
             "ops": self.ops.iter().collect::<Vec<_>>(),
         })
     }
@@ -1766,6 +1889,12 @@ impl World {
         if let Some(list) = fields.get("call_ups") {
             let list: Vec<(AgentId, Courier)> = serde_json::from_value(list.clone())?;
             self.call_ups = list.into_iter().collect();
+        }
+        if let Some(previous) = fields.get("previous_fences") {
+            self.previous = serde_json::from_value(previous.clone())?;
+        }
+        if let Some(scheduled) = fields.get("scheduled_fences") {
+            self.scheduled = serde_json::from_value(scheduled.clone())?;
         }
         if let Some(airspace) = fields.get("airspace") {
             let saved: SavedAirspace = serde_json::from_value(airspace.clone())?;

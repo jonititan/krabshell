@@ -1045,7 +1045,8 @@ async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
     assert_eq!(status, StatusCode::OK);
     let _ = page_body;
     let (_, _, html) = call(&h, page("/geofences")).await;
-    assert!(html.contains("Open fences") && html.contains("/assets/geofences.js"));
+    assert!(html.contains("Current fences") && html.contains("Previous fences"));
+    assert!(html.contains("/assets/geofences.js"));
     let (status, _, js) = call(&h, page("/assets/geofences.js")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(js.contains("krabshell:geofences"));
@@ -1068,7 +1069,6 @@ async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
     assert_eq!(fences[0]["breaches"], 0);
     assert!(fences[0]["closes_tick"].as_u64().is_some());
     assert_eq!(body["margin_m"], 30.0);
-    assert_eq!(body["recent"][0]["kind"], "geofence");
     let id = fences[0]["id"].as_u64().unwrap();
 
     // One over HAWK-1's pad is refused, with the reason. Paused, it is only
@@ -1100,12 +1100,56 @@ async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
     let (status, _, _) = call(&h, post("/api/v1/geofences", json!({ "square": 1 }))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
+    // Kept open until closed instead of 30 minutes.
+    let (status, _, text) = call(
+        &h,
+        post(
+            &format!("/api/v1/geofences/{id}/extend"),
+            json!({ "minutes": -1 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert!(body["fences"][0]["closes_tick"].is_null(), "{body}");
+    let (status, _, _) = call(
+        &h,
+        post("/api/v1/geofences/999/extend", json!({ "minutes": 5 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let (status, _, text) = call(&h, delete(&format!("/api/v1/geofences/{id}"))).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
     let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
     assert_eq!(body["fences"], json!([]));
-    assert_eq!(body["recent"][0]["detail"]["action"], "close");
+    assert_eq!(body["previous"][0]["id"], id);
+    assert_eq!(body["previous"][0]["closed"], "closed");
+
+    // Reopened as it was, in a minute, until closed: it waits, scheduled,
+    // with a new number, and can be cancelled before it opens.
+    let previous = body["previous"][0].clone();
+    let again = json!({
+        "circle": { "lat": previous["lat_e7"].as_f64().unwrap() * 1e-7, "lon": previous["lon_e7"].as_f64().unwrap() * 1e-7, "radius_m": previous["radius_m"] },
+        "after_minutes": 1, "minutes": -1,
+    });
+    let (status, _, text) = call(&h, post("/api/v1/geofences", again)).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"], json!([]));
+    let waiting = &body["scheduled"][0];
+    assert!(waiting["id"].as_u64().unwrap() > id);
+    assert!(waiting["closes_tick"].is_null());
+    let waiting = waiting["id"].as_u64().unwrap();
+    let (status, _, _) = call(&h, delete(&format!("/api/v1/geofences/{waiting}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["scheduled"], json!([]));
+    assert_eq!(body["previous"][0]["closed"], "cancelled");
 
     let (status, _, _) = call(&h, delete("/api/v1/geofences/999")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

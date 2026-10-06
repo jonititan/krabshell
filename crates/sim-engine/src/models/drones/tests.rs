@@ -986,3 +986,151 @@ fn a_ground_station_fence_plan_replaces_only_its_own_fences_and_a_repeat_changes
     let err = model.apply_intent(&bad).unwrap_err();
     assert!(err.to_string().contains("fence 1"), "{err}");
 }
+
+#[test]
+fn a_fence_can_wait_to_open_close_when_its_time_is_up_and_be_remembered() {
+    let mut model = drones(Profile::Gold);
+    let (lon, lat) = at(-300.0, 300.0);
+    let circle = serde_json::json!({ "lat": lat, "lon": lon, "radius_m": 30.0 });
+    let open = |model: &Drones, extra: serde_json::Value| {
+        let mut payload = serde_json::json!({ "circle": circle, "name": "Later" });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        Intent {
+            agent: None,
+            ..intent(model, 1, codes::GEOFENCE_OPEN, payload)
+        }
+    };
+    // Nought minutes open, or a nonsense wait, is refused.
+    assert!(model
+        .apply_intent(&open(&model, serde_json::json!({ "minutes": 0 })))
+        .is_err());
+    assert!(model
+        .apply_intent(&open(&model, serde_json::json!({ "after_minutes": -2 })))
+        .is_err());
+
+    // In a minute (600 ticks), for a minute.
+    model
+        .apply_intent(&open(
+            &model,
+            serde_json::json!({ "after_minutes": 1, "minutes": 1 }),
+        ))
+        .unwrap();
+    run(&mut model, 1, 1);
+    let g = &model.overlays()["geofences"];
+    assert_eq!(g["fences"], serde_json::json!([]));
+    assert_eq!(g["scheduled"][0]["opened_tick"], 601);
+    assert_eq!(g["scheduled"][0]["closes_tick"], 1201);
+
+    // A checkpoint while it waits keeps it waiting.
+    let mut cells = Vec::new();
+    model.snapshot(&mut cells, usize::MAX);
+    let mut restored = drones(Profile::Gold);
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&model.fields()).unwrap();
+    assert_eq!(restored.overlays(), model.overlays());
+
+    let reports = run(&mut model, 2, 600);
+    assert!(reports.iter().any(|r| r.kind == ReportKind::Geofence
+        && r.detail["action"] == "open"
+        && r.detail["reason"] == "scheduled"
+        && r.tick == 601));
+    assert_eq!(geofences_in(&model.overlays()).1[0].name, "Later");
+    run(&mut model, 602, 600);
+    let g = &model.overlays()["geofences"];
+    assert_eq!(g["fences"], serde_json::json!([]));
+    assert_eq!(g["previous"][0]["closed"], "expired");
+    assert_eq!(g["previous"][0]["closed_tick"], 1201);
+    assert_eq!(g["previous"][0]["name"], "Later");
+
+    // Cancelled before it opens, it is remembered too.
+    model
+        .apply_intent(&open(&model, serde_json::json!({ "after_minutes": 5 })))
+        .unwrap();
+    run(&mut model, 1202, 1);
+    let id = model.overlays()["geofences"]["scheduled"][0]["id"]
+        .as_u64()
+        .unwrap();
+    let cancel = intent(
+        &model,
+        1,
+        codes::GEOFENCE_CLOSE,
+        serde_json::json!({ "id": id }),
+    );
+    model.apply_intent(&cancel).unwrap();
+    run(&mut model, 1203, 1);
+    let g = &model.overlays()["geofences"];
+    assert_eq!(g["scheduled"], serde_json::json!([]));
+    assert_eq!(g["previous"][0]["closed"], "cancelled");
+    assert_eq!(g["previous"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn an_open_fence_can_be_given_more_time_from_now_or_kept_open_until_closed() {
+    let mut model = drones(Profile::Gold);
+    let (lon, lat) = at(-300.0, 300.0);
+    let payload =
+        serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 30.0 }, "minutes": 1 });
+    model
+        .apply_intent(&Intent {
+            agent: None,
+            ..intent(&model, 1, codes::GEOFENCE_OPEN, payload)
+        })
+        .unwrap();
+    run(&mut model, 1, 300);
+    let fence = &geofences_in(&model.overlays()).1[0];
+    assert_eq!(fence.closes_tick, Some(601));
+    let extend = |model: &Drones, minutes: serde_json::Value| {
+        intent(
+            model,
+            1,
+            codes::GEOFENCE_EXTEND,
+            serde_json::json!({ "id": fence.id, "minutes": minutes }),
+        )
+    };
+
+    // Two minutes from now (tick 301): it closes at 1501, not 601 + 1200.
+    model
+        .apply_intent(&extend(&model, serde_json::json!(2)))
+        .unwrap();
+    let reports = run(&mut model, 301, 1);
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Geofence && r.detail["action"] == "extend"));
+    assert_eq!(
+        geofences_in(&model.overlays()).1[0].closes_tick,
+        Some(1_501)
+    );
+
+    // -1: until it is closed.
+    model
+        .apply_intent(&extend(&model, serde_json::json!(-1)))
+        .unwrap();
+    run(&mut model, 302, 2_000);
+    let fences = geofences_in(&model.overlays()).1;
+    assert_eq!(fences.len(), 1, "still open");
+    assert_eq!(fences[0].closes_tick, None);
+
+    // Nonsense, a missing number, or a fence that is not open, is refused.
+    assert!(model
+        .apply_intent(&extend(&model, serde_json::json!(0)))
+        .is_err());
+    assert!(model
+        .apply_intent(&intent(
+            &model,
+            1,
+            codes::GEOFENCE_EXTEND,
+            serde_json::json!({ "id": fence.id })
+        ))
+        .is_err());
+    assert!(model
+        .apply_intent(&intent(
+            &model,
+            1,
+            codes::GEOFENCE_EXTEND,
+            serde_json::json!({ "id": 99, "minutes": 5 })
+        ))
+        .is_err());
+}

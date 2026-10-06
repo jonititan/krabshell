@@ -99,6 +99,10 @@ pub fn router(state: AppState) -> Router {
             get(routes::api::geofences_list).post(routes::api::geofences_open),
         )
         .route("/geofences/{id}", delete(routes::api::geofences_close))
+        .route(
+            "/geofences/{id}/extend",
+            post(routes::api::geofences_extend),
+        )
         .route("/ws", get(routes::ws::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),

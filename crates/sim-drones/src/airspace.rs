@@ -406,6 +406,14 @@ impl Airspace {
         Some(fence)
     }
 
+    /// Change when an open fence closes by itself (`None`: never). Its shape
+    /// is unchanged, so nothing needs replanning. The fence as it now is.
+    pub fn set_closes(&mut self, id: u32, closes_tick: Option<u64>) -> Option<Fence> {
+        let fence = self.fences.iter_mut().find(|f| f.id == id)?;
+        fence.closes_tick = closes_tick;
+        Some(fence.clone())
+    }
+
     /// Close every fence due to close by `tick`.
     pub fn expire(&mut self, tick: u64) -> Vec<Fence> {
         let (done, open): (Vec<Fence>, Vec<Fence>) = std::mem::take(&mut self.fences)

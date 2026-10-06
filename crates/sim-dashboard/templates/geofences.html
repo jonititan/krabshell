@@ -110,7 +110,7 @@
 
 <section class="panel">
   <div class="map-head">
-    <h2>Open fences</h2>
+    <h2>Current fences</h2>
     <p id="fence-meta" class="dim small"></p>
   </div>
   <div id="fence-flash" class="banner" hidden></div>
@@ -125,12 +125,33 @@
       <tbody></tbody>
     </table>
   </div>
-  <p id="fence-empty" class="dim">No fences open.</p>
+  <p id="fence-empty" class="dim">No fences open or waiting to open.</p>
+</section>
+
+<section class="panel">
+  <h2>Previous fences</h2>
+  <p class="dim small">
+    Fences that have closed, newest first. Reopen one as it was, now or after
+    a number of minutes, for a number of minutes or (with -1) until it is
+    closed. It opens with a new number.
+  </p>
+  <div class="table-scroll">
+    <table class="grid" id="previous-table">
+      <thead>
+        <tr>
+          <th>Fence</th><th>Shape</th><th>Opened by</th><th>Closed</th>
+          <th>Opens after, min</th><th>Open for, min</th><th><span class="visually-hidden">Reopen</span></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="previous-empty" class="dim">No fence has closed yet.</p>
 </section>
 
 <section class="panel">
   <h2>Recent activity</h2>
-  <p class="dim small">Fences opening and closing, breaches, and the reroutes the operator sent, newest first, from the run's latest reports.</p>
+  <p class="dim small">Breaches, and the reroutes the operator sent to keep its drones out, newest first, from the run's latest reports.</p>
   <div class="table-scroll">
     <table class="grid" id="fence-events">
       <thead><tr><th>Sim time</th><th>Event</th><th>Fence</th><th>Detail</th></tr></thead>
