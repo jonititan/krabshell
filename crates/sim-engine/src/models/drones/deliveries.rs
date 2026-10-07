@@ -144,8 +144,9 @@ impl DeliveryLog {
 
     /// Every order turned away, one row each, with why.
     pub fn rejected_csv(&self) -> String {
-        let mut out =
-            String::from("order,depot,address,lat,lon,ordered_tick,fence,fence_name,stage,reason\n");
+        let mut out = String::from(
+            "order,depot,address,lat,lon,ordered_tick,fence,fence_name,stage,reason\n",
+        );
         for r in &self.rejected {
             out.push_str(&format!(
                 "{},{},{},{:.7},{:.7},{},{},{},{},{}\n",
