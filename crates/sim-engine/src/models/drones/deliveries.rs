@@ -39,6 +39,9 @@ pub struct Rejected {
     pub ordered_tick: u64,
     pub fence: Option<u64>,
     pub fence_name: String,
+    /// When it was turned away: as it was `placed`, while `queued`, or when
+    /// its drone `returned` without delivering it.
+    pub stage: String,
     pub reason: String,
 }
 
@@ -75,6 +78,7 @@ impl DeliveryLog {
                 ordered_tick: int("ordered_tick").unwrap_or(report.tick),
                 fence: int("fence"),
                 fence_name: text("fence_name"),
+                stage: text("stage"),
                 reason: text("reason"),
             });
             return true;
@@ -141,10 +145,10 @@ impl DeliveryLog {
     /// Every order turned away, one row each, with why.
     pub fn rejected_csv(&self) -> String {
         let mut out =
-            String::from("order,depot,address,lat,lon,ordered_tick,fence,fence_name,reason\n");
+            String::from("order,depot,address,lat,lon,ordered_tick,fence,fence_name,stage,reason\n");
         for r in &self.rejected {
             out.push_str(&format!(
-                "{},{},{},{:.7},{:.7},{},{},{},{}\n",
+                "{},{},{},{:.7},{:.7},{},{},{},{},{}\n",
                 r.order,
                 csv_field(&r.depot),
                 csv_field(&r.address),
@@ -153,6 +157,7 @@ impl DeliveryLog {
                 r.ordered_tick,
                 r.fence.map(|f| f.to_string()).unwrap_or_default(),
                 csv_field(&r.fence_name),
+                csv_field(&r.stage),
                 csv_field(&r.reason),
             ));
         }

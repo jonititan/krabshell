@@ -116,10 +116,13 @@ come from the run's seed, so `gold` runs place and deliver the same orders.
 
 An order whose address is inside a geofence waits in the queue until the
 fence closes. A pack that sets `reject_orders_in_geofences = true` turns such
-orders away when they are placed instead: an `order_rejected` report gives
-the order, the address and the reason ("the delivery address is inside
-geofence #3 (Žalgiris Arena)"), and the run log lists them in
-`rejected-orders.csv`. `kaunas-deliveries` does.
+orders away instead: as they are placed, the moment a new fence opens over
+an order still waiting, and, for an order a drone was carrying when a fence
+opened over its address, when the drone comes back without it. An
+`order_rejected` report gives the order, the address, the `stage` (placed,
+queued, returned) and the reason ("the delivery address is inside geofence
+#3 (Žalgiris Arena), which opened while the order waited"), and the run log
+lists them in `rejected-orders.csv`. `kaunas-deliveries` does.
 
 A drone whose battery reaches 0 % in the air crashes where it is: it leaves
 the world, a `crash` report is logged, and the order it carried goes back to

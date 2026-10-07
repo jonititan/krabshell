@@ -1298,3 +1298,78 @@ fn with_rejection_on_an_order_to_a_fenced_address_is_turned_away_and_logged_why(
     assert_eq!(log.rejected.len(), rejected.len());
     assert!(log.rejected_csv().contains("geofence #1 (Stadium)"));
 }
+
+#[test]
+fn with_rejection_on_a_new_fence_turns_away_the_orders_it_covers_queued_or_on_their_way() {
+    let mut blob = courier_blob();
+    blob.config
+        .model
+        .insert("reject_orders_in_geofences".into(), Param::Bool(true));
+    // No charger here: without a drain the courier lasts the whole test.
+    blob.config
+        .model
+        .insert("battery_drain_pct_s".into(), Param::Float(0.0));
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+
+    // Until the courier is in the air with an order for the address 500 m
+    // south, and more orders for it wait in the queue.
+    let mut tick = 1;
+    let carried = loop {
+        model.step(tick);
+        tick += 1;
+        assert!(tick < 30_000, "never caught the courier on its way south");
+        let r = record(&model, 5);
+        let pose = r.saved.pose;
+        let courier = r.saved.courier.as_ref().unwrap();
+        let airborne = pose.alt_mm > r.saved.drone.as_ref().unwrap().home.alt_mm + 5_000;
+        let queued_south = model.world().dispatch().queues[0]
+            .iter()
+            .any(|o| o.address == 2);
+        if let Some(order) = courier.order.as_ref().filter(|o| o.address == 2) {
+            if airborne && !courier.delivered && queued_south {
+                break order.id;
+            }
+        }
+    };
+    let (lon, lat) = at(0.0, -500.0);
+    let payload = serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 60.0 }, "name": "South" });
+    model
+        .apply_intent(&Intent {
+            agent: None,
+            ..intent(&model, 5, codes::GEOFENCE_OPEN, payload)
+        })
+        .unwrap();
+    let reports = run(&mut model, tick, 6_000);
+    let rejected: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::OrderRejected)
+        .collect();
+
+    // The queued ones at once, as the fence opens.
+    let queued: Vec<&&Report> = rejected
+        .iter()
+        .filter(|r| r.detail["stage"] == "queued")
+        .collect();
+    assert!(!queued.is_empty());
+    assert!(queued.iter().all(|r| r.tick == tick));
+    assert!(queued[0].detail["reason"]
+        .as_str()
+        .unwrap()
+        .ends_with("(South), which opened while the order waited"));
+    // The one on board when the courier comes back without it.
+    let returned = rejected
+        .iter()
+        .find(|r| r.detail["stage"] == "returned")
+        .expect("the carried order is turned away on return");
+    assert_eq!(returned.detail["order"], carried);
+    assert!(returned.tick > tick);
+    // None of them is ever delivered or queued again.
+    assert!(!reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Delivery && r.detail["address"] == 2));
+    assert!(model.world().dispatch().queues[0]
+        .iter()
+        .all(|o| o.address != 2));
+    assert_eq!(model.world().dispatch().rejected as usize, rejected.len());
+}

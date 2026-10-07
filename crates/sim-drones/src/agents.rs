@@ -362,9 +362,13 @@ impl DroneAgent {
         if courier.order.is_some() && drone.mode == Mode::Disarmed {
             let mut order = courier.order.take().expect("checked");
             if !courier.delivered {
-                // Back without delivering: first in line again.
+                // Back without delivering: first in line again, unless a
+                // geofence opened over the address and such orders are
+                // turned away.
                 order.dispatched_tick = None;
-                world.dispatch.queues[depot].push_front(order);
+                if !world.reject_if_fenced(&order, crate::world::Stage::Returned) {
+                    world.dispatch.queues[depot].push_front(order);
+                }
             }
             courier.delivered = false;
             courier.landed_tick = Some(tick);

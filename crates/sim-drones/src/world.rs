@@ -289,6 +289,36 @@ fn fence_name(p: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// When an order was turned away for its address being inside a geofence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stage {
+    /// As it was placed.
+    Placed,
+    /// While it waited in the queue: a fence opened over its address.
+    Queued,
+    /// When its drone came back (or crashed) without delivering it, a fence
+    /// having opened over its address on the way.
+    Returned,
+}
+
+impl Stage {
+    fn name(self) -> &'static str {
+        match self {
+            Stage::Placed => "placed",
+            Stage::Queued => "queued",
+            Stage::Returned => "returned",
+        }
+    }
+
+    fn since(self) -> &'static str {
+        match self {
+            Stage::Placed => "",
+            Stage::Queued => ", which opened while the order waited",
+            Stage::Returned => ", which opened while the order was on its way",
+        }
+    }
+}
+
 /// Where an address in the book is, on the ground.
 fn address_point(book: &AddressBook, address: u32) -> Point {
     let a = &book.addresses[address as usize];
@@ -974,12 +1004,51 @@ impl World {
             |address| !reject || !airspace.blocks(&address_point(book, address)),
         );
         for order in rejected {
-            self.order_rejected(&order);
+            self.order_rejected(&order, Stage::Placed);
+        }
+    }
+
+    /// With `reject_orders_in_geofences`, turn away an order whose address
+    /// a geofence now covers, logging why. True if it was turned away; the
+    /// caller then forgets it rather than queue it.
+    pub(crate) fn reject_if_fenced(
+        &mut self,
+        order: &crate::dispatch::Order,
+        stage: Stage,
+    ) -> bool {
+        if !self.settings.reject_orders_in_geofences
+            || !self
+                .airspace
+                .blocks(&address_point(&self.book, order.address))
+        {
+            return false;
+        }
+        self.dispatch.rejected += 1;
+        self.order_rejected(order, stage);
+        true
+    }
+
+    /// Turn away every queued order a newly opened geofence covers.
+    fn reject_newly_fenced(&mut self) {
+        if !self.settings.reject_orders_in_geofences {
+            return;
+        }
+        let mut queued: Vec<crate::dispatch::Order> = Vec::new();
+        for queue in self.dispatch.queues.iter_mut() {
+            let (keep, drop): (VecDeque<_>, VecDeque<_>) = std::mem::take(queue)
+                .into_iter()
+                .partition(|o| !self.airspace.blocks(&address_point(&self.book, o.address)));
+            *queue = keep;
+            queued.extend(drop);
+        }
+        for order in queued {
+            self.dispatch.rejected += 1;
+            self.order_rejected(&order, Stage::Queued);
         }
     }
 
     /// Log an order turned away because its address is inside a geofence.
-    fn order_rejected(&mut self, order: &crate::dispatch::Order) {
+    fn order_rejected(&mut self, order: &crate::dispatch::Order, stage: Stage) {
         let at = address_point(&self.book, order.address);
         let address = &self.book.addresses[order.address as usize];
         let fence = self
@@ -1004,7 +1073,8 @@ impl World {
             "ordered_tick": order.ordered_tick,
             "fence": fence_id,
             "fence_name": fence_name,
-            "reason": format!("the delivery address is inside {fence_text}"),
+            "stage": stage.name(),
+            "reason": format!("the delivery address is inside {fence_text}{}", stage.since()),
         });
         self.report(Report {
             seq: 0,
@@ -1034,7 +1104,9 @@ impl World {
         if let Some(courier) = &wreck.courier {
             if let Some(mut order) = courier.order.clone().filter(|_| !courier.delivered) {
                 order.dispatched_tick = None;
-                self.dispatch.queues[usize::from(courier.depot)].push_front(order);
+                if !self.reject_if_fenced(&order, Stage::Returned) {
+                    self.dispatch.queues[usize::from(courier.depot)].push_front(order);
+                }
             }
         }
         // A crashed spare leaves the stand-by list; its replacement joins it.
@@ -1746,6 +1818,11 @@ impl World {
             let fence = self.scheduled.remove(0);
             self.fence_report(&fence, "open", "scheduled");
             self.airspace.open(fence);
+        }
+        // A fence opened this tick (by request, on schedule, or in a ground
+        // station's plan) turns away the queued orders it covers.
+        if self.airspace.fences().iter().any(|f| f.opened_tick == tick) {
+            self.reject_newly_fenced();
         }
     }
 
