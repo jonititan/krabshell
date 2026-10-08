@@ -128,7 +128,16 @@ that applies it instead of walking off it.
     run. The operator
     (`sim-drones/src/operator.rs`) then reroutes the drones the simulation
     flies by queuing the same mission uploads and commands a ground station's
-    intents would. The fences reach gateways through `Model::overlays`, a
+    intents would. Intents 120/121 and 130/131 add and remove stations and
+    regions of interest, applied the same way.
+  - **Behaviour trees.** A drone's step is one tick of a bonsai-bt tree
+    (`sim-drones/src/behaviour.rs`, `behaviour/drone.json`), shared by every
+    drone and ticked afresh from its root each step, so it holds no state a
+    checkpoint would have to keep. The operator's rerouting is the tree's
+    `AvoidGeofences` act, run as each drone steps and planned from its own
+    committed state; its messages join the mail after the intents', as
+    they did when the dispatcher ran it for every drone first. Porting the
+    old step to the default tree left every gold hash unchanged. The fences reach gateways through `Model::overlays`, a
     small JSON value each published view carries beside the cells. An intent addressed to a drone's old cell is still
     accepted: the drone moves between publish and apply, and only the world
     bounds are checked.

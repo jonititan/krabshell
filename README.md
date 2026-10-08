@@ -136,8 +136,14 @@ battery left.
 
 Geofences are keep-out zones: circles and polygons, from the surface up
 without limit unless they have an altitude band (`floor_m`, `ceiling_m`,
-metres above ground level; drones may fly beneath a fence whose floor is
-high enough). A
+metres above ground level, or above sea level with `"altitude_ref":
+"amsl"`, taken at the fence's centre). A drone is inside a fence only
+within its band. A leg a fence blocks is also tried beneath it, at the
+floor less `geofence_vertical_margin_m` (default 10) and no lower than
+`beneath_min_agl_m` (default 20), following the terrain, and flown that way
+when it is shorter counting the drop and climb back; a delivery address
+under such a fence is winched to from down there. A fence that reaches too
+low to fly beneath keeps orders from its addresses as before. A
 pack lists the ones it starts with in `world/geofences.json`, each with an
 optional `name` and `minutes` (until it closes by itself):
 
@@ -228,6 +234,41 @@ vehicles (where they are, and camera sightings); geofences; launch and
 recovery stations; regions of interest; and the A5 occupancy grid. The
 choice is remembered in the browser.
 
+### Behaviour trees
+
+What every drone does each tick is decided by one behaviour tree
+([bonsai-bt](https://docs.rs/bonsai-bt)), the same for every drone, read
+from `crates/sim-drones/behaviour/drone.json`, or from a pack's own
+`world/behaviour.json`. The tree is JSON in bonsai's own format, with a
+`description` beside the `root`:
+
+```json
+{ "description": "...",
+  "root": { "Sequence": [
+    { "Action": "ObeyCommands" },
+    { "Action": "Fly" },
+    { "AlwaysSucceed": { "Sequence": [ { "Action": "ReadyForWork" },
+      { "Select": [ { "Action": "TakeOrder" }, { "Action": "Survey" } ] } ] } }
+  ] } }
+```
+
+Like a [TinyBrains](https://tinybrains.dev) brain, it is small, shared, and
+evaluated afresh every tick: its leaves are the drone's senses (`Airborne`,
+`IsCourier`, `FlownBySimulation`, `BackFromTrip`, `ReadyForWork`,
+`SensorDue`, `AtStation`, `LowBattery`), which succeed or fail, and its acts
+(`AvoidGeofences`, `ObeyCommands`, `Fly`, `FinishTrip`, `TakeOrder`,
+`Survey`, `DivertToStation`, `ReturnToBase`, `LogBreaches`, `Scan`); the
+branches are bonsai's `Sequence`, `Select`, `If`, `Invert`,
+`AlwaysSucceed`, `WhenAll`, `WhenAny`, `Race` and `After`. What a drone is
+in the middle of lives in its state, not the tree, so checkpoints restore
+exactly; nodes that wait across ticks (`Wait`, `WaitForever`, `Timeout`,
+`While`, `WhileAll`) are refused, as is a tree without exactly one `Fly`.
+Each node is documented in `crates/sim-drones/src/behaviour.rs`. The
+default tree is the drones' behaviour before trees (gold runs replayed
+unchanged), with stations and surveys added. Each drone publishes what it
+is doing as `activity` (`delivering`, `surveying`, `returning`,
+`charging`, `flying`, `idle`).
+
 ### Stations and regions of interest
 
 Launch and recovery stations are where drones take off, land and charge;
@@ -240,7 +281,35 @@ survey each), and reports what happens to them (`station`, `roi` and
 "lon", "name", "source"}` adds a station and `Custom` 121 with `{"id"}`
 removes one; `Custom` 130 with `{"lat", "lon", "radius_m", "name",
 "source"}` (10 to 5000 m) designates a region and `Custom` 131 with
-`{"id"}` removes one.
+`{"id"}` removes one. A pack lists those it starts with in
+`world/stations.json` (`[{"name", "lat", "lon"}]`) and
+`world/regions.json` (`[{"name", "lat", "lon", "radius_m"}]`). A station
+cannot go under a geofence too low to fly beneath.
+
+A courier whose trip will not go on one charge (straight-line flight at
+cruise speed, its climbs, and the winch, with a 25 % margin, from what it
+has above `battery_reserve_pct`) plans it as hops between stations: the
+shortest chain out to one from which the address and back to a station is
+in reach, and home from there. At each stop it lands, charges until it has
+enough for the next hop and the reserve (its `NAV_TAKEOFF` carries that
+charge in `param2`, a krabshell extension: the takeoff waits on a charger
+until the battery holds it), and takes off. With no station that helps it
+flies straight, as before. A drone the simulation flies whose low-battery
+failsafe fires out of reach of home diverts to the nearest station it can
+reach (a `station` report with `action` `divert`), and once down there
+flies home, by way of other stations if need be, when charged. Stations
+only help when there is a charger (`charge_pct_s`).
+
+A drone the simulation flies that is free for work (on its pad, charged to
+the launch level, and for a courier, with no order it can take) surveys
+the region of interest most overdue a look that it can reach: never
+surveyed first, oldest first, then the one surveyed longest ago, once
+`roi_revisit_min` (default 30) have passed, one drone at a time. It flies
+there (by way of stations if it must), circles inside it at
+`survey_agl_m` (default 60) with the camera on, and comes home; a `survey`
+report marks the circle closed. A drone that crashes leaves a region of
+`crash_roi_radius_m` (default 150; 0 for none) where it fell, named "Crash
+of" its callsign.
 
 The dashboard's **Stations & regions** tab manages them. Add a station
 (click where it goes, then name it) or a region (centre, then edge, or type
@@ -379,8 +448,11 @@ cargo run --release -p sim-drones --bin krab-drones -- scenarios/london-patrol -
 cargo run --release -p sim-drones --bin krab-drones -- scenarios/london-patrol --tui
 ```
 
-It prints agents, occupied cells, steps per second, reports by kind, orders
-and the gold hash. `--reports` writes every detection, waypoint and delivery as
+It prints the brain's size, agents, occupied cells, steps per second,
+reports by kind, orders, stations, regions and surveys, and the gold hash.
+Everything the drones do (behaviour trees, geofence bands, stations,
+regions of interest) is in the model; the dashboard only draws it and sends
+intents, so it all runs here the same. `--reports` writes every detection, waypoint and delivery as
 JSON lines. `--tui` hands the world to krABMaga's `simulate!` with its terminal
 monitor instead, and prints no summary.
 
@@ -493,7 +565,12 @@ deliveries (`order_rate_per_address_day`, `dispatch_takeoff_m`,
 [Deliveries and run logs](#deliveries-and-run-logs)), and
 `geofence_margin_m`: the buffer, in metres, the drones the simulation flies
 keep from every geofence (default 30, from 2 to 1000; see
-[Geofences](#geofences)).
+[Geofences](#geofences)), `geofence_vertical_margin_m` and
+`beneath_min_agl_m` (flying beneath fences), and `roi_revisit_min`,
+`survey_agl_m` and `crash_roi_radius_m` (see
+[Stations and regions of interest](#stations-and-regions-of-interest)).
+A pack's `world/behaviour.json`, `world/stations.json` and
+`world/regions.json` are optional (see [Behaviour trees](#behaviour-trees)).
 
 Terrain goes in `world/fields.json` as a regular latitude/longitude grid of
 elevations above mean sea level; the format is documented in
