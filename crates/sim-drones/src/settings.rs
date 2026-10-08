@@ -30,6 +30,13 @@ pub(crate) struct Settings {
     /// The lowest drones fly to pass beneath a geofence, metres above the
     /// ground.
     pub(crate) beneath_min_agl_m: f64,
+    /// How long after a survey a region of interest is due another, ticks.
+    pub(crate) roi_revisit_ticks: u64,
+    /// The radius of the region of interest left where a drone crashes,
+    /// metres; 0 leaves none.
+    pub(crate) crash_roi_radius_m: f64,
+    /// How high above the ground drones fly a survey, metres.
+    pub(crate) survey_agl_m: f32,
     /// Turn away orders whose address is inside a geofence when they are
     /// placed, rather than queue them until it closes.
     pub(crate) reject_orders_in_geofences: bool,
@@ -107,6 +114,9 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
         geofence_vertical_margin_m: param_f64(params, "geofence_vertical_margin_m", 10.0)
             .clamp(0.0, 500.0),
         beneath_min_agl_m: param_f64(params, "beneath_min_agl_m", 20.0).clamp(1.0, 1_000.0),
+        roi_revisit_ticks: ticks(param_f64(params, "roi_revisit_min", 30.0).max(0.0) * 60.0),
+        crash_roi_radius_m: param_f64(params, "crash_roi_radius_m", 150.0).clamp(0.0, 5_000.0),
+        survey_agl_m: param_f64(params, "survey_agl_m", 60.0).clamp(5.0, 500.0) as f32,
         reject_orders_in_geofences: matches!(
             params.get("reject_orders_in_geofences"),
             Some(Param::Bool(true))

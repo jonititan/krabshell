@@ -12,9 +12,11 @@ use sim_core::{AgentId, GeoCell, Report, ReportKind};
 
 use crate::behaviour::Node;
 use crate::dispatch::{self, AddressBook, Courier, Order};
-use crate::flight::Pose;
-use crate::mission::{self, Drone, Event, Mode};
+use crate::flight::{self, Point, Pose};
+use crate::mission::{self, Drone, Event, MissionItem, Mode};
+use crate::regions::{self, Survey};
 use crate::sensor::{Candidate, Sighting};
+use crate::stations::{self, Planner, Range};
 use crate::targets::{Route, Wander};
 use crate::world::{draw_pair, refresh_key, Kind, Record, Saved, World, WANDER_SALT};
 
@@ -73,6 +75,7 @@ impl Body {
             route: None,
             wander: None,
             courier: None,
+            survey: None,
         }
     }
 
@@ -92,6 +95,8 @@ pub struct DroneAgent {
     pub body: Body,
     pub drone: Drone,
     pub courier: Option<Courier>,
+    /// The survey of a region of interest it is flying, if any.
+    pub survey: Option<Survey>,
     /// Crashed: off the board, and off the schedule after this step.
     pub wrecked: bool,
 }
@@ -126,6 +131,7 @@ impl Agent for Dispatcher {
     fn step(&mut self, state: &mut dyn State) {
         let world = world(state);
         world.update_airspace();
+        world.update_sites();
         world.place_orders();
     }
 }
@@ -167,6 +173,7 @@ impl DroneAgent {
         let mut saved = self.body.saved();
         saved.drone = Some(self.drone.clone());
         saved.courier = self.courier.clone();
+        saved.survey = self.survey.clone();
         self.body.record(saved)
     }
 
@@ -192,6 +199,30 @@ impl DroneAgent {
                 );
                 world.report(report);
             }
+        }
+        if let Some(survey) = self
+            .survey
+            .as_mut()
+            .filter(|s| !s.done && s.last_item == item)
+        {
+            survey.done = true;
+            let (roi, started) = (survey.roi, survey.started_tick);
+            world.regions.release(self.body.id);
+            let mut detail = self.flight_detail(world);
+            detail["roi"] = roi.into();
+            detail["duration_s"] =
+                (tick.saturating_sub(started) as f64 * world.settings.tuning.dt).into();
+            if let Some(r) = world.regions.get_mut(roi) {
+                r.surveys += 1;
+                r.last_surveyed_tick = Some(tick);
+                detail["name"] = r.name.clone().into();
+            }
+            world.report(self.flight_report(
+                ReportKind::Survey,
+                format!("survey-{roi}-{}-{tick}", self.body.id),
+                tick,
+                detail,
+            ));
         }
         world.report(Report {
             seq: 0,
@@ -278,6 +309,10 @@ impl DroneAgent {
         {
             detail["requeued_order"] = order.id.into();
         }
+        world.regions.release(self.body.id);
+        if let Some(roi) = world.crash_region(&self.body.pose.point(), &self.body.callsign) {
+            detail["roi"] = roi.into();
+        }
         detail["replaced_by"] = match world.replace(self) {
             Some(r) => serde_json::json!({
                 "id": r.id, "sysid": r.sysid, "callsign": r.callsign, "spare": r.spare,
@@ -334,12 +369,12 @@ impl DroneAgent {
             Node::IsCourier => self.courier.is_some() && !world.book.depots.is_empty(),
             Node::FlownBySimulation => world.ops.contains_key(&self.body.id),
             Node::BackFromTrip => {
-                self.courier.as_ref().is_some_and(|c| c.order.is_some())
+                (self.courier.as_ref().is_some_and(|c| c.order.is_some()) || self.survey.is_some())
                     && self.drone.mode == Mode::Disarmed
             }
             Node::ReadyForWork => self.ready_for_work(world, tick),
             Node::SensorDue => world.settings.sensor.scans_on(tick),
-            Node::AtStation => false,
+            Node::AtStation => grounded() && self.at_station(world),
             Node::LowBattery => self.drone.failsafe,
             Node::AvoidGeofences => {
                 world.operate_drone(
@@ -371,7 +406,9 @@ impl DroneAgent {
                 true
             }
             Node::TakeOrder => self.take_order(world, tick),
-            Node::Survey | Node::DivertToStation | Node::ReturnToBase => false,
+            Node::Survey => self.survey(world, tick),
+            Node::DivertToStation => self.divert(world, tick),
+            Node::ReturnToBase => self.return_to_base(world),
             Node::LogBreaches => {
                 self.check_fences(world, tick);
                 true
@@ -386,6 +423,7 @@ impl DroneAgent {
     /// One tick of the autopilot, and what came of it. False if it crashed.
     fn fly(&mut self, world: &mut World, tick: u64) -> bool {
         let tuning = world.settings.tuning;
+        self.drone.at_station = self.at_station(world);
         let mut events = Vec::new();
         self.drone
             .step(&mut self.body.pose, &tuning, &world.terrain, &mut events);
@@ -407,6 +445,15 @@ impl DroneAgent {
     /// of the queue, unless a geofence opened over the address and such
     /// orders are turned away. Loading starts now either way.
     fn finish_trip(&mut self, world: &mut World, tick: u64) {
+        if let Some(survey) = self.survey.take() {
+            // Back without closing the circle: someone else may go.
+            if !survey.done {
+                world.regions.release(self.body.id);
+            }
+            if let Some(courier) = self.courier.as_mut() {
+                courier.landed_tick = Some(tick);
+            }
+        }
         let Some(courier) = self.courier.as_mut() else {
             return;
         };
@@ -426,7 +473,8 @@ impl DroneAgent {
     /// On its home pad with nothing to do and charged to launch; a courier
     /// also loaded, and a drone that is not one flown by the simulation.
     fn ready_for_work(&self, world: &World, tick: u64) -> bool {
-        let on_pad = matches!(self.drone.mode, Mode::Disarmed | Mode::Idle)
+        let on_pad = self.survey.is_none()
+            && matches!(self.drone.mode, Mode::Disarmed | Mode::Idle)
             && self.drone.on_home_pad(&self.body.pose, &world.terrain)
             && self.drone.battery_ppm >= world.settings.tuning.launch_ppm;
         match &self.courier {
@@ -468,16 +516,206 @@ impl DroneAgent {
         };
         let ds = world.settings.dispatch;
         let to = &world.book.addresses[order.address as usize];
-        drone.upload(dispatch::delivery_mission(
-            &drone.home,
-            to,
-            courier.cruise_agl_m,
-            &ds,
-        ));
+        let mission = if world.stations.is_empty() {
+            dispatch::delivery_mission(&drone.home, to, courier.cruise_agl_m, &ds)
+        } else {
+            // Too far for one charge: by way of stations. Out of reach even
+            // so, it tries straight, as it always has.
+            let tuning = world.settings.tuning;
+            let work_s = f64::from(tuning.winch.hold_ms(
+                mission::WINCH_DELIVER,
+                0.0,
+                0.0,
+                f64::from(courier.cruise_agl_m),
+            )) / 1000.0;
+            let planner = Planner {
+                range: Range::new(&tuning, drone.cruise_cms),
+                stations: world.usable_stations(),
+                climb_m: f64::from(courier.cruise_agl_m + ds.takeoff_m),
+                home: &drone.home,
+                charge: f64::from(drone.battery_ppm),
+            };
+            let at = Point {
+                lat_e7: to.lat_e7,
+                lon_e7: to.lon_e7,
+                alt_mm: 0,
+            };
+            let trip = planner
+                .trip(&at, work_s, true)
+                .expect("a trip flown straight anyway is always planned");
+            dispatch::trip_mission(
+                &drone.home,
+                &trip,
+                dispatch::delivery_work(to, courier.cruise_agl_m),
+                courier.cruise_agl_m,
+                &ds,
+            )
+        };
+        drone.upload(mission);
         drone.mode = Mode::Auto;
         order.dispatched_tick = Some(tick);
         courier.order = Some(order);
         courier.delivered = false;
+        true
+    }
+
+    /// On a station's pad (not its own home pad).
+    fn at_station(&self, world: &World) -> bool {
+        !world.stations.is_empty()
+            && !self.drone.on_home_pad(&self.body.pose, &world.terrain)
+            && flight::ground_distance_m(&self.body.pose.point(), &self.drone.home)
+                > mission::PAD_RADIUS_M
+            && world.stations.at(&self.body.pose.point()).is_some()
+    }
+
+    /// How high it climbs on each hop, and flies a survey's way there.
+    fn cruise_agl_m(&self, world: &World) -> f32 {
+        self.courier
+            .as_ref()
+            .map_or(world.settings.survey_agl_m, |c| c.cruise_agl_m)
+    }
+
+    fn planner(&self, world: &World, charge: f64) -> Planner<'_> {
+        let tuning = world.settings.tuning;
+        Planner {
+            range: Range::new(&tuning, self.drone.cruise_cms),
+            stations: world.usable_stations(),
+            climb_m: f64::from(self.cruise_agl_m(world) + world.settings.dispatch.takeoff_m),
+            home: &self.drone.home,
+            charge,
+        }
+    }
+
+    /// Set off to survey the region of interest most overdue a look that it
+    /// can reach, by way of stations if need be. False if there is none.
+    fn survey(&mut self, world: &mut World, tick: u64) -> bool {
+        if world.regions.is_empty() {
+            return false;
+        }
+        let ds = world.settings.dispatch;
+        let agl = world.settings.survey_agl_m;
+        let cruise = self.cruise_agl_m(world);
+        let speed = f64::from(self.drone.cruise_cms.max(1)) / 100.0;
+        let chosen = {
+            let planner = self.planner(world, f64::from(self.drone.battery_ppm));
+            world
+                .regions
+                .due(tick, world.settings.roi_revisit_ticks)
+                .into_iter()
+                .find_map(|r| {
+                    let work_s = r.circuit_m() / speed;
+                    planner
+                        .trip(&r.centre(), work_s, false)
+                        .map(|trip| (r.clone(), trip))
+                })
+        };
+        let Some((region, trip)) = chosen else {
+            return false;
+        };
+        let work = regions::circuit_items(&region, agl);
+        // Take off, the stops out, then the circuit: its last corner closes it.
+        let last_item = (1 + 3 * trip.out.len() + work.len() - 1) as u16;
+        let items = dispatch::trip_mission(&self.drone.home, &trip, work, cruise, &ds);
+        self.drone.upload(items);
+        self.drone.mode = Mode::Auto;
+        if let Some(r) = world.regions.get_mut(region.id) {
+            r.assigned.push(self.body.id);
+        }
+        self.survey = Some(Survey {
+            roi: region.id,
+            last_item,
+            started_tick: tick,
+            done: false,
+        });
+        true
+    }
+
+    /// The failsafe has sent it home on a low battery, but home is out of
+    /// reach: land at the nearest station it can reach instead. False if it
+    /// can get home, or no station is in reach.
+    fn divert(&mut self, world: &mut World, tick: u64) -> bool {
+        let homing = world.ops.get(&self.body.id).is_some_and(|o| o.homing);
+        let heading_home =
+            self.drone.mode == Mode::Rtl || (self.drone.mode == Mode::Auto && homing);
+        if world.stations.is_empty()
+            || !heading_home
+            || self.drone.grounded(&self.body.pose, &world.terrain)
+        {
+            return false;
+        }
+        let here = self.body.pose.point();
+        let (station, at) = {
+            let planner = self.planner(world, f64::from(self.drone.battery_ppm));
+            if planner.home_in_reach(&here) {
+                return false;
+            }
+            let Some(at) = planner.nearest_in_reach(&here) else {
+                return false;
+            };
+            (world.stations.at(&at).cloned(), at)
+        };
+        let cruise = self.cruise_agl_m(world);
+        let mut there = mission_item(mission::NAV_WAYPOINT, &at, cruise);
+        there.param2 = 5.0;
+        let land = mission_item(mission::NAV_LAND, &at, 0.0);
+        let mut items = vec![there, land];
+        stations::renumber(&mut items);
+        self.drone.upload(items);
+        self.drone.mode = Mode::Auto;
+        let mut detail = self.flight_detail(world);
+        detail["action"] = "divert".into();
+        detail["battery_pct"] = battery_pct(self.drone.battery_ppm).into();
+        if let Some(s) = &station {
+            detail["station"] = s.id.into();
+            detail["name"] = s.name.clone().into();
+        }
+        world.report(self.flight_report(
+            ReportKind::Station,
+            format!("divert-{}-{tick}", self.body.id),
+            tick,
+            detail,
+        ));
+        true
+    }
+
+    /// Down at a station away from home with nothing to do: fly home, by
+    /// way of other stations if one charge will not do, once charged
+    /// enough for the first hop (it waits on the charger before it takes
+    /// off). False if it is busy or home cannot be reached even so.
+    fn return_to_base(&mut self, world: &mut World) -> bool {
+        if !matches!(self.drone.mode, Mode::Disarmed | Mode::Idle)
+            || self.survey.is_some()
+            || self.courier.as_ref().is_some_and(|c| c.order.is_some())
+        {
+            return false;
+        }
+        let here = self.body.pose.point();
+        let ds = world.settings.dispatch;
+        let cruise = self.cruise_agl_m(world);
+        let (stops, first_pct) = {
+            // It charges here before it goes.
+            let planner = self.planner(world, 1_000_000.0);
+            let Some(stops) = planner.home_from(&here) else {
+                return false;
+            };
+            let first = stops.first().map_or(self.drone.home, |s| s.0);
+            let need = planner.range.need(
+                flight::ground_distance_m(&here, &first),
+                planner.climb_m,
+                0.0,
+            );
+            (stops, planner.range.leave_pct(need))
+        };
+        let mut takeoff = mission_item(mission::NAV_TAKEOFF, &Point::default(), ds.takeoff_m);
+        takeoff.param2 = first_pct;
+        let mut items = vec![takeoff];
+        for (at, pct) in &stops {
+            items.extend(stations::stop(at, *pct, cruise, &ds));
+        }
+        items.extend(dispatch::home_items(&self.drone.home, cruise, &ds));
+        stations::renumber(&mut items);
+        self.drone.upload(items);
+        self.drone.mode = Mode::Auto;
         true
     }
 
@@ -674,6 +912,7 @@ impl Member {
                 body,
                 drone: saved.drone.ok_or_else(|| missing("drone"))?,
                 courier: saved.courier,
+                survey: saved.survey,
                 wrecked: false,
             }),
             Kind::Intruder => Member::Intruder(IntruderAgent {
@@ -733,5 +972,22 @@ fn delivery_report(
             "flight_s": seconds(dispatched, tick),
             "total_s": seconds(order.ordered_tick, tick),
         }),
+    }
+}
+
+/// A mission item at a place, at a height above the ground there.
+fn mission_item(command: u16, at: &Point, agl_m: f32) -> MissionItem {
+    MissionItem {
+        seq: 0,
+        frame: 11,
+        command,
+        autocontinue: 1,
+        param1: 0.0,
+        param2: 0.0,
+        param3: 0.0,
+        param4: f32::NAN,
+        x: at.lat_e7,
+        y: at.lon_e7,
+        z: agl_m,
     }
 }

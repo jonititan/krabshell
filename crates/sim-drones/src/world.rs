@@ -46,7 +46,9 @@ use crate::dispatch::{AddressBook, Courier, Dispatch};
 use crate::flight::{self, Point, Pose};
 use crate::mission::{self, Drone, MissionItem, Mode, Tuning};
 use crate::operator::{self, Ops};
+use crate::regions::{Region, Regions, Survey};
 use crate::settings::{cms, settings, Settings};
+use crate::stations::{Station, Stations};
 use crate::targets::{Route, Wander};
 use crate::terrain::Terrain;
 
@@ -63,9 +65,11 @@ pub mod codes {
     pub const COMMAND: u16 = 103;
     /// Open a geofence. Payload `{"circle": {"lat": deg, "lon": deg,
     /// "radius_m": m}}` or `{"polygon": [[lon, lat], ...]}`, and optionally
-    /// `"name"`, `"minutes"` it stays open (-1: until closed) and
-    /// `"after_minutes"` before it opens (it waits, scheduled, until then).
-    /// Refused if it would keep a drone off its home pad.
+    /// `"name"`, `"minutes"` it stays open (-1: until closed),
+    /// `"after_minutes"` before it opens (it waits, scheduled, until then),
+    /// and `"floor_m"` and `"ceiling_m"`, metres above the ground (absent:
+    /// the surface, unlimited; `"altitude_ref": "amsl"` for above sea
+    /// level). Refused if it would keep a drone off its home pad.
     pub const GEOFENCE_OPEN: u16 = 110;
     /// Close a geofence, or cancel one waiting to open. Payload `{"id": n}`.
     pub const GEOFENCE_CLOSE: u16 = 111;
@@ -81,6 +85,18 @@ pub mod codes {
     /// under the new name). Payload `{"id": n, "name": "..."}`; an empty
     /// name clears it.
     pub const GEOFENCE_RENAME: u16 = 114;
+    /// Add a launch and recovery station. Payload `{"lat": deg, "lon": deg}`
+    /// and optionally `"name"`. Refused under a geofence that cannot be
+    /// flown beneath, or on top of another station.
+    pub const STATION_ADD: u16 = 120;
+    /// Remove a station. Payload `{"id": n}`.
+    pub const STATION_REMOVE: u16 = 121;
+    /// Designate a region of interest for the drones the simulation flies
+    /// to survey. Payload `{"lat": deg, "lon": deg, "radius_m": m}` (10 to
+    /// 5000) and optionally `"name"`.
+    pub const ROI_ADD: u16 = 130;
+    /// Remove a region of interest. Payload `{"id": n}`.
+    pub const ROI_REMOVE: u16 = 131;
 }
 
 /// Salts that keep each use of the seed independent.
@@ -199,6 +215,9 @@ pub struct Saved {
     pub wander: Option<Wander>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub courier: Option<Courier>,
+    /// A survey of a region of interest it is flying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub survey: Option<Survey>,
 }
 
 /// One agent as it was at the end of the last step.
@@ -370,6 +389,35 @@ enum FenceChange {
     Close(u32),
 }
 
+/// A station or region change asked for by intent, made at the start of the
+/// next step.
+#[derive(Debug, Clone)]
+enum SiteChange {
+    AddStation(Station),
+    RemoveStation(u32),
+    AddRegion(Region),
+    RemoveRegion(u32),
+}
+
+/// Who asked, for the log: "dashboard", say; "intent" if it does not say.
+/// The scenario's, ground stations' and crashes' names are their own.
+fn source_of(p: &serde_json::Value) -> String {
+    p.get("source")
+        .and_then(|v| v.as_str())
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 24
+                && !matches!(*s, SCENARIO_SOURCE | GCS_SOURCE | CRASH_SOURCE)
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .unwrap_or("intent")
+        .to_owned()
+}
+
+/// The `source` of a region of interest left where a drone crashed.
+const CRASH_SOURCE: &str = "crash";
+
 fn rejected(message: impl Into<String>) -> RejectReason {
     RejectReason::Rejected {
         message: message.into(),
@@ -392,6 +440,10 @@ pub struct World {
     /// The geofences a fresh run starts with, from the pack's
     /// `world/geofences.json`, and how many minutes each stays open.
     roster_fences: Vec<(Fence, Option<f64>)>,
+    /// The stations and regions of interest a fresh run starts with, from
+    /// the pack's `world/stations.json` and `world/regions.json`.
+    roster_stations: Vec<Station>,
+    roster_regions: Vec<Region>,
     pack_seed: u64,
 
     pub(crate) grid: SparseA5Grid<AgentId>,
@@ -449,6 +501,10 @@ pub struct World {
     previous: VecDeque<Previous>,
     /// The drones the operator flies, and its notes on each.
     pub(crate) ops: BTreeMap<AgentId, Ops>,
+    /// Launch and recovery stations, and regions of interest.
+    pub(crate) stations: Stations,
+    pub(crate) regions: Regions,
+    site_mail: Vec<SiteChange>,
 
     /// The behaviour tree every drone thinks with. Taken out while a drone
     /// ticks it, so the drone can reach the rest of the world.
@@ -491,6 +547,8 @@ impl World {
             roster_next_sysid: 1,
             roster_ops: BTreeSet::new(),
             roster_fences: Vec::new(),
+            roster_stations: Vec::new(),
+            roster_regions: Vec::new(),
             pack_seed: seed,
             grid: new_grid(resolution, root),
             dispatch: Dispatch::new(book.depots.len()),
@@ -524,6 +582,9 @@ impl World {
             scheduled: Vec::new(),
             previous: VecDeque::new(),
             ops: BTreeMap::new(),
+            stations: Stations::default(),
+            regions: Regions::default(),
+            site_mail: Vec::new(),
             brain: Some(Brain::from_fields(&blob.fields)?),
             caps: HashMap::new(),
             scan_radius_m,
@@ -534,6 +595,12 @@ impl World {
         world.airspace.min_agl_m = world.settings.beneath_min_agl_m;
         world.enrol(blob)?;
         world.roster_fences = world.pack_fences(&blob.fields)?;
+        world.roster_stations = world.pack_sites(&blob.fields, "stations", |w, v| {
+            w.station_from(v, SCENARIO_SOURCE)
+        })?;
+        world.roster_regions = world.pack_sites(&blob.fields, "regions", |w, v| {
+            w.region_from(v, SCENARIO_SOURCE)
+        })?;
         world.begin();
         Ok(world)
     }
@@ -714,6 +781,7 @@ impl World {
                     body,
                     drone,
                     courier,
+                    survey: None,
                     wrecked: false,
                 })
             }
@@ -1181,6 +1249,7 @@ impl World {
                 landed_tick: None,
                 ..c
             }),
+            survey: None,
             wrecked: false,
         };
         if let Some(depot) = spare_for {
@@ -1223,6 +1292,9 @@ impl World {
         self.fence_mail.clear();
         self.scheduled.clear();
         self.previous.clear();
+        self.stations = Stations::default();
+        self.regions = Regions::default();
+        self.site_mail.clear();
         self.ops = self
             .roster_ops
             .iter()
@@ -1238,6 +1310,16 @@ impl World {
             fence.closes_tick = minutes.map(|m| self.ticks_for(m));
             self.fence_report(&fence, "open", "scenario");
             self.airspace.open(fence);
+        }
+        for mut station in self.roster_stations.clone() {
+            station.id = self.stations.take_id();
+            self.site_report(ReportKind::Station, &station, "add", station.point());
+            self.stations.add(station);
+        }
+        for mut region in self.roster_regions.clone() {
+            region.id = self.regions.take_id();
+            self.site_report(ReportKind::Roi, &region, "add", region.centre());
+            self.regions.add(region);
         }
     }
 
@@ -1338,6 +1420,30 @@ impl World {
             IntentVerb::Custom(codes::GEOFENCE_SET) => self.set_fences(intent),
             IntentVerb::Custom(codes::GEOFENCE_EXTEND) => self.extend_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_RENAME) => self.rename_fence(intent),
+            IntentVerb::Custom(codes::STATION_ADD) => {
+                let station = self.station_from(&intent.payload, &source_of(&intent.payload))?;
+                self.site_mail.push(SiteChange::AddStation(station));
+                Ok(())
+            }
+            IntentVerb::Custom(codes::STATION_REMOVE) => {
+                let id = self.site_id(&intent.payload, "station", |w, id| {
+                    w.stations.list.iter().any(|s| s.id == id)
+                })?;
+                self.site_mail.push(SiteChange::RemoveStation(id));
+                Ok(())
+            }
+            IntentVerb::Custom(codes::ROI_ADD) => {
+                let region = self.region_from(&intent.payload, &source_of(&intent.payload))?;
+                self.site_mail.push(SiteChange::AddRegion(region));
+                Ok(())
+            }
+            IntentVerb::Custom(codes::ROI_REMOVE) => {
+                let id = self.site_id(&intent.payload, "region of interest", |w, id| {
+                    w.regions.list.iter().any(|r| r.id == id)
+                })?;
+                self.site_mail.push(SiteChange::RemoveRegion(id));
+                Ok(())
+            }
             IntentVerb::Custom(code) => self.drone_intent(code, intent),
             IntentVerb::Spawn => self.spawn(intent),
             IntentVerb::Despawn => self.despawn(intent),
@@ -1739,6 +1845,210 @@ impl World {
         Ok(())
     }
 
+    /// A station from `{"lat", "lon"}` and optionally `"name"`, checked:
+    /// inside the world, not under a geofence too low to fly beneath, and
+    /// not on top of another station. Its id is given when it is added.
+    fn station_from(&self, p: &serde_json::Value, source: &str) -> Result<Station, RejectReason> {
+        let at = self.site_point(p, "a station")?;
+        if self.airspace.covers(&at) {
+            return Err(rejected("the station would be inside a geofence"));
+        }
+        let pending = self.site_mail.iter().filter_map(|c| match c {
+            SiteChange::AddStation(s) => Some(s.point()),
+            _ => None,
+        });
+        let taken = self.stations.list.iter().map(Station::point).chain(pending);
+        if taken
+            .into_iter()
+            .any(|s| flight::ground_distance_m(&s, &at) <= 2.0 * mission::PAD_RADIUS_M)
+        {
+            return Err(rejected("there is a station there already"));
+        }
+        Ok(Station {
+            id: 0,
+            name: fence_name(p),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            source: source.to_owned(),
+            added_tick: self.tick,
+        })
+    }
+
+    /// A region of interest from `{"lat", "lon", "radius_m"}` and optionally
+    /// `"name"`, checked. Its id is given when it is added.
+    fn region_from(&self, p: &serde_json::Value, source: &str) -> Result<Region, RejectReason> {
+        let at = self.site_point(p, "a region of interest")?;
+        let radius_m = p
+            .get("radius_m")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|r| (10.0..=5_000.0).contains(r))
+            .ok_or_else(|| rejected("radius_m must be between 10 and 5000"))?;
+        Ok(Region {
+            id: 0,
+            name: fence_name(p),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            radius_m,
+            source: source.to_owned(),
+            added_tick: self.tick,
+            surveys: 0,
+            last_surveyed_tick: None,
+            assigned: Vec::new(),
+        })
+    }
+
+    fn site_point(&self, p: &serde_json::Value, what: &str) -> Result<Point, RejectReason> {
+        let deg = |k: &str| p.get(k).and_then(serde_json::Value::as_f64);
+        let (Some(lat), Some(lon)) = (deg("lat"), deg("lon")) else {
+            return Err(rejected(format!("{what} needs lat and lon")));
+        };
+        let at = Point::at(lon, lat, 0.0);
+        if !self.accepts(&at) {
+            return Err(RejectReason::OutOfBounds);
+        }
+        Ok(at)
+    }
+
+    /// The id in `{"id": n}`, of a station or region that exists or is about
+    /// to.
+    fn site_id(
+        &self,
+        p: &serde_json::Value,
+        what: &str,
+        exists: impl Fn(&World, u32) -> bool,
+    ) -> Result<u32, RejectReason> {
+        let id = p
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| rejected(format!("removing a {what} needs its id")))?;
+        if !exists(self, id) {
+            return Err(rejected(format!("no {what} {id}")));
+        }
+        Ok(id)
+    }
+
+    /// A pack's `world/<key>.json`: a list of sites, each read by `read`.
+    fn pack_sites<T>(
+        &self,
+        fields: &serde_json::Value,
+        key: &str,
+        read: impl Fn(&World, &serde_json::Value) -> Result<T, RejectReason>,
+    ) -> anyhow::Result<Vec<T>> {
+        let Some(list) = fields.get(key) else {
+            return Ok(Vec::new());
+        };
+        let list = list
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("world/{key}.json must be a list"))?;
+        list.iter()
+            .enumerate()
+            .map(|(i, v)| {
+                read(self, v)
+                    .map_err(|e| anyhow::anyhow!("world/{key}.json entry {i}: {}", reason_text(&e)))
+            })
+            .collect()
+    }
+
+    fn site_report(&mut self, kind: ReportKind, site: &impl Serialize, action: &str, at: Point) {
+        let mut detail = serde_json::to_value(site).unwrap_or_default();
+        detail["action"] = action.into();
+        let id = detail["id"].as_u64().unwrap_or(0);
+        let what = if kind == ReportKind::Station {
+            "station"
+        } else {
+            "roi"
+        };
+        self.report(Report {
+            seq: 0,
+            tick: self.tick,
+            kind,
+            uid: format!("{what}-{id}-{action}"),
+            observer: None,
+            target: None,
+            target_kind: String::new(),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            alt_mm: 0,
+            detail,
+        });
+    }
+
+    /// Add and remove the stations and regions asked for by intent. First
+    /// thing in a step, with the geofences.
+    pub(crate) fn update_sites(&mut self) {
+        for change in std::mem::take(&mut self.site_mail) {
+            match change {
+                SiteChange::AddStation(mut station) => {
+                    station.id = self.stations.take_id();
+                    station.added_tick = self.tick;
+                    self.site_report(ReportKind::Station, &station, "add", station.point());
+                    self.stations.add(station);
+                }
+                SiteChange::RemoveStation(id) => {
+                    if let Some(station) = self.stations.remove(id) {
+                        self.site_report(ReportKind::Station, &station, "remove", station.point());
+                    }
+                }
+                SiteChange::AddRegion(mut region) => {
+                    region.id = self.regions.take_id();
+                    region.added_tick = self.tick;
+                    self.site_report(ReportKind::Roi, &region, "add", region.centre());
+                    self.regions.add(region);
+                }
+                SiteChange::RemoveRegion(id) => {
+                    if let Some(region) = self.regions.remove(id) {
+                        self.site_report(ReportKind::Roi, &region, "remove", region.centre());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Leave a region of interest where a drone crashed, so another goes to
+    /// look. None if `crash_roi_radius_m` is 0.
+    pub(crate) fn crash_region(&mut self, at: &Point, callsign: &str) -> Option<u32> {
+        let radius_m = self.settings.crash_roi_radius_m;
+        if radius_m <= 0.0 {
+            return None;
+        }
+        let region = Region {
+            id: self.regions.take_id(),
+            name: format!("Crash of {callsign}"),
+            lat_e7: at.lat_e7,
+            lon_e7: at.lon_e7,
+            radius_m,
+            source: CRASH_SOURCE.into(),
+            added_tick: self.tick,
+            surveys: 0,
+            last_surveyed_tick: None,
+            assigned: Vec::new(),
+        };
+        let id = region.id;
+        self.site_report(ReportKind::Roi, &region, "crash", region.centre());
+        self.regions.add(region);
+        Some(id)
+    }
+
+    /// Stations a drone may stop at now: those not under a geofence it
+    /// could not get down beneath.
+    pub(crate) fn usable_stations(&self) -> Vec<Point> {
+        self.stations
+            .list
+            .iter()
+            .map(Station::point)
+            .filter(|p| !self.airspace.covers(p))
+            .collect()
+    }
+
+    pub fn stations(&self) -> &Stations {
+        &self.stations
+    }
+
+    pub fn regions(&self) -> &Regions {
+        &self.regions
+    }
+
     /// Every drone's home pad: those the pack starts with (so a pack's own
     /// fences are checked before the run begins) and any since.
     fn pads(&self) -> impl Iterator<Item = Point> + '_ {
@@ -1989,12 +2299,30 @@ impl World {
                 "previous": self.previous.iter().rev().collect::<Vec<_>>(),
             },
             "orders": orders,
+            "stations": self.stations.list.iter().map(|s| {
+                let mut v = serde_json::to_value(s).unwrap_or_default();
+                v["drones"] = self.drones_at(&s.point()).into();
+                v
+            }).collect::<Vec<_>>(),
+            "rois": self.regions.list,
         })
     }
 
     /// The behaviour tree every drone in this world thinks with.
     pub fn brain(&self) -> &Brain {
         self.brain.as_ref().expect("a world always has a brain")
+    }
+
+    /// Drones on the ground on the pad at `point`.
+    fn drones_at(&self, point: &Point) -> usize {
+        self.board
+            .iter()
+            .filter_map(|r| Some((r.saved.drone.as_ref()?, &r.saved.pose)))
+            .filter(|(d, pose)| {
+                flight::ground_distance_m(&pose.point(), point) <= mission::PAD_RADIUS_M
+                    && d.grounded(pose, &self.terrain)
+            })
+            .count()
     }
 
     pub fn airspace(&self) -> &Airspace {
@@ -2115,6 +2443,8 @@ impl World {
             "scheduled_fences": self.scheduled,
             "previous_fences": self.previous,
             "ops": self.ops.iter().collect::<Vec<_>>(),
+            "stations": self.stations,
+            "regions": self.regions,
         })
     }
 
@@ -2154,6 +2484,12 @@ impl World {
         if let Some(list) = fields.get("ops") {
             let list: Vec<(AgentId, Ops)> = serde_json::from_value(list.clone())?;
             self.ops = list.into_iter().collect();
+        }
+        if let Some(stations) = fields.get("stations") {
+            self.stations = serde_json::from_value(stations.clone())?;
+        }
+        if let Some(regions) = fields.get("regions") {
+            self.regions = serde_json::from_value(regions.clone())?;
         }
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
@@ -2215,6 +2551,7 @@ impl World {
         self.call_ups.clear();
         self.recruits.clear();
         self.fence_mail.clear();
+        self.site_mail.clear();
         for member in &members {
             self.next_id = self.next_id.max(member.body().id + 1);
             if let Member::Drone(d) = member {

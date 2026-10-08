@@ -1450,3 +1450,296 @@ fn a_fence_too_low_to_fly_beneath_still_keeps_orders_away_and_bad_bands_are_refu
         .iter()
         .any(|o| o.address == 2));
 }
+
+/// One courier with a short range (400 s of flight at 10 m/s) and a fast
+/// charger, on a pad of its own 50 m south of the origin; one address
+/// `address_east` metres east of the origin, and stations `stations_east`
+/// metres east of it.
+fn far_blob(address_east: f64, stations_east: &[f64], rate_per_day: f64) -> ScenarioBlob {
+    let mut blob = blob(Profile::Gold);
+    let (lat, lon) = flight::displace(flight::to_e7(LAT), flight::to_e7(LON), address_east, 0.0);
+    let stations: Vec<serde_json::Value> = stations_east
+        .iter()
+        .map(|e| {
+            let (lon, lat) = at(*e, 0.0);
+            serde_json::json!({ "name": format!("{e:.0} E"), "lat": lat, "lon": lon })
+        })
+        .collect();
+    blob.fields = serde_json::json!({
+        "addresses": { "depots": ["HUB"], "items": [[lat, lon, 0, "Far Street"]] },
+        "stations": stations,
+    });
+    blob.agents.push(SeedAgent {
+        id: Some(5),
+        kind: "drone".into(),
+        cell: None,
+        lon: Some(at(0.0, -50.0).0),
+        lat: Some(at(0.0, -50.0).1),
+        state: serde_json::json!({ "sysid": 5, "callsign": "COURIER", "depot": "HUB", "cruise_agl_m": 50 }),
+    });
+    for (key, value) in [
+        ("order_rate_per_address_day", rate_per_day),
+        ("dispatch_load_s", 10.0),
+        ("battery_drain_pct_s", 0.25),
+        ("battery_reserve_pct", 10.0),
+        ("launch_battery_pct", 90.0),
+        ("charge_pct_s", 2.0),
+    ] {
+        blob.config.model.insert(key.into(), Param::Float(value));
+    }
+    blob
+}
+
+fn near(record: &Record, east: f64) -> bool {
+    distance_to(record, east, 0.0) <= mission::PAD_RADIUS_M
+}
+
+#[test]
+fn a_courier_reaches_an_address_too_far_for_one_charge_by_recharging_at_a_station() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&far_blob(1_600.0, &[1_000.0], 200.0)).unwrap();
+    let stations = model.world().stations().list.clone();
+    assert_eq!(stations.len(), 1);
+    assert_eq!(stations[0].source, "scenario");
+
+    let mut reports = Vec::new();
+    let mut stopped = false;
+    for tick in 1..=12_000 {
+        model.step(tick);
+        model.drain_reports(&mut reports);
+        let courier = record(&model, 5);
+        let drone = courier.saved.drone.as_ref().unwrap();
+        stopped |=
+            near(courier, 1_000.0) && drone.grounded(&courier.saved.pose, model.world().terrain());
+    }
+    assert!(stopped, "it landed at the station on the way");
+    let delivered = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .count();
+    assert!(delivered >= 1, "{delivered} deliveries");
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash));
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Landing
+        && r.observer == Some(5)
+        && r.detail["battery_pct"].as_f64() < Some(5.0)));
+    // The station's pad is on the published overlays, with drones on it.
+    let overlays = model.overlays();
+    assert_eq!(overlays["stations"][0]["id"], stations[0].id);
+}
+
+#[test]
+fn without_a_station_the_same_courier_tries_straight_and_comes_back_on_its_failsafe() {
+    let mut model = drones(Profile::Gold);
+    // 3 km: the failsafe goes off before it gets there.
+    model.reset(&far_blob(3_000.0, &[], 200.0)).unwrap();
+    let reports = run(&mut model, 1, 6_000);
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Waypoint && r.observer == Some(5)));
+    // It sets off straight (as couriers always have) and the failsafe sends
+    // it home short of the address, every time.
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Delivery));
+    let dispatch = model.world().dispatch();
+    assert!(dispatch.placed >= 1 && dispatch.delivered == 0);
+}
+
+#[test]
+fn stations_are_added_and_removed_by_intent_and_bad_ones_are_refused() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&far_blob(1_600.0, &[], 0.0)).unwrap();
+    let add = |model: &mut Drones, east: f64| {
+        let (lon, lat) = at(east, 0.0);
+        let payload =
+            serde_json::json!({ "lat": lat, "lon": lon, "name": "Pad", "source": "dashboard" });
+        let i = intent(model, 5, codes::STATION_ADD, payload);
+        model.apply_intent(&Intent { agent: None, ..i })
+    };
+    add(&mut model, 800.0).unwrap();
+    assert!(
+        add(&mut model, 805.0).is_err(),
+        "on top of one waiting to be added"
+    );
+    let none = serde_json::json!({ "lat": 51.5, "lon": -0.12 });
+    let mut bad = intent(&model, 5, codes::STATION_ADD, none);
+    bad.payload = serde_json::json!({ "lat": 51.5 });
+    assert!(model.apply_intent(&bad).is_err());
+    let reports = run(&mut model, 1, 1);
+    let station = model.world().stations().list[0].clone();
+    assert_eq!(
+        (station.name.as_str(), station.source.as_str()),
+        ("Pad", "dashboard")
+    );
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Station && r.detail["action"] == "add"));
+
+    let remove = |model: &mut Drones, id: u32| {
+        let i = intent(
+            model,
+            5,
+            codes::STATION_REMOVE,
+            serde_json::json!({ "id": id }),
+        );
+        model.apply_intent(&Intent { agent: None, ..i })
+    };
+    assert!(remove(&mut model, station.id + 1).is_err());
+    remove(&mut model, station.id).unwrap();
+    let reports = run(&mut model, 2, 1);
+    assert!(model.world().stations().is_empty());
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Station && r.detail["action"] == "remove"));
+}
+
+#[test]
+fn a_drone_low_on_battery_out_of_reach_of_home_diverts_to_a_station_charges_and_comes_home() {
+    let mut model = drones(Profile::Gold);
+    let mut blob = far_blob(1_600.0, &[1_300.0, 2_600.0], 0.0);
+    blob.config
+        .model
+        .insert("battery_reserve_pct".into(), Param::Float(40.0));
+    model.reset(&blob).unwrap();
+    // A ground station sends the courier out 2.5 km; the operator flies
+    // it on from there, and its failsafe goes off far from home.
+    let (x, y) = flight::displace(flight::to_e7(LAT), flight::to_e7(LON), 2_500.0, 0.0);
+    let items = serde_json::json!({ "items": [
+        { "seq": 0, "frame": 3, "command": 22, "z": 40.0 },
+        { "seq": 1, "frame": 11, "command": 16, "x": x, "y": y, "z": 50.0 },
+        { "seq": 2, "frame": 11, "command": 17, "x": x, "y": y, "z": 50.0 }
+    ]});
+    for (code, payload) in [
+        (codes::MISSION_UPLOAD, items),
+        (
+            codes::COMMAND,
+            serde_json::json!({ "command": 400, "params": [1] }),
+        ),
+        (
+            codes::COMMAND,
+            serde_json::json!({ "command": 300, "params": [0] }),
+        ),
+    ] {
+        model
+            .apply_intent(&intent(&model, 5, code, payload))
+            .unwrap();
+    }
+    let reports = run(&mut model, 1, 20_000);
+    let divert = reports
+        .iter()
+        .find(|r| r.kind == ReportKind::Station && r.detail["action"] == "divert")
+        .expect("it diverted");
+    assert_eq!(divert.observer, Some(5));
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash));
+    let courier = record(&model, 5);
+    let drone = courier.saved.drone.as_ref().unwrap();
+    assert!(
+        drone.on_home_pad(&courier.saved.pose, model.world().terrain()),
+        "home again"
+    );
+}
+
+#[test]
+fn a_region_of_interest_is_surveyed_by_an_idle_courier_once_until_it_is_due_again() {
+    let mut model = drones(Profile::Gold);
+    let mut blob = far_blob(1_600.0, &[], 0.0);
+    blob.config
+        .model
+        .insert("roi_revisit_min".into(), Param::Float(600.0));
+    model.reset(&blob).unwrap();
+    let (lon, lat) = at(500.0, 300.0);
+    let payload =
+        serde_json::json!({ "lat": lat, "lon": lon, "radius_m": 80.0, "name": "Car park" });
+    let i = intent(&model, 5, codes::ROI_ADD, payload);
+    model.apply_intent(&Intent { agent: None, ..i }).unwrap();
+    let bad = serde_json::json!({ "lat": lat, "lon": lon, "radius_m": 5.0 });
+    let i = intent(&model, 5, codes::ROI_ADD, bad);
+    assert!(model.apply_intent(&Intent { agent: None, ..i }).is_err());
+
+    let reports = run(&mut model, 1, 6_000);
+    let surveys: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Survey)
+        .collect();
+    assert_eq!(surveys.len(), 1, "once, then not due for 600 minutes");
+    assert_eq!(surveys[0].observer, Some(5));
+    assert_eq!(surveys[0].detail["name"], "Car park");
+    let region = &model.world().regions().list[0];
+    assert_eq!(region.surveys, 1);
+    assert!(region.assigned.is_empty());
+    // It saw what was there on the way round, and came home.
+    let courier = record(&model, 5);
+    assert!(courier.saved.survey.is_none());
+    let drone = courier.saved.drone.as_ref().unwrap();
+    assert!(drone.on_home_pad(&courier.saved.pose, model.world().terrain()));
+    let overlays = model.overlays();
+    assert_eq!(overlays["rois"][0]["surveys"], 1);
+}
+
+#[test]
+fn a_crash_leaves_a_region_of_interest_where_the_drone_fell() {
+    let blob = crashing_blob();
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    let reports = run(&mut model, 1, 6_000);
+    let crash = reports
+        .iter()
+        .find(|r| r.kind == ReportKind::Crash)
+        .expect("a crash");
+    let roi = crash.detail["roi"].as_u64().expect("a region for it") as u32;
+    let region = model
+        .world()
+        .regions()
+        .list
+        .iter()
+        .find(|r| r.id == roi)
+        .expect("still designated")
+        .clone();
+    assert_eq!(region.source, "crash");
+    assert_eq!((region.lat_e7, region.lon_e7), (crash.lat_e7, crash.lon_e7));
+    assert!(region.name.starts_with("Crash of "));
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Roi && r.detail["action"] == "crash"));
+}
+
+#[test]
+fn a_checkpoint_with_stations_regions_and_a_survey_under_way_replays_exactly() {
+    let mut blob = far_blob(1_600.0, &[1_000.0], 200.0);
+    let (lon, lat) = at(300.0, -300.0);
+    blob.fields["regions"] = serde_json::json!([{ "lat": lat, "lon": lon, "radius_m": 60.0 }]);
+    let mut original = drones(Profile::Gold);
+    original.reset(&blob).unwrap();
+    run(&mut original, 1, 700);
+    let mut restored = drones(Profile::Gold);
+    restored.reset(&blob).unwrap();
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+    restored.set_rng_state(original.rng_state());
+    run(&mut original, 701, 4_000);
+    run(&mut restored, 701, 4_000);
+    assert_eq!(hash(&original), hash(&restored));
+    assert_eq!(original.world().regions(), restored.world().regions());
+    assert_eq!(original.world().stations(), restored.world().stations());
+}
+
+#[test]
+fn a_packs_own_behaviour_tree_replaces_the_default_and_a_bad_one_stops_it_loading() {
+    let mut blob = courier_blob();
+    // A brain that flies and obeys but never takes an order.
+    blob.fields["behaviour"] = serde_json::json!({ "root": { "Sequence": [
+        { "Action": "ObeyCommands" }, { "Action": "Fly" }
+    ] } });
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    assert_eq!(model.world().brain().size(), 3);
+    let reports = run(&mut model, 1, 3_000);
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Delivery));
+    assert!(model.world().dispatch().queued() > 0);
+
+    blob.fields["behaviour"] = serde_json::json!({ "root": { "Sequence": [
+        { "Wait": 5.0 }, { "Action": "Fly" }
+    ] } });
+    let err = Drones::new(&blob).err().expect("refused").to_string();
+    assert!(err.contains("world/behaviour.json"), "{err}");
+}

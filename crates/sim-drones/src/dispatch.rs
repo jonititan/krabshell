@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::flight::Point;
 use crate::mission::{MissionItem, DO_WINCH, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT, WINCH_DELIVER};
+use crate::stations::{self, Trip};
 
 const FRAME_MISSION: u8 = 2;
 const FRAME_RELATIVE: u8 = 3;
@@ -226,6 +227,18 @@ fn item(seq: usize, command: u16, frame: u8) -> MissionItem {
     }
 }
 
+/// What a delivery does at the far end: fly to the address at the cruise
+/// height and winch the parcel down.
+pub fn delivery_work(to: &Address, cruise_agl_m: f32) -> Vec<MissionItem> {
+    let mut out = item(0, NAV_WAYPOINT, FRAME_TERRAIN);
+    (out.x, out.y, out.z) = (to.lat_e7, to.lon_e7, cruise_agl_m);
+    let mut winch = item(0, DO_WINCH, FRAME_MISSION);
+    winch.param1 = 1.0;
+    winch.param2 = f32::from(WINCH_DELIVER);
+    winch.param4 = 0.0;
+    vec![out, winch]
+}
+
 /// The mission for one delivery from `home` to `to`.
 pub fn delivery_mission(
     home: &Point,
@@ -233,34 +246,58 @@ pub fn delivery_mission(
     cruise_agl_m: f32,
     settings: &DispatchSettings,
 ) -> Vec<MissionItem> {
-    let mut items = Vec::with_capacity(6);
+    trip_mission(
+        home,
+        &Trip::direct(),
+        delivery_work(to, cruise_agl_m),
+        cruise_agl_m,
+        settings,
+    )
+}
+
+/// A trip from home and back: take off, stop at each station on the way
+/// out, do `work`, stop at each on the way back, fly home at the cruise
+/// height, descend to the approach height and land.
+pub fn trip_mission(
+    home: &Point,
+    trip: &Trip,
+    work: Vec<MissionItem>,
+    cruise_agl_m: f32,
+    settings: &DispatchSettings,
+) -> Vec<MissionItem> {
+    let mut items = Vec::with_capacity(work.len() + 4 + 3 * (trip.out.len() + trip.back.len()));
     let mut takeoff = item(0, NAV_TAKEOFF, FRAME_RELATIVE);
     takeoff.z = settings.takeoff_m;
     items.push(takeoff);
+    for (at, pct) in &trip.out {
+        items.extend(stations::stop(at, *pct, cruise_agl_m, settings));
+    }
+    items.extend(work);
+    for (at, pct) in &trip.back {
+        items.extend(stations::stop(at, *pct, cruise_agl_m, settings));
+    }
+    items.extend(home_items(home, cruise_agl_m, settings));
+    stations::renumber(&mut items);
+    items
+}
 
-    let mut out = item(1, NAV_WAYPOINT, FRAME_TERRAIN);
-    (out.x, out.y, out.z) = (to.lat_e7, to.lon_e7, cruise_agl_m);
-    items.push(out);
-
-    let mut winch = item(2, DO_WINCH, FRAME_MISSION);
-    winch.param1 = 1.0;
-    winch.param2 = f32::from(WINCH_DELIVER);
-    winch.param4 = 0.0;
-    items.push(winch);
-
-    let mut back = item(3, NAV_WAYPOINT, FRAME_TERRAIN);
+/// The end of every trip: home at the cruise height, down to the approach
+/// height over the pad, and land.
+pub fn home_items(
+    home: &Point,
+    cruise_agl_m: f32,
+    settings: &DispatchSettings,
+) -> [MissionItem; 3] {
+    let mut back = item(0, NAV_WAYPOINT, FRAME_TERRAIN);
     (back.x, back.y, back.z) = (home.lat_e7, home.lon_e7, cruise_agl_m);
     back.param2 = 5.0;
-    items.push(back);
 
-    let mut approach = item(4, NAV_WAYPOINT, FRAME_RELATIVE);
+    let mut approach = item(0, NAV_WAYPOINT, FRAME_RELATIVE);
     (approach.x, approach.y, approach.z) = (home.lat_e7, home.lon_e7, settings.approach_m);
-    items.push(approach);
 
-    let mut land = item(5, NAV_LAND, FRAME_RELATIVE);
+    let mut land = item(0, NAV_LAND, FRAME_RELATIVE);
     (land.x, land.y) = (home.lat_e7, home.lon_e7);
-    items.push(land);
-    items
+    [back, approach, land]
 }
 
 #[cfg(test)]

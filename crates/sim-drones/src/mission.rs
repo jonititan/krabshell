@@ -259,6 +259,11 @@ pub struct Drone {
     /// Geofences it is inside now, by id, so a breach is reported once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fenced: Vec<u32>,
+    /// On the ground at a launch and recovery station's charger (not its
+    /// home pad). Whoever steps the drone sets it before every step, so it
+    /// is never saved.
+    #[serde(skip)]
+    pub at_station: bool,
 }
 
 /// A mission step's outcome, for the model to turn into a report.
@@ -366,6 +371,7 @@ impl Drone {
             battery_ppm: 1_000_000,
             failsafe: false,
             fenced: Vec::new(),
+            at_station: false,
         }
     }
 
@@ -394,6 +400,20 @@ impl Drone {
     /// On the ground on its own pad, where it charges and is loaded.
     pub fn on_home_pad(&self, pose: &Pose, terrain: &Terrain) -> bool {
         self.near_home(pose) && self.grounded(pose, terrain)
+    }
+
+    /// The charge a mission's NAV_TAKEOFF waits for on the ground: the
+    /// launch level, or, on a charger, `param2` percent if that is more (a
+    /// krabshell extension; MAVLink leaves `param2` empty). Off a charger
+    /// waiting would be forever, so it goes with what it has.
+    fn launch_ppm(&self, item: &MissionItem, pose: &Pose, tuning: &Tuning) -> u32 {
+        let charging = self.at_station || (self.near_home(pose) && tuning.charge_ppm_tick > 0);
+        let asked = if charging && item.param2.is_finite() && item.param2 > 0.0 {
+            (f64::from(item.param2.min(100.0)) * 10_000.0) as u32
+        } else {
+            0
+        };
+        tuning.launch_ppm.max(asked)
     }
 
     fn limits(&self, tuning: &Tuning) -> Limits {
@@ -610,8 +630,8 @@ impl Drone {
                 self.failsafe = true;
                 events.push(Event::LowBattery);
             }
-        } else if self.near_home(pose) {
-            // On the home pad, plugged in.
+        } else if self.near_home(pose) || self.at_station {
+            // On the home pad or a station's, plugged in.
             self.battery_ppm = (self.battery_ppm + tuning.charge_ppm_tick).min(1_000_000);
         }
         if self.failsafe && self.battery_ppm > tuning.reserve_ppm {
@@ -718,7 +738,9 @@ impl Drone {
 
             match item.command {
                 NAV_TAKEOFF => {
-                    if self.battery_ppm < tuning.launch_ppm && self.grounded(pose, terrain) {
+                    if self.grounded(pose, terrain)
+                        && self.battery_ppm < self.launch_ppm(&item, pose, tuning)
+                    {
                         // Charging on the pad until there is enough to launch.
                         flight::hold(pose);
                         return;
