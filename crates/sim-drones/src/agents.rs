@@ -216,7 +216,11 @@ impl DroneAgent {
         let inside = if self.drone.grounded(&self.body.pose, &world.terrain) {
             Vec::new()
         } else {
-            world.airspace.inside(&self.body.pose.point())
+            let pose = &self.body.pose;
+            let ground = world.terrain.ground_mm(pose.lat_e7, pose.lon_e7);
+            world
+                .airspace
+                .inside(&pose.point(), f64::from(pose.alt_mm - ground) / 1000.0)
         };
         for &id in inside.iter().filter(|id| !self.drone.fenced.contains(id)) {
             let opened_round = world
@@ -452,7 +456,7 @@ impl DroneAgent {
         let next = world.dispatch.queues[depot].iter().position(|o| {
             world.airspace.is_empty() || {
                 let a = &world.book.addresses[o.address as usize];
-                !world.airspace.blocks(&crate::flight::Point {
+                !world.airspace.covers(&crate::flight::Point {
                     lat_e7: a.lat_e7,
                     lon_e7: a.lon_e7,
                     alt_mm: 0,

@@ -40,7 +40,7 @@ use sim_core::{
 };
 
 use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
-use crate::airspace::{Airspace, Fence, SavedAirspace, Shape};
+use crate::airspace::{Airspace, Band, Fence, SavedAirspace, Shape};
 use crate::behaviour::Brain;
 use crate::dispatch::{AddressBook, Courier, Dispatch};
 use crate::flight::{self, Point, Pose};
@@ -530,6 +530,8 @@ impl World {
         };
         let origin = world.origin(blob)?;
         world.airspace = Airspace::new(&origin, world.settings.geofence_margin_m);
+        world.airspace.vertical_margin_m = world.settings.geofence_vertical_margin_m;
+        world.airspace.min_agl_m = world.settings.beneath_min_agl_m;
         world.enrol(blob)?;
         world.roster_fences = world.pack_fences(&blob.fields)?;
         world.begin();
@@ -1010,7 +1012,7 @@ impl World {
             book,
             &self.settings.dispatch,
             |n| draw_pair(seed, n, 0),
-            |address| !reject || !airspace.blocks(&address_point(book, address)),
+            |address| !reject || !airspace.covers(&address_point(book, address)),
         );
         for order in rejected {
             self.order_rejected(&order, Stage::Placed);
@@ -1028,7 +1030,7 @@ impl World {
         if !self.settings.reject_orders_in_geofences
             || !self
                 .airspace
-                .blocks(&address_point(&self.book, order.address))
+                .covers(&address_point(&self.book, order.address))
         {
             return false;
         }
@@ -1046,7 +1048,7 @@ impl World {
         for queue in self.dispatch.queues.iter_mut() {
             let (keep, drop): (VecDeque<_>, VecDeque<_>) = std::mem::take(queue)
                 .into_iter()
-                .partition(|o| !self.airspace.blocks(&address_point(&self.book, o.address)));
+                .partition(|o| !self.airspace.covers(&address_point(&self.book, o.address)));
             *queue = keep;
             queued.extend(drop);
         }
@@ -1062,7 +1064,7 @@ impl World {
         let address = &self.book.addresses[order.address as usize];
         let fence = self
             .airspace
-            .inside(&at)
+            .covering(&at)
             .first()
             .and_then(|id| self.airspace.fences().iter().find(|f| f.id == *id))
             .cloned();
@@ -1444,6 +1446,7 @@ impl World {
     fn open_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
         let p = &intent.payload;
         let shape = self.shape_from(p)?;
+        let band = self.band_from(p, &shape)?;
         let minutes = fence_minutes(p, "minutes")?;
         let after = match p.get("after_minutes") {
             None | Some(serde_json::Value::Null) => 0.0,
@@ -1469,6 +1472,7 @@ impl World {
         let fence = Fence {
             id: self.airspace.take_id(),
             shape,
+            band,
             name: fence_name(p),
             source: source.into(),
             opened_tick: 0,
@@ -1542,6 +1546,7 @@ impl World {
             let fence = Fence {
                 id: self.airspace.take_id(),
                 shape,
+                band: Band::default(),
                 name: String::new(),
                 source: GCS_SOURCE.into(),
                 opened_tick: 0,
@@ -1609,6 +1614,60 @@ impl World {
             )));
         }
         Ok(shape)
+    }
+
+    /// A fence's band from `"floor_m"` and `"ceiling_m"` (absent or null:
+    /// the surface, unlimited), metres above the ground, or above mean sea
+    /// level with `"altitude_ref": "amsl"`. Heights above sea level are
+    /// taken above the ground at the fence's centre.
+    fn band_from(&self, p: &serde_json::Value, shape: &Shape) -> Result<Band, RejectReason> {
+        let height = |key: &str| -> Result<Option<f64>, RejectReason> {
+            match p.get(key) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(v) => v
+                    .as_f64()
+                    .filter(|m| m.is_finite() && (-1_000.0..=20_000.0).contains(m))
+                    .map(Some)
+                    .ok_or_else(|| rejected(format!("{key} must be a height in metres"))),
+            }
+        };
+        let (mut floor, mut ceiling) = (height("floor_m")?, height("ceiling_m")?);
+        match p
+            .get("altitude_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agl")
+        {
+            "agl" => {}
+            "amsl" => {
+                let centre = match shape {
+                    Shape::Circle { lat_e7, lon_e7, .. } => (*lat_e7, *lon_e7),
+                    Shape::Polygon { points } => {
+                        let n = points.len().max(1) as i64;
+                        let lat = points.iter().map(|q| i64::from(q[0])).sum::<i64>() / n;
+                        let lon = points.iter().map(|q| i64::from(q[1])).sum::<i64>() / n;
+                        (lat as i32, lon as i32)
+                    }
+                };
+                let ground = f64::from(self.terrain.ground_mm(centre.0, centre.1)) / 1000.0;
+                floor = floor.map(|f| f - ground);
+                ceiling = ceiling.map(|c| c - ground);
+            }
+            other => {
+                return Err(rejected(format!(
+                    "altitude_ref is agl or amsl, not '{other}'"
+                )))
+            }
+        }
+        let floor = floor.map(|f| f.max(0.0)).filter(|f| *f > 0.0);
+        if let Some(c) = ceiling {
+            if c <= floor.unwrap_or(0.0) {
+                return Err(rejected("ceiling_m must be above floor_m and the ground"));
+            }
+        }
+        Ok(Band {
+            floor_m: floor,
+            ceiling_m: ceiling,
+        })
     }
 
     fn extend_fence(&mut self, intent: &Intent) -> Result<(), RejectReason> {
@@ -1718,9 +1777,13 @@ impl World {
                 let minutes = fence_minutes(v, "minutes").map_err(|e| {
                     anyhow::anyhow!("world/geofences.json fence {i}: {}", reason_text(&e))
                 })?;
+                let band = self.band_from(v, &shape).map_err(|e| {
+                    anyhow::anyhow!("world/geofences.json fence {i}: {}", reason_text(&e))
+                })?;
                 let fence = Fence {
                     id: 0,
                     shape,
+                    band,
                     name: fence_name(v),
                     source: SCENARIO_SOURCE.into(),
                     opened_tick: 0,
@@ -1867,6 +1930,7 @@ impl World {
             &mut ops,
             &self.airspace,
             &self.settings.tuning,
+            &self.terrain,
             self.settings.max_mission_items,
         );
         self.ops.insert(id, ops);

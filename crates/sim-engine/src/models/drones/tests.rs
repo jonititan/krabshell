@@ -1373,3 +1373,80 @@ fn with_rejection_on_a_new_fence_turns_away_the_orders_it_covers_queued_or_on_th
         .all(|o| o.address != 2));
     assert_eq!(model.world().dispatch().rejected as usize, rejected.len());
 }
+
+#[test]
+fn a_courier_flies_beneath_a_raised_fence_over_an_address_and_delivers_without_a_breach() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&courier_blob()).unwrap();
+    // Over the address 600 m east, from 45 m up: the courier cruises at
+    // 50 m, inside it, so it drops to 35 m (the floor less the 10 m margin)
+    // to pass beneath, and winches from there.
+    let (lon, lat) = at(600.0, 0.0);
+    let payload = serde_json::json!({
+        "circle": { "lat": lat, "lon": lon, "radius_m": 150.0 }, "floor_m": 45.0,
+    });
+    let fence = intent(&model, 1, codes::GEOFENCE_OPEN, payload);
+    model
+        .apply_intent(&Intent {
+            agent: None,
+            ..fence
+        })
+        .unwrap();
+    let reports = run(&mut model, 1, 9_000);
+    let east = model.world().book().addresses[0].clone();
+    let fences = model.world().airspace().fences();
+    assert_eq!(fences[0].band.floor_m, Some(45.0));
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Delivery
+            && (r.lat_e7, r.lon_e7) == (east.lat_e7, east.lon_e7)));
+    assert!(reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Reroute && r.observer == Some(5)));
+    let breaches: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Breach)
+        .collect();
+    assert!(breaches.is_empty(), "{breaches:?}");
+}
+
+#[test]
+fn a_fence_too_low_to_fly_beneath_still_keeps_orders_away_and_bad_bands_are_refused() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&courier_blob()).unwrap();
+    let (lon, lat) = at(0.0, -500.0);
+    let open = |model: &mut Drones, extra: serde_json::Value| {
+        let mut payload =
+            serde_json::json!({ "circle": { "lat": lat, "lon": lon, "radius_m": 60.0 } });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let fence = intent(model, 1, codes::GEOFENCE_OPEN, payload);
+        model.apply_intent(&Intent {
+            agent: None,
+            ..fence
+        })
+    };
+    assert!(open(
+        &mut model,
+        serde_json::json!({ "floor_m": 50.0, "ceiling_m": 40.0 })
+    )
+    .is_err());
+    assert!(open(&mut model, serde_json::json!({ "altitude_ref": "qnh" })).is_err());
+    // 25 m less the 10 m margin is under the 20 m drones fly beneath at.
+    open(
+        &mut model,
+        serde_json::json!({ "floor_m": 25.0, "ceiling_m": 120.0 }),
+    )
+    .unwrap();
+    let reports = run(&mut model, 1, 9_000);
+    let south = model.world().book().addresses[2].clone();
+    assert!(!reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Delivery
+            && (r.lat_e7, r.lon_e7) == (south.lat_e7, south.lon_e7)));
+    assert!(model.world().dispatch().queues[0]
+        .iter()
+        .any(|o| o.address == 2));
+}

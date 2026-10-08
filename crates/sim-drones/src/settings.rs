@@ -25,6 +25,11 @@ pub(crate) struct Settings {
     pub(crate) wander_radius_m: u32,
     /// How far drones keep from a geofence, metres.
     pub(crate) geofence_margin_m: f64,
+    /// How far above or below a geofence's band drones keep, metres.
+    pub(crate) geofence_vertical_margin_m: f64,
+    /// The lowest drones fly to pass beneath a geofence, metres above the
+    /// ground.
+    pub(crate) beneath_min_agl_m: f64,
     /// Turn away orders whose address is inside a geofence when they are
     /// placed, rather than queue them until it closes.
     pub(crate) reject_orders_in_geofences: bool,
@@ -99,6 +104,9 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
         intruder_speed_cms: cms(param_f64(params, "intruder_speed_ms", 12.0)),
         wander_radius_m: param_f64(params, "wander_radius_m", 600.0).max(1.0) as u32,
         geofence_margin_m: param_f64(params, "geofence_margin_m", 30.0).clamp(2.0, 1_000.0),
+        geofence_vertical_margin_m: param_f64(params, "geofence_vertical_margin_m", 10.0)
+            .clamp(0.0, 500.0),
+        beneath_min_agl_m: param_f64(params, "beneath_min_agl_m", 20.0).clamp(1.0, 1_000.0),
         reject_orders_in_geofences: matches!(
             params.get("reject_orders_in_geofences"),
             Some(Param::Bool(true))

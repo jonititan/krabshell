@@ -35,9 +35,14 @@ use crate::mission::{
     self, Drone, MissionItem, Mode, Tuning, DO_JUMP, NAV_LAND, NAV_LOITER_TIME, NAV_LOITER_UNLIM,
     NAV_RETURN_TO_LAUNCH, NAV_TAKEOFF, NAV_WAYPOINT,
 };
+use crate::terrain::Terrain;
 use crate::world::Instruction;
 
+const FRAME_GLOBAL: u8 = 0;
 const FRAME_RELATIVE: u8 = 3;
+const FRAME_GLOBAL_INT: u8 = 5;
+const FRAME_TERRAIN: u8 = 10;
+const FRAME_TERRAIN_INT: u8 = 11;
 
 /// Acceptance radius of a detour waypoint, metres: a corner to pass, not a
 /// point to hit.
@@ -67,6 +72,10 @@ pub struct Ops {
     /// with where they were going, `[lat_e7, lon_e7]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moved: Vec<(u16, [i32; 2])>,
+    /// Items it brought down to fly beneath a fence over where they go,
+    /// with the frame and height they had.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lowered: Vec<(u16, u8, f32)>,
     /// The mission is a way home it made in place of RTL.
     #[serde(default)]
     pub homing: bool,
@@ -86,13 +95,15 @@ impl Ops {
     pub fn is_clean(&self) -> bool {
         self.inserted.is_empty()
             && self.moved.is_empty()
+            && self.lowered.is_empty()
             && !self.homing
             && self.resume.is_none()
             && self.hops.is_empty()
     }
 
     fn mine(&self, drone: &Drone) -> bool {
-        self.rev == drone.mission_rev && (!self.inserted.is_empty() || !self.moved.is_empty())
+        self.rev == drone.mission_rev
+            && (!self.inserted.is_empty() || !self.moved.is_empty() || !self.lowered.is_empty())
     }
 }
 
@@ -194,6 +205,10 @@ fn base(drone: &Drone, ops: &Ops) -> (Vec<MissionItem>, usize) {
             if let Some((_, to)) = ops.moved.iter().find(|(seq, _)| usize::from(*seq) == i) {
                 (item.x, item.y) = (to[0], to[1]);
             }
+            if let Some((_, frame, z)) = ops.lowered.iter().find(|(seq, ..)| usize::from(*seq) == i)
+            {
+                (item.frame, item.z) = (*frame, *z);
+            }
             if item.command == DO_JUMP {
                 item.param1 = to_base(item.param1.max(0.0) as usize) as f32;
             }
@@ -204,7 +219,22 @@ fn base(drone: &Drone, ops: &Ops) -> (Vec<MissionItem>, usize) {
     (items, at)
 }
 
-/// The drone's mission rerouted round the fences.
+/// Metres above the ground an item's height puts a drone at `at`: terrain
+/// frames say so; absolute ones are above mean sea level, the rest above
+/// home. Where a leg's ground rises or falls, it is judged at its end.
+fn agl(h: (u8, f32), at: [i32; 2], home: &Point, terrain: &Terrain) -> f64 {
+    let z = f64::from(h.1);
+    let ground = f64::from(terrain.ground_mm(at[0], at[1])) / 1000.0;
+    let metres = match h.0 {
+        FRAME_TERRAIN | FRAME_TERRAIN_INT => z,
+        FRAME_GLOBAL | FRAME_GLOBAL_INT => z - ground,
+        _ => f64::from(home.alt_mm) / 1000.0 + z - ground,
+    };
+    metres.max(0.0)
+}
+
+/// The drone's mission rerouted round the fences, and beneath those it can
+/// pass under when that is shorter.
 pub fn reroute(
     drone: &Drone,
     pose: &Pose,
@@ -212,6 +242,7 @@ pub fn reroute(
     ops: &Ops,
     airspace: &Airspace,
     tuning: &Tuning,
+    terrain: &Terrain,
 ) -> Plan {
     let (base, at) = base(drone, ops);
     let home = drone.home;
@@ -225,18 +256,35 @@ pub fn reroute(
     let mut prev = [home.lat_e7, home.lon_e7];
     let mut prev_height = rtl_height;
 
+    // The way to `to` at height `h`, its corners inserted as waypoints. A
+    // way beneath a fence drops to the low height where the leg starts and
+    // arrives low; the end, and the low height if it went beneath, are
+    // returned.
     let detour = |out: &mut Vec<MissionItem>,
                   notes: &mut Ops,
                   from: [i32; 2],
                   to: [i32; 2],
                   h: (u8, f32)| {
-        let route = airspace.route(&point(from), &point(to));
+        let passage = airspace.passage(&point(from), &point(to), agl(h, to, &home, terrain));
+        let route = passage.path;
         let end = *route.last().expect("a route ends somewhere");
+        let (low, corner) = if passage.beneath {
+            let low = (FRAME_TERRAIN_INT, passage.agl_m as f32);
+            notes.inserted.push(out.len() as u16);
+            out.push(waypoint(from, low.0, low.1));
+            (Some(low), low)
+        } else {
+            (None, h)
+        };
         for p in &route[..route.len() - 1] {
             notes.inserted.push(out.len() as u16);
-            out.push(waypoint(*p, h.0, h.1));
+            out.push(waypoint(*p, corner.0, corner.1));
         }
-        end
+        if let Some(low) = low {
+            notes.inserted.push(out.len() as u16);
+            out.push(waypoint(end, low.0, low.1));
+        }
+        (end, low)
     };
 
     for (b, item) in base.iter().enumerate() {
@@ -248,11 +296,19 @@ pub fn reroute(
             } else {
                 height(&item).unwrap_or(prev_height)
             };
-            let end = detour(&mut out, &mut notes, prev, dest, h);
+            let (end, low) = detour(&mut out, &mut notes, prev, dest, h);
             if end != dest && item.command != NAV_RETURN_TO_LAUNCH {
                 // Inside a fence: go as far as its edge.
                 notes.moved.push((out.len() as u16, dest));
                 (item.x, item.y) = (end[0], end[1]);
+            }
+            // Arrived beneath a fence over where it goes: stay down there
+            // rather than climb into it.
+            if let (Some(low), Some(own)) = (low, height(&item)) {
+                if airspace.blocks(&point(end), agl(own, end, &home, terrain)) {
+                    notes.lowered.push((out.len() as u16, item.frame, item.z));
+                    (item.frame, item.z) = low;
+                }
             }
             prev = end;
         } else if item.command == DO_JUMP {
@@ -294,16 +350,22 @@ pub fn reroute(
         Some(range) => {
             let place = |i: usize| position(&out[i], &home).map(point);
             let here = pose.point();
-            let seen = range
-                .clone()
-                .rev()
-                .find(|i| place(*i).is_none_or(|p| !airborne || airspace.is_clear(&here, &p)));
+            let here_agl = f64::from(pose.alt_mm - terrain.ground_mm(pose.lat_e7, pose.lon_e7))
+                .max(0.0)
+                / 1000.0;
+            // Flown at the height of the item it heads for.
+            let leg_agl = |i: usize, p: &Point| {
+                height(&out[i]).map_or(here_agl, |h| agl(h, [p.lat_e7, p.lon_e7], &home, terrain))
+            };
+            let seen = range.clone().rev().find(|i| {
+                place(*i).is_none_or(|p| !airborne || airspace.is_clear(&here, &p, leg_agl(*i, &p)))
+            });
             match seen {
                 Some(i) => i,
                 None => {
                     let first = range.start;
                     if let Some(p) = place(first) {
-                        hops = airspace.route(&here, &p);
+                        hops = airspace.route(&here, &p, here_agl);
                     }
                     first
                 }
@@ -325,9 +387,15 @@ pub fn way_home(
     pose: &Pose,
     airspace: &Airspace,
     tuning: &Tuning,
+    terrain: &Terrain,
 ) -> Option<Vec<MissionItem>> {
     let home = [drone.home.lat_e7, drone.home.lon_e7];
-    let route = airspace.route(&pose.point(), &point(home));
+    let rtl = (FRAME_RELATIVE, (tuning.rtl_alt_mm as f32) / 1000.0);
+    let route = airspace.route(
+        &pose.point(),
+        &point(home),
+        agl(rtl, home, &drone.home, terrain),
+    );
     if route.len() <= 1 {
         return None;
     }
@@ -394,6 +462,7 @@ pub(crate) fn orders(
     ops: &mut Ops,
     airspace: &Airspace,
     tuning: &Tuning,
+    terrain: &Terrain,
     max_items: usize,
 ) -> Option<Orders> {
     if !airborne && drone.mode == Mode::Disarmed {
@@ -410,7 +479,8 @@ pub(crate) fn orders(
 
     // A fence opened round it: out the nearest side first.
     if airborne && !matches!(drone.mode, Mode::Goto { .. }) {
-        if let Some(out) = airspace.way_out(&pose.point()) {
+        let agl = f64::from(pose.alt_mm - terrain.ground_mm(pose.lat_e7, pose.lon_e7)) / 1000.0;
+        if let Some(out) = airspace.way_out(&pose.point(), agl.max(0.0)) {
             ops.resume = match drone.mode {
                 Mode::Rtl => Some(Resume::Home),
                 Mode::Auto if ops.homing => Some(Resume::Home),
@@ -429,7 +499,7 @@ pub(crate) fn orders(
 
     // A courier whose address is now fenced off turns for home.
     if let Some(to) = address {
-        if drone.mode == Mode::Auto && !ops.homing && airspace.blocks(&to) {
+        if drone.mode == Mode::Auto && !ops.homing && airspace.covers(&to) {
             ops.checked = None;
             return Some(single(
                 command(mission::NAV_RETURN_TO_LAUNCH),
@@ -462,7 +532,7 @@ pub(crate) fn orders(
                 "round the geofence, home",
             ));
         }
-        let plan = reroute(drone, pose, airborne, ops, airspace, tuning);
+        let plan = reroute(drone, pose, airborne, ops, airspace, tuning, terrain);
         if plan.items.len() > max_items {
             return None;
         }
@@ -487,13 +557,13 @@ pub(crate) fn orders(
     match drone.mode {
         Mode::Rtl => {
             ops.checked = Some(key);
-            let items = way_home(drone, pose, airspace, tuning)?;
+            let items = way_home(drone, pose, airspace, tuning, terrain)?;
             Some(send_home(drone, pose, airspace.rev(), ops, items))
         }
         Mode::Auto if ops.homing && drone.mission_rev == ops.rev => {
             ops.checked = Some(key);
             let home = [drone.home.lat_e7, drone.home.lon_e7];
-            let items = way_home(drone, pose, airspace, tuning)
+            let items = way_home(drone, pose, airspace, tuning, terrain)
                 .unwrap_or_else(|| home_mission(drone, &[home], tuning));
             if same(&items, &drone.mission) {
                 return None;
@@ -507,7 +577,7 @@ pub(crate) fn orders(
                 return None;
             }
             ops.checked = Some(key);
-            let plan = reroute(drone, pose, airborne, ops, airspace, tuning);
+            let plan = reroute(drone, pose, airborne, ops, airspace, tuning, terrain);
             let unchanged = same(&plan.items, &drone.mission) && plan.seq == drone.mission_seq;
             if (unchanged && plan.hops.is_empty()) || plan.items.len() > max_items {
                 return None;

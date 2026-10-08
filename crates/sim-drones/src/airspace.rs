@@ -1,8 +1,10 @@
 //! Geofences: keep-out zones that open and close while a run goes on, and
 //! routing around them.
 //!
-//! A [`Fence`] is a circle or a polygon, closed to drones at every altitude.
-//! A scenario pack lists the fences it starts with (`world/geofences.json`);
+//! A [`Fence`] is a circle or a polygon, closed to drones from its floor to
+//! its ceiling ([`Band`]), in metres above the ground: from the surface to
+//! unlimited unless it says otherwise. A scenario pack lists the fences it
+//! starts with (`world/geofences.json`);
 //! while it runs, intents open and close them (see [`crate::codes`]): from
 //! the dashboard, the API, or a ground station's fence plan.
 //!
@@ -14,6 +16,15 @@
 //! the next tick. A drone that finds itself inside a fence (one opened around
 //! it) flies straight out the nearest side; one sent to a point inside a fence
 //! holds at the edge.
+//!
+//! A fence whose floor is high enough can be flown beneath. A leg the fence
+//! blocks at the height it is flown at is also tried low enough to pass
+//! under it (by [`Airspace::vertical_margin_m`], and no lower than
+//! [`Airspace::min_agl_m`]), and flown that way if it is shorter, counting
+//! the climb back: the drone drops to the low height where the leg starts,
+//! follows the terrain under the fence, and climbs again where it ends. An
+//! address under such a fence can still be delivered to; one under a fence
+//! that reaches too low cannot ([`Airspace::covers`]).
 //!
 //! Geometry is worked in metres east and north of a fixed reference point, so
 //! the same position always maps to the same coordinates, and a `gold` run
@@ -43,12 +54,40 @@ pub enum Shape {
     Polygon { points: Vec<[i32; 2]> },
 }
 
+/// The heights a fence is closed between, metres above the ground.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Band {
+    /// From the surface if `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor_m: Option<f64>,
+    /// Unlimited if `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_m: Option<f64>,
+}
+
+impl Band {
+    pub fn floor(&self) -> f64 {
+        self.floor_m.unwrap_or(0.0)
+    }
+
+    pub fn ceiling(&self) -> f64 {
+        self.ceiling_m.unwrap_or(f64::INFINITY)
+    }
+
+    /// Surface to unlimited.
+    pub fn is_full(&self) -> bool {
+        self.floor() <= 0.0 && self.ceiling_m.is_none()
+    }
+}
+
 /// A keep-out zone.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fence {
     pub id: u32,
     #[serde(flatten)]
     pub shape: Shape,
+    #[serde(flatten)]
+    pub band: Band,
     /// What it is, for people: "Kaunas Old Town". May be empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
@@ -281,6 +320,9 @@ struct Obstacle {
     /// Bounding box of the outline, to skip far-away fences quickly.
     min: Xy,
     max: Xy,
+    /// Its band, metres above the ground.
+    floor: f64,
+    ceiling: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +354,11 @@ impl Real {
 }
 
 impl Obstacle {
+    /// Is a drone `agl` metres above the ground inside the band?
+    fn holds(&self, agl: f64) -> bool {
+        agl >= self.floor && agl < self.ceiling
+    }
+
     fn near(&self, p: Xy, q: Xy) -> bool {
         p.0.min(q.0) <= self.max.0
             && p.0.max(q.0) >= self.min.0
@@ -326,6 +373,10 @@ pub struct Airspace {
     /// Projection origin, `[lat_e7, lon_e7]`.
     origin: [i32; 2],
     pub margin_m: f64,
+    /// How far above or below a fence's band drones keep, metres.
+    pub vertical_margin_m: f64,
+    /// The lowest a drone flies beneath a fence, metres above the ground.
+    pub min_agl_m: f64,
     fences: Vec<Fence>,
     /// Bumped on every change, so a drone knows when to replan.
     rev: u64,
@@ -346,6 +397,8 @@ impl Airspace {
         Airspace {
             origin: [origin.lat_e7, origin.lon_e7],
             margin_m: margin_m.max(2.0),
+            vertical_margin_m: 10.0,
+            min_agl_m: 20.0,
             next_id: 1,
             ..Airspace::default()
         }
@@ -500,6 +553,8 @@ impl Airspace {
             keep_out,
             min,
             max,
+            floor: fence.band.floor(),
+            ceiling: fence.band.ceiling(),
         })
     }
 
@@ -517,6 +572,7 @@ impl Airspace {
         self.obstacle(&Fence {
             id: 0,
             shape: shape.clone(),
+            band: Band::default(),
             name: String::new(),
             source: String::new(),
             opened_tick: 0,
@@ -530,6 +586,7 @@ impl Airspace {
         let fence = Fence {
             id: 0,
             shape: shape.clone(),
+            band: Band::default(),
             name: String::new(),
             source: String::new(),
             opened_tick: 0,
@@ -539,32 +596,63 @@ impl Airspace {
             .is_some_and(|o| o.outline.contains(self.xy(point)))
     }
 
-    /// Ids of the fences `point` is inside, ascending.
-    pub fn inside(&self, point: &Point) -> Vec<u32> {
+    /// Ids of the fences `point` is inside, `agl_m` above the ground,
+    /// ascending.
+    pub fn inside(&self, point: &Point, agl_m: f64) -> Vec<u32> {
         if self.obstacles.is_empty() {
             return Vec::new();
         }
         let p = self.xy(point);
         self.obstacles
             .iter()
-            .filter(|o| o.near(p, p) && o.real.contains(p))
+            .filter(|o| o.holds(agl_m) && o.near(p, p) && o.real.contains(p))
             .map(|o| o.id)
             .collect()
     }
 
-    /// Is `point` inside a fence?
-    pub fn blocks(&self, point: &Point) -> bool {
-        !self.inside(point).is_empty()
+    /// Is `point`, `agl_m` above the ground, inside a fence?
+    pub fn blocks(&self, point: &Point, agl_m: f64) -> bool {
+        !self.inside(point, agl_m).is_empty()
+    }
+
+    /// Fences over `point` that reach too low to fly beneath, so nothing can
+    /// be delivered there (or a station used), ascending.
+    pub fn covering(&self, point: &Point) -> Vec<u32> {
+        if self.obstacles.is_empty() {
+            return Vec::new();
+        }
+        let p = self.xy(point);
+        self.obstacles
+            .iter()
+            .filter(|o| !self.passable_below(o) && o.near(p, p) && o.real.contains(p))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// Is the ground at `point` under a fence that cannot be flown beneath?
+    pub fn covers(&self, point: &Point) -> bool {
+        !self.covering(point).is_empty()
+    }
+
+    /// Can a drone pass under this fence at or above the lowest height?
+    fn passable_below(&self, o: &Obstacle) -> bool {
+        o.floor - self.vertical_margin_m >= self.min_agl_m
+    }
+
+    /// Is a fence in the way of a drone flying `agl` above the ground,
+    /// vertical margin included?
+    fn relevant(&self, o: &Obstacle, agl: f64) -> bool {
+        agl > o.floor - self.vertical_margin_m && agl < o.ceiling + self.vertical_margin_m
     }
 
     /// Where a drone inside a fence should head to get out: just past the
     /// nearest side of its outline. `None` if it is not inside one.
-    pub fn way_out(&self, point: &Point) -> Option<Point> {
+    pub fn way_out(&self, point: &Point, agl_m: f64) -> Option<Point> {
         let p = self.xy(point);
         let o = self
             .obstacles
             .iter()
-            .find(|o| o.near(p, p) && o.real.contains(p))?;
+            .find(|o| o.holds(agl_m) && o.near(p, p) && o.real.contains(p))?;
         let [lat_e7, lon_e7] = self.at(o.outline.nearest_outside(p, CLEAR_M));
         Some(Point {
             lat_e7,
@@ -573,13 +661,14 @@ impl Airspace {
         })
     }
 
-    /// Step `p` out of every keep-out zone it is in, to the nearest side.
-    fn escape(&self, mut p: Xy) -> Xy {
+    /// Step `p` out of every keep-out zone in the way at `agl` it is in, to
+    /// the nearest side.
+    fn escape(&self, mut p: Xy, agl: f64) -> Xy {
         for _ in 0..self.obstacles.len() {
             match self
                 .obstacles
                 .iter()
-                .find(|o| o.near(p, p) && o.keep_out.contains(p))
+                .find(|o| self.relevant(o, agl) && o.near(p, p) && o.keep_out.contains(p))
             {
                 Some(o) => p = o.outline.nearest_outside(p, CLEAR_M),
                 None => break,
@@ -588,41 +677,53 @@ impl Airspace {
         p
     }
 
-    /// Can a drone fly straight from `from` to `to` without coming inside
-    /// the margin of a fence?
-    pub fn is_clear(&self, from: &Point, to: &Point) -> bool {
-        self.obstacles.is_empty() || self.clear_between(self.xy(from), self.xy(to))
+    /// Can a drone fly straight from `from` to `to`, `agl_m` above the
+    /// ground, without coming inside the margin of a fence?
+    pub fn is_clear(&self, from: &Point, to: &Point, agl_m: f64) -> bool {
+        self.obstacles.is_empty() || self.clear_between(self.xy(from), self.xy(to), agl_m)
     }
 
-    fn clear_between(&self, p: Xy, q: Xy) -> bool {
+    fn clear_between(&self, p: Xy, q: Xy, agl: f64) -> bool {
         self.obstacles
             .iter()
-            .all(|o| !o.near(p, q) || !o.keep_out.crossed_by(p, q))
+            .all(|o| !self.relevant(o, agl) || !o.near(p, q) || !o.keep_out.crossed_by(p, q))
     }
 
-    /// The way from `from` to `to` around every fence, as `[lat_e7, lon_e7]`
-    /// points to fly through in turn. The last is `to` itself, or, if `to`
-    /// is inside a fence, the nearest point outside it that can be reached.
-    pub fn route(&self, from: &Point, to: &Point) -> Vec<[i32; 2]> {
+    /// The way from `from` to `to` around every fence in the way at `agl_m`
+    /// above the ground, as `[lat_e7, lon_e7]` points to fly through in
+    /// turn. The last is `to` itself, or, if `to` is inside a fence, the
+    /// nearest point outside it that can be reached.
+    pub fn route(&self, from: &Point, to: &Point, agl_m: f64) -> Vec<[i32; 2]> {
+        self.route_at(from, to, agl_m).0
+    }
+
+    /// As [`Airspace::route`], and whether the way is a good one: false if
+    /// the drone has to get out of a fence first, cannot reach `to`, or is
+    /// walled in and flies straight.
+    fn route_at(&self, from: &Point, to: &Point, agl: f64) -> (Vec<[i32; 2]>, bool) {
         let goal = [to.lat_e7, to.lon_e7];
         if self.obstacles.is_empty() {
-            return vec![goal];
+            return (vec![goal], true);
         }
         let p0 = self.xy(from);
         let g0 = self.xy(to);
-        let start = self.escape(p0);
-        let end = self.escape(g0);
-        let reachable = !self.obstacles.iter().any(|o| o.real.contains(g0));
+        let start = self.escape(p0, agl);
+        let end = self.escape(g0, agl);
+        let reachable = !self
+            .obstacles
+            .iter()
+            .any(|o| self.relevant(o, agl) && o.real.contains(g0));
 
         let mut out = Vec::new();
-        if dist(start, p0) > 0.01 {
+        let escaped = dist(start, p0) > 0.01;
+        if escaped {
             out.push(start);
         }
-        if !self.clear_between(start, end) {
-            match self.shortest(start, end) {
+        if !self.clear_between(start, end, agl) {
+            match self.shortest(start, end, agl) {
                 Some(via) => out.extend(via),
                 // Walled in: fly straight and let the breach be logged.
-                None => return vec![goal],
+                None => return (vec![goal], false),
             }
         }
         let mut path: Vec<[i32; 2]> = out.into_iter().map(|p| self.at(p)).collect();
@@ -635,20 +736,84 @@ impl Airspace {
             path.push(self.at(end));
         }
         path.dedup();
-        path
+        (path, reachable && !escaped)
+    }
+
+    /// The way from `from` to `to` for a leg flown `agl_m` above the
+    /// ground: round the fences at that height, or beneath one whose floor
+    /// is high enough, if that is shorter (the drop and climb counted) or
+    /// the only good way.
+    pub fn passage(&self, from: &Point, to: &Point, agl_m: f64) -> Passage {
+        let (around, good) = self.route_at(from, to, agl_m);
+        let at_height = Passage {
+            path: around,
+            agl_m,
+            beneath: false,
+        };
+        let Some(low) = self.beneath(from, to, agl_m) else {
+            return at_height;
+        };
+        let (under, under_good) = self.route_at(from, to, low);
+        if !under_good {
+            return at_height;
+        }
+        let climb = 2.0 * (agl_m - low);
+        if good && self.length(from, &under) + climb >= self.length(from, &at_height.path) {
+            return at_height;
+        }
+        Passage {
+            path: under,
+            agl_m: low,
+            beneath: true,
+        }
+    }
+
+    /// How low to fly to pass beneath the fences in the way of a leg at
+    /// `agl`: under the lowest floor among them, by the vertical margin.
+    /// `None` if nothing is in the way, or something in the way cannot be
+    /// flown beneath.
+    fn beneath(&self, from: &Point, to: &Point, agl: f64) -> Option<f64> {
+        let (p, q) = (self.xy(from), self.xy(to));
+        let mut low: Option<f64> = None;
+        for o in &self.obstacles {
+            if !self.relevant(o, agl) || !o.near(p, q) {
+                continue;
+            }
+            let in_way =
+                o.keep_out.crossed_by(p, q) || o.keep_out.contains(p) || o.keep_out.contains(q);
+            if !in_way {
+                continue;
+            }
+            if !self.passable_below(o) {
+                return None;
+            }
+            let under = o.floor - self.vertical_margin_m;
+            low = Some(low.map_or(under, |l| l.min(under)));
+        }
+        low.filter(|l| *l < agl)
+    }
+
+    /// Metres along a path from `from`.
+    fn length(&self, from: &Point, path: &[[i32; 2]]) -> f64 {
+        let mut at = self.xy(from);
+        let mut total = 0.0;
+        for p in path {
+            let next = self.xy_e7(p[0], p[1]);
+            total += dist(at, next);
+            at = next;
+        }
+        total
     }
 
     /// Corners to pass between `a` and `b`, neither included: Dijkstra over
     /// the outlines' corners, with each leg checked as it is relaxed.
-    fn shortest(&self, a: Xy, b: Xy) -> Option<Vec<Xy>> {
+    fn shortest(&self, a: Xy, b: Xy, agl: f64) -> Option<Vec<Xy>> {
         let mut nodes = vec![a, b];
-        for o in &self.obstacles {
+        for o in self.obstacles.iter().filter(|o| self.relevant(o, agl)) {
             for &c in &o.outline.0 {
-                if !self
-                    .obstacles
-                    .iter()
-                    .any(|other| other.near(c, c) && other.keep_out.contains(c))
-                {
+                if !self.obstacles.iter().any(|other| {
+                    self.relevant(other, agl) && other.near(c, c) && other.keep_out.contains(c)
+                }) {
                     nodes.push(c);
                 }
             }
@@ -671,7 +836,7 @@ impl Airspace {
                     continue;
                 }
                 let d = best[u] + dist(nodes[u], nodes[v]);
-                if d < best[v] && self.clear_between(nodes[u], nodes[v]) {
+                if d < best[v] && self.clear_between(nodes[u], nodes[v], agl) {
                     best[v] = d;
                     prev[v] = u;
                 }
@@ -686,6 +851,17 @@ impl Airspace {
         via.reverse();
         Some(via)
     }
+}
+
+/// How to fly one leg: through `path`, at `agl_m` above the ground.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Passage {
+    /// `[lat_e7, lon_e7]` points in turn, ending at the leg's end (or the
+    /// edge of the fence it is in).
+    pub path: Vec<[i32; 2]>,
+    pub agl_m: f64,
+    /// Beneath a fence, lower than the leg was to be flown.
+    pub beneath: bool,
 }
 
 #[cfg(test)]
@@ -715,6 +891,7 @@ mod tests {
                 lon_e7: c.lon_e7,
                 radius_m: r,
             },
+            band: Band::default(),
             name: String::new(),
             source: "test".into(),
             opened_tick: 0,
@@ -749,7 +926,7 @@ mod tests {
         air.open(circle(1, 0.0, 1_000.0, 100.0));
         let to = east_north(1_000.0, 0.0);
         assert_eq!(
-            air.route(&east_north(0.0, 0.0), &to),
+            air.route(&east_north(0.0, 0.0), &to, 50.0),
             vec![[to.lat_e7, to.lon_e7]]
         );
     }
@@ -760,7 +937,7 @@ mod tests {
         air.open(circle(1, 500.0, 0.0, 100.0));
         let from = east_north(0.0, 0.0);
         let to = east_north(1_000.0, 0.0);
-        let route = air.route(&from, &to);
+        let route = air.route(&from, &to, 50.0);
         assert!(route.len() > 2, "{route:?}");
         assert_eq!(*route.last().unwrap(), [to.lat_e7, to.lon_e7]);
         let (closest, length) = fly(&air, &from, &route, air.xy(&east_north(500.0, 0.0)));
@@ -768,11 +945,14 @@ mod tests {
         // Round a 130 m circle: about 1000 − 260 + π·130 ≈ 1150 m.
         assert!(length < 1_200.0, "{length} m");
         for p in &route {
-            assert!(!air.blocks(&Point {
-                lat_e7: p[0],
-                lon_e7: p[1],
-                alt_mm: 0
-            }));
+            assert!(!air.blocks(
+                &Point {
+                    lat_e7: p[0],
+                    lon_e7: p[1],
+                    alt_mm: 0
+                },
+                50.0
+            ));
         }
     }
 
@@ -783,23 +963,23 @@ mod tests {
         air.open(circle(2, 500.0, 80.0, 120.0));
         let from = east_north(0.0, 0.0);
         let to = east_north(1_000.0, 0.0);
-        let route = air.route(&from, &to);
+        let route = air.route(&from, &to, 50.0);
         let mut at = air.xy(&from);
         for p in &route {
             let next = air.xy_e7(p[0], p[1]);
-            assert!(air.clear_between(at, next), "leg into a fence");
+            assert!(air.clear_between(at, next, 50.0), "leg into a fence");
             at = next;
         }
         // The centre of fence 1 cannot be reached: the route ends outside it.
         let inside = east_north(500.0, -80.0);
-        let route = air.route(&from, &inside);
+        let route = air.route(&from, &inside, 50.0);
         let last = *route.last().unwrap();
         let end = Point {
             lat_e7: last[0],
             lon_e7: last[1],
             alt_mm: 0,
         };
-        assert!(!air.blocks(&end));
+        assert!(!air.blocks(&end, 50.0));
         assert_ne!(last, [inside.lat_e7, inside.lon_e7]);
     }
 
@@ -825,20 +1005,21 @@ mod tests {
         air.open(Fence {
             id: 7,
             shape: Shape::Polygon { points },
+            band: Band::default(),
             name: String::new(),
             source: "test".into(),
             opened_tick: 0,
             closes_tick: None,
         });
-        assert_eq!(air.inside(&east_north(100.0, 100.0)), vec![7]);
+        assert_eq!(air.inside(&east_north(100.0, 100.0), 50.0), vec![7]);
         assert!(
-            air.inside(&east_north(300.0, 300.0)).is_empty(),
+            air.inside(&east_north(300.0, 300.0), 50.0).is_empty(),
             "the notch"
         );
-        let out = air.way_out(&east_north(100.0, 20.0)).unwrap();
-        assert!(!air.blocks(&out));
+        let out = air.way_out(&east_north(100.0, 20.0), 50.0).unwrap();
+        assert!(!air.blocks(&out, 50.0));
         assert!(flight::ground_distance_m(&out, &east_north(100.0, -30.0)) < 2.0);
-        assert!(air.way_out(&east_north(-100.0, 0.0)).is_none());
+        assert!(air.way_out(&east_north(-100.0, 0.0), 50.0).is_none());
     }
 
     #[test]
@@ -856,5 +1037,64 @@ mod tests {
         assert!(air.close(2).is_some() && air.close(2).is_none());
         assert!(air.is_empty());
         assert_eq!(air.take_id(), 3, "ids are never reused");
+    }
+
+    fn raised(id: u32, e: f64, n: f64, r: f64, floor: f64) -> Fence {
+        let mut f = circle(id, e, n, r);
+        f.band = Band {
+            floor_m: Some(floor),
+            ceiling_m: None,
+        };
+        f
+    }
+
+    #[test]
+    fn a_fence_holds_only_its_band_and_one_high_enough_leaves_the_ground_reachable() {
+        let mut air = Airspace::new(&origin(), 30.0);
+        air.open(raised(1, 0.0, 0.0, 200.0, 100.0));
+        air.open(raised(2, 1_000.0, 0.0, 200.0, 25.0));
+        let centre = east_north(0.0, 0.0);
+        assert!(air.inside(&centre, 60.0).is_empty(), "below the floor");
+        assert_eq!(air.inside(&centre, 150.0), vec![1]);
+        // Fence 1 can be flown beneath (90 m clears the 20 m lowest); fence
+        // 2's floor less its margin is below that, so its ground is covered.
+        assert!(!air.covers(&centre));
+        assert_eq!(air.covering(&east_north(1_000.0, 0.0)), vec![2]);
+    }
+
+    #[test]
+    fn a_leg_below_the_floor_flies_straight_and_one_above_it_goes_beneath_when_shorter() {
+        let mut air = Airspace::new(&origin(), 30.0);
+        air.open(raised(1, 500.0, 0.0, 300.0, 100.0));
+        let from = east_north(0.0, 0.0);
+        let to = east_north(1_000.0, 0.0);
+        let goal = [to.lat_e7, to.lon_e7];
+        assert_eq!(air.route(&from, &to, 60.0), vec![goal]);
+
+        // At 120 m it is in the way: beneath, at the floor less the margin.
+        let p = air.passage(&from, &to, 120.0);
+        assert!(p.beneath);
+        assert!((p.agl_m - 90.0).abs() < 1e-9);
+        assert_eq!(p.path, vec![goal]);
+
+        // A full-height fence cannot be flown beneath: round it, as before.
+        let mut full = Airspace::new(&origin(), 30.0);
+        full.open(circle(1, 500.0, 0.0, 300.0));
+        let p = full.passage(&from, &to, 120.0);
+        assert!(!p.beneath && p.path.len() > 1);
+        assert_eq!(p.path, full.route(&from, &to, 120.0));
+    }
+
+    #[test]
+    fn going_round_a_small_raised_fence_beats_dropping_far_beneath_it() {
+        let mut air = Airspace::new(&origin(), 5.0);
+        // A small fence just off the line: a short way round it.
+        air.open(raised(1, 500.0, 8.0, 10.0, 25.0 + 10.0));
+        let from = east_north(0.0, 0.0);
+        let to = east_north(1_000.0, 0.0);
+        let p = air.passage(&from, &to, 120.0);
+        // Beneath at 25 m would cost a 190 m drop and climb; round is a few.
+        assert!(!p.beneath, "{p:?}");
+        assert!(p.path.len() > 1);
     }
 }
