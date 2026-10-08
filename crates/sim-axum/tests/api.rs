@@ -958,6 +958,7 @@ async fn dashboard_assets_are_served_from_the_binary() {
         ("/assets/map.js", "Occupancy map"),
         ("/assets/live.js", "WebSocket"),
         ("/assets/htmx.min.js", "htmx"),
+        ("/assets/milsymbol-3.0.4.js", "Måns Beckman"),
     ] {
         let request = Request::builder().uri(path).body(Body::empty()).unwrap();
         let (status, _, text) = call(&h, request).await;
@@ -1025,6 +1026,32 @@ async fn the_state_page_offers_basemaps_with_none_as_the_default() {
     assert!(html.contains("id=\"map-basemap\""));
     assert!(html.contains("<option value=\"\">None</option>"));
     assert!(html.contains("tile.openstreetmap.org"));
+}
+
+#[tokio::test]
+async fn both_maps_load_the_symbols_first_and_offer_every_layer() {
+    let h = harness(Profile::Fast, 0);
+    for path in ["/state", "/geofences"] {
+        let (status, _, html) = call(&h, page(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let symbols = html.find("/assets/milsymbol-3.0.4.js").expect(path);
+        let map = html.find("/assets/map.js").expect(path);
+        assert!(symbols < map, "{path} must load milsymbol before the map");
+        for layer in [
+            "drones",
+            "deliveries",
+            "people",
+            "fences",
+            "stations",
+            "rois",
+            "grid",
+        ] {
+            assert!(
+                html.contains(&format!("data-layer=\"{layer}\"")),
+                "{path} has no {layer} layer"
+            );
+        }
+    }
 }
 
 // ------------------------------------------------------------ geofences

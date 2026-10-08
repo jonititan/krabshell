@@ -58,7 +58,7 @@ crates/
   sim-mavlink/    MAVLink gateway: drones as UDP vehicles for ground stations
   sim-cot/        Cursor-on-Target emitter: tracks and sightings for TAK
   sim-axum/       REST + WebSocket edge, auth, the krabshell binary
-  sim-dashboard/  Askama templates and static assets (htmx, canvas map)
+  sim-dashboard/  Askama templates and static assets (htmx, milsymbol, canvas map)
 scenarios/        drone packs: london-patrol (gold), kaunas-deliveries (gold),
                   swarm-survey (fast)
 bench/scenarios/  random-walker packs for benchmarks and the krABMaga replay
@@ -216,8 +216,35 @@ until closed (-1). It opens with a new number. **Recent activity** shows
 breaches and the operator's reroutes. The State page's map draws the fences
 too. Both maps have layers to show or hide: drones; delivery locations
 (hubs and landmarks, open orders' addresses, recent drop-offs); people and
-vehicles (where they are, and camera sightings); geofences; and the A5
-occupancy grid. The choice is remembered in the browser.
+vehicles (where they are, and camera sightings); geofences; launch and
+recovery stations; regions of interest; and the A5 occupancy grid. The
+choice is remembered in the browser.
+
+### Map symbols
+
+The maps draw NATO joint military symbology (APP-6 / MIL-STD-2525C), the
+same symbols the CoT emitter sends to TAK, with
+[milsymbol](https://github.com/spatialillusions/milsymbol) 3.0.4 (MIT),
+which is compiled into the binary so the dashboard needs no internet:
+
+| What | Symbol | SIDC |
+|---|---|---|
+| Delivery drone | friendly air, drone, with its direction of movement | `SFAPMFQ--------` |
+| Intruder drone, and camera sightings of one | unknown air, drone | `SUAPMFQ--------` |
+| Camera sighting of a person | unknown ground unit, infantry | `SUGPUCI--------` |
+| Camera sighting of a vehicle | unknown ground equipment, vehicle | `SUGPEV---------` |
+| Launch and recovery station | friendly ground installation, air base | `SFGPIBA---H----` |
+
+Sightings fade over 30 seconds. Where people and vehicles really are (not
+what the cameras saw) stays as faint dots, and points of interest as
+diamonds. A region of interest is a named area of interest: a dashed circle
+labelled `NAI` and its name, heavier while drones are on their way to survey
+it, red when a crash put it there. A geofence's label carries its altitude
+band when it has one (`#4 · 60 m–UNL`, `#4 · SFC–120 m`; SFC is the surface,
+UNL unlimited), and a fence whose floor is raised is drawn lighter and
+dashed, since drones may pass beneath it. A drone's label says what it is
+doing (`MEGA-3 · delivering`) when the model says, and its flight mode
+otherwise.
 
 ### Drones: MAVLink and CoT
 

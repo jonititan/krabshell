@@ -37,6 +37,8 @@
     <label title="Hubs and landmarks, the addresses of open orders, and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Delivery locations</label>
     <label title="Where people and vehicles are, and camera sightings of them"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
   </fieldset>
   <div class="map-wrap">
@@ -47,26 +49,32 @@
   </div>
   <ul class="map-key" aria-label="Map key">
     <li>
-      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-drone" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
-      Drone, pointing along its heading; named while moving
+      <canvas class="sym moving" data-sidc="SFAPMFQ--------" data-heading="45" aria-hidden="true"></canvas>
+      Friendly drone (air), with its direction of movement; named while moving, with what it is doing
     </li>
     <li>
-      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-intruder" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
-      Intruder drone
+      <canvas class="sym" data-sidc="SUAPMFQ--------" aria-hidden="true"></canvas>
+      Unknown air (intruder)
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="SUGPUCI--------" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="SUGPEV---------" aria-hidden="true"></canvas>
+      Unknown ground: person / vehicle sighting; fades over 30&nbsp;s
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="SFGPIBA---H----" aria-hidden="true"></canvas>
+      Launch and recovery station
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true"><ellipse class="k-nai" cx="20" cy="10" rx="18" ry="8.5"/><text class="k-nai-text" x="20" y="12.5">NAI</text></svg>
+      Region of interest (NAI); heavier and blue while drones are tasked to survey it, red where a drone crashed
     </li>
     <li>
       <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-poi" d="M0 -5 L4 0 L0 5 L-4 0 Z"/></svg>
       Point of interest (hub, landmark); named when zoomed in
     </li>
-    <li>
-      <svg viewBox="0 0 40 20" aria-hidden="true">
-        <circle class="k-person" cx="7" cy="10" r="4"/>
-        <circle class="k-vehicle" cx="20" cy="10" r="4"/>
-        <circle class="k-intruder" cx="33" cy="10" r="4"/>
-      </svg>
-      Camera sighting of a person, vehicle or intruder; fades over 30&nbsp;s
-    </li>
     <li><span class="swatch fence" aria-hidden="true"></span>Geofence (manage them on the <a href="/geofences">Geofences</a> page)</li>
+    <li><span class="swatch fence raised" aria-hidden="true"></span>Geofence with a raised floor: drones may pass beneath</li>
     <li>
       <span class="ramp" aria-hidden="true"></span>
       Cell shading: agents per cell, mostly people and vehicles (scale bottom right)
@@ -108,6 +116,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
 <script src="/assets/map.js" defer></script>
 <script src="/assets/live.js" defer></script>
 {% endblock %}

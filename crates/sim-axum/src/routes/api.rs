@@ -968,6 +968,10 @@ pub struct Entity {
     pub callsign: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// What a drone's behaviour is doing ("delivering", "surveying",
+    /// "charging", ...), when the model says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 /// Every object that carries an exact position (`lat_e7`/`lon_e7` in its
@@ -1038,6 +1042,10 @@ pub async fn state_entities(
                     .get("drone")
                     .and_then(|d| d.get("mode"))
                     .and_then(|m| m.as_str())
+                    .map(str::to_owned),
+                activity: s
+                    .get("activity")
+                    .and_then(|a| a.as_str())
                     .map(str::to_owned),
             });
         }

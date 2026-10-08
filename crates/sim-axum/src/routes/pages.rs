@@ -32,6 +32,10 @@ const MAP_JS: &str = include_str!("../../../sim-dashboard/assets/map.js");
 const GEOFENCES_JS: &str = include_str!("../../../sim-dashboard/assets/geofences.js");
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
+/// milsymbol 3.0.4 (MIT), which draws the maps' APP-6 / MIL-STD-2525 symbols.
+/// Vendored so the dashboard works offline. Its path carries the version, so
+/// browsers may keep it for good; a new version gets a new path.
+const MILSYMBOL_JS: &str = include_str!("../../../sim-dashboard/assets/milsymbol.js");
 
 pub fn router(auth: Arc<Auth>) -> Router<AppState> {
     let public = Router::new()
@@ -47,6 +51,19 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route(
             "/assets/htmx.min.js",
             get(|| asset(HTMX_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/milsymbol-3.0.4.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript"),
+                        (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    ],
+                    MILSYMBOL_JS,
+                )
+                    .into_response()
+            }),
         );
 
     let guarded = Router::new()

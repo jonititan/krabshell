@@ -10,6 +10,11 @@
 // lets a page hand clicks to a tool of its own (the Geofences page draws
 // new fences with one) instead of the cell inspector.
 //
+// Drones, sightings and stations are drawn as NATO joint military symbols
+// (APP-6 / MIL-STD-2525), by the vendored milsymbol library; regions of
+// interest as named areas of interest. Without milsymbol the map falls back
+// to plain arrows and dots.
+//
 // Projection is Web Mercator, because that is what every XYZ tile server
 // renders; cells and tiles only line up if both use it. It does not wrap the
 // antimeridian and clips at ±85°, both fine for an operator view.
@@ -36,8 +41,12 @@
   // remembered across pages: drones and intruders; delivery locations
   // (hubs and landmarks, open orders' addresses, recent drop-offs); people
   // and vehicles (where they are, and camera sightings of them); geofences;
-  // and the A5 occupancy grid.
-  const layers = { drones: true, deliveries: true, people: true, fences: true, grid: true };
+  // launch and recovery stations; regions of interest; and the A5 occupancy
+  // grid.
+  const layers = {
+    drones: true, deliveries: true, people: true, fences: true,
+    stations: true, rois: true, grid: true,
+  };
   try {
     Object.assign(layers, JSON.parse(localStorage.getItem('krabshell.layers') || '{}'));
   } catch { /* no storage, or nonsense in it: everything on */ }
@@ -76,6 +85,12 @@
   let people = [];        // persons and vehicles, polled while their layer is on
   let orders = [];        // open orders' addresses: [lat_e7, lon_e7, in_flight]
   let drops = [];         // recent deliveries: { lat, lon, at }
+  // Launch and recovery stations and regions of interest, as the model
+  // publishes them in its overlays. A model that publishes none leaves both
+  // empty, and nothing is drawn.
+  let stations = [];
+  let rois = [];
+  let markSelected = null; // { kind: 'station' | 'roi', id }: picked out by a page
   const DROP_MS = 120_000;
   let lastReport = null;  // seq of the newest report seen; null until primed
   const SIGHTING_MS = 30_000;
@@ -370,6 +385,8 @@
     }
 
     if (layers.fences) drawFences(style);
+    if (layers.rois) drawRois(style);
+    if (layers.stations) drawStations(style);
 
     drawEntities(style, ink);
 
@@ -447,22 +464,28 @@
       const ring = fenceRing(f);
       if (ring.length < 3) continue;
       const picked = fenceSelected === f.id;
+      // A fence with a raised floor is lighter and dashed: drones may pass
+      // beneath it.
+      const raised = floorOf(f) > 0;
       trace(ring);
       ctx.fillStyle = panel;
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = raised ? 0.2 : 0.35;
       ctx.fill();
       ctx.fillStyle = hatching(bad);
-      ctx.globalAlpha = picked ? 0.9 : 0.6;
+      ctx.globalAlpha = (picked ? 0.9 : 0.6) * (raised ? 0.45 : 1);
       ctx.fill();
       ctx.globalAlpha = 1;
       // A light halo under the outline keeps it clear of what is beneath.
       ctx.strokeStyle = panel;
       ctx.lineWidth = picked ? 6 : 4.5;
       ctx.stroke();
+      if (raised) ctx.setLineDash([9, 5]);
       ctx.strokeStyle = picked ? accent : bad;
       ctx.lineWidth = picked ? 3 : 2;
       ctx.stroke();
-      // Its number, once it is big enough on screen to carry one.
+      ctx.setLineDash([]);
+      // Its number and altitude band, once it is big enough on screen to
+      // carry them.
       if (pxPerKm > 20 || picked) {
         let x = 0, y = 0;
         for (const [lon, lat] of ring) {
@@ -472,7 +495,8 @@
         }
         x /= ring.length;
         y /= ring.length;
-        const label = `#${f.id}`;
+        const band = fenceBand(f);
+        const label = band ? `#${f.id} · ${band}` : `#${f.id}`;
         ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
         ctx.lineWidth = 3;
         ctx.strokeStyle = panel;
@@ -481,6 +505,29 @@
         ctx.fillText(label, x - ctx.measureText(label).width / 2, y + 4);
       }
     }
+  }
+
+  // A fence's altitude band, in metres above ground level: an absent floor
+  // is the surface, an absent ceiling unlimited.
+  function floorOf(f) {
+    const v = Number(f.floor_m);
+    return f.floor_m != null && Number.isFinite(v) ? v : 0;
+  }
+
+  function ceilingOf(f) {
+    const v = Number(f.ceiling_m);
+    return f.ceiling_m != null && Number.isFinite(v) ? v : null;
+  }
+
+  // The band the way an aeronautical chart writes it: "SFC–120 m",
+  // "60 m–UNL". Empty for a fence from the surface up without limit, unless
+  // `always`.
+  function fenceBand(f, always = false) {
+    const floor = floorOf(f);
+    const ceiling = ceilingOf(f);
+    if (!always && floor <= 0 && ceiling === null) return '';
+    const metres = (m) => `${Math.round(m).toLocaleString()} m`;
+    return `${floor > 0 ? metres(floor) : 'SFC'}–${ceiling === null ? 'UNL' : metres(ceiling)}`;
   }
 
   function insideRing(ring, x, y) {
@@ -583,11 +630,281 @@
   }
   requestAnimationFrame(animate);
 
-  // Sightings fade over SIGHTING_MS; drones are arrows along their heading,
-  // drawn where they are predicted to be now; POIs are small diamonds
-  // underneath, so a city full of
-  // addresses does not hide the drones. Colours come from the theme so both
-  // modes read.
+  // ------------------------------------------------------------- symbols
+
+  // NATO joint military symbology (APP-6 / MIL-STD-2525C letter SIDCs),
+  // the same symbols the CoT emitter sends to TAK (a-f-A-M-H-Q and so on).
+  // milsymbol's isValid() accepts each of them.
+  const SIDC = {
+    drone: 'SFAPMFQ--------',    // friend, air, military drone
+    intruder: 'SUAPMFQ--------', // unknown, air, military drone
+    person: 'SUGPUCI--------',   // unknown, ground unit, infantry
+    vehicle: 'SUGPEV---------',  // unknown, ground equipment, ground vehicle
+    station: 'SFGPIBA---H----',  // friend, ground installation, airport / air base
+  };
+  const SIGHTED = { person: SIDC.person, vehicle: SIDC.vehicle, intruder: SIDC.intruder };
+  // A pale halo round every symbol and line, so the black frames read on a
+  // dark theme and over any basemap.
+  const HALO = 'rgba(255,255,255,0.85)';
+
+  // Each symbol is built once per SIDC, size and pixel ratio, then stamped
+  // as an image: milsymbol takes about a millisecond a symbol, too slow to
+  // spend on every drone every frame.
+  const symbolCache = new Map();
+  function symbol(sidc, size) {
+    if (!window.ms) return null;
+    const ratio = window.devicePixelRatio || 1;
+    const key = `${sidc}|${size}|${ratio}`;
+    if (!symbolCache.has(key)) {
+      let made = null;
+      try {
+        const s = new window.ms.Symbol(sidc, { size, outlineWidth: 2, outlineColor: HALO });
+        if (s.isValid()) {
+          const image = s.asCanvas(ratio);
+          const anchor = s.getAnchor();
+          const box = s.getSize();
+          made = { image, ax: anchor.x, ay: anchor.y, w: box.width, h: box.height };
+        }
+      } catch { /* not a symbol milsymbol knows: the caller falls back */ }
+      symbolCache.set(key, made);
+    }
+    return symbolCache.get(key);
+  }
+
+  // Symbol size in CSS pixels: small over a whole city, larger at street
+  // scale. Three steps keep the cache to a handful of images.
+  function symbolSize(pxPerKm) {
+    return pxPerKm > 400 ? 26 : pxPerKm > 60 ? 21 : 17;
+  }
+
+  // Stamp a symbol centred on (x, y). With a heading, APP-6's
+  // direction-of-movement line goes first, from the centre of the frame
+  // out along it, so the frame covers its root. Returns how far right of x
+  // the symbol reaches, for a label, or null with no symbol to draw.
+  function stamp(g, sidc, size, x, y, hdg = null, alpha = 1) {
+    const s = symbol(sidc, size);
+    if (!s) return null;
+    g.globalAlpha = alpha;
+    if (hdg !== null) {
+      const a = (hdg * Math.PI) / 180;
+      const len = size * 1.7;
+      const tip = [x + Math.sin(a) * len, y - Math.cos(a) * len];
+      const barb = (turn) => [tip[0] + Math.sin(a + turn) * 6, tip[1] - Math.cos(a + turn) * 6];
+      g.lineCap = 'round';
+      g.lineJoin = 'round';
+      for (const [colour, width] of [[HALO, 4.5], ['#000', 1.75]]) {
+        g.strokeStyle = colour;
+        g.lineWidth = width;
+        g.beginPath();
+        g.moveTo(x, y);
+        g.lineTo(...tip);
+        g.moveTo(...barb(2.7));
+        g.lineTo(...tip);
+        g.lineTo(...barb(-2.7));
+        g.stroke();
+      }
+      g.lineCap = 'butt';
+      g.lineJoin = 'miter';
+    }
+    g.drawImage(s.image, x - s.ax, y - s.ay, s.w, s.h);
+    g.globalAlpha = 1;
+    return s.w - s.ax;
+  }
+
+  // The map keys: each `canvas[data-sidc]` gets its symbol as the map draws
+  // it, with a direction-of-movement line when it has a `data-heading`.
+  function drawKeys() {
+    const ratio = window.devicePixelRatio || 1;
+    for (const key of document.querySelectorAll('canvas[data-sidc]')) {
+      const w = key.clientWidth || 28;
+      const h = key.clientHeight || 28;
+      key.width = Math.round(w * ratio);
+      key.height = Math.round(h * ratio);
+      const g = key.getContext('2d');
+      g.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const heading = key.dataset.heading ? Number(key.dataset.heading) : null;
+      const [x, y] = heading === null ? [w / 2, h / 2] : [w * 0.4, h * 0.6];
+      if (stamp(g, key.dataset.sidc, Number(key.dataset.size) || 14, x, y, heading) === null) {
+        key.hidden = true;
+      }
+    }
+  }
+
+  // Text with a halo in the panel colour, so it reads over anything.
+  function haloText(text, x, y, panel, ink, align = 'left') {
+    const left = align === 'center' ? x - ctx.measureText(text).width / 2 : x;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = panel;
+    ctx.strokeText(text, left, y);
+    ctx.fillStyle = ink;
+    ctx.fillText(text, left, y);
+  }
+
+  // An arrow pointing along the heading, for a drone when milsymbol is
+  // missing; screen y grows downward.
+  function arrow(x, y, hdg, fill, panel) {
+    const a = (hdg * Math.PI) / 180;
+    const tip = [x + Math.sin(a) * 12, y - Math.cos(a) * 12];
+    const left = [x + Math.sin(a + 2.5) * 8, y - Math.cos(a + 2.5) * 8];
+    const right = [x + Math.sin(a - 2.5) * 8, y - Math.cos(a - 2.5) * 8];
+    ctx.beginPath();
+    ctx.moveTo(...tip);
+    ctx.lineTo(...left);
+    ctx.lineTo(x, y);
+    ctx.lineTo(...right);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = panel;
+    ctx.lineWidth = 1.5;
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // ------------------------------------------------ stations and regions
+
+  function picked(kind, id) {
+    return markSelected !== null && markSelected.kind === kind && markSelected.id === id;
+  }
+
+  // Degrees from the model's `_e7` integers, or null when they are missing.
+  function position(item) {
+    const lat = Number(item.lat_e7) * 1e-7;
+    const lon = Number(item.lon_e7) * 1e-7;
+    return Number.isFinite(lat) && Number.isFinite(lon) && item.lat_e7 != null ? [lon, lat] : null;
+  }
+
+  // Launch and recovery stations: friendly ground installations (air base),
+  // named once the map is zoomed in far enough to have room.
+  function drawStations(style) {
+    if (stations.length === 0) return;
+    const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    const ink = token('--ink', '#000');
+    const panel = token('--panel', '#fff');
+    const accent = token('--accent', '#2b6cb0');
+    const pxPerKm = camera.scale / 40_075;
+    const size = symbolSize(pxPerKm);
+    ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+    for (const s of stations) {
+      const at = position(s);
+      if (!at) continue;
+      const [x, y] = project(...at);
+      const mark = picked('station', s.id);
+      if (mark) {
+        ctx.beginPath();
+        ctx.arc(x, y, size * 1.1, 0, Math.PI * 2);
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      let right = stamp(ctx, SIDC.station, size, x, y);
+      if (right === null) {
+        ctx.fillStyle = panel;
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(x - 6, y - 6, 12, 12);
+        ctx.strokeRect(x - 6, y - 6, 12, 12);
+        right = 6;
+      }
+      if (pxPerKm > 20 || mark) {
+        const name = s.name || `Station ${s.id}`;
+        const n = Number(s.drones);
+        const label = Number.isFinite(n) ? `${name} · ${n} drone${n === 1 ? '' : 's'}` : name;
+        haloText(label, x + right + 4, y + 4, panel, ink);
+      }
+    }
+  }
+
+  // Regions of interest as APP-6 named areas of interest: a dashed outline
+  // labelled "NAI" and the region's name. One with drones on their way to
+  // survey it is heavier, in the accent colour, and says how many; one a
+  // crash put there is in the alarm colour.
+  function drawRois(style) {
+    if (rois.length === 0) return;
+    const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    const ink = token('--ink', '#000');
+    const panel = token('--panel', '#fff');
+    const accent = token('--accent', '#2b6cb0');
+    const bad = token('--bad', '#a4232b');
+    const pxPerKm = camera.scale / 40_075;
+    for (const r of rois) {
+      const at = position(r);
+      const radius = Number(r.radius_m);
+      if (!at || !(radius > 0)) continue;
+      const mark = picked('roi', r.id);
+      const tasked = Array.isArray(r.assigned) ? r.assigned.length : 0;
+      const colour = mark || tasked ? accent : r.source === 'crash' ? bad : ink;
+      trace(circleRing(at[0], at[1], radius));
+      if (mark || tasked) {
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.1;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.strokeStyle = panel;
+      ctx.lineWidth = 4.5;
+      ctx.stroke();
+      ctx.setLineDash([8, 5]);
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = mark ? 3 : tasked ? 2.5 : 1.75;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (pxPerKm < 8 && !mark) continue;
+      // The label sits inside the top of the area, or above it when the
+      // area is too small on screen to hold it.
+      const [cx, cy] = project(...at);
+      const top = project(at[0], at[1] + radius / 111_320)[1];
+      const roomy = cy - top > 30;
+      ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+      const lines = [`NAI ${r.name || `#${r.id}`}`];
+      if (tasked) lines.push(`${tasked} drone${tasked === 1 ? '' : 's'} tasked to survey`);
+      let y = roomy ? top + 15 : top - 6 - 13 * (lines.length - 1);
+      for (const line of lines) {
+        haloText(line, cx, y, panel, colour === ink ? ink : colour, 'center');
+        ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+        y += 13;
+      }
+    }
+  }
+
+  // The station nearest a point, within a symbol's reach on screen.
+  function stationAt(lon, lat) {
+    if (!camera) return null;
+    const [x, y] = project(lon, lat);
+    let best = null;
+    let bestPx = 16;
+    for (const s of stations) {
+      const at = position(s);
+      if (!at) continue;
+      const [sx, sy] = project(...at);
+      const px = Math.hypot(sx - x, sy - y);
+      if (px < bestPx) {
+        best = s;
+        bestPx = px;
+      }
+    }
+    return best;
+  }
+
+  // The smallest region of interest containing a point.
+  function roiAt(lon, lat) {
+    let best = null;
+    for (const r of rois) {
+      const at = position(r);
+      if (!at) continue;
+      const east = (lon - at[0]) * 111_320 * Math.cos((at[1] * Math.PI) / 180);
+      const north = (lat - at[1]) * 111_320;
+      if (Math.hypot(east, north) <= r.radius_m && (!best || r.radius_m < best.radius_m)) best = r;
+    }
+    return best;
+  }
+
+  // People and vehicles (the truth) are faint dots; delivery locations go
+  // next; camera sightings are unknown ground (person, vehicle) or air
+  // (intruder) symbols fading over SIGHTING_MS; POIs are small diamonds, so
+  // a city full of addresses does not hide the drones; and drones go on
+  // top, friendly air, intruders unknown air, drawn where they are
+  // predicted to be now with a direction-of-movement line while they move.
+  // Colours come from the theme so both modes read.
   function drawEntities(style, ink) {
     const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
     const accent = token('--accent', '#2b6cb0');
@@ -596,6 +913,9 @@
     const panel = token('--panel', '#fff');
     const ok = token('--ok', '#1f7a4d');
     const now = performance.now();
+    // Camera scale is pixels per Earth circumference (world units 0..1).
+    const pxPerKm = camera.scale / 40_075;
+    const size = symbolSize(pxPerKm);
 
     if (layers.people) {
       for (const e of people) {
@@ -648,8 +968,10 @@
 
     for (const s of layers.people ? sightings : []) {
       const age = (now - s.at) / SIGHTING_MS;
-      if (age >= 1) continue;
+      const sidc = SIGHTED[s.kind];
+      if (age >= 1 || !sidc) continue;
       const [x, y] = project(s.lon, s.lat);
+      if (stamp(ctx, sidc, size - 4, x, y, null, 0.9 * (1 - age)) !== null) continue;
       ctx.globalAlpha = 0.85 * (1 - age);
       ctx.fillStyle = s.kind === 'intruder' ? bad : s.kind === 'vehicle' ? accent : warn;
       ctx.beginPath();
@@ -661,8 +983,6 @@
     ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
     ctx.lineWidth = 1.5;
     // POI names only once zoomed in to street scale; drone callsigns always.
-    // Camera scale is pixels per Earth circumference (world units 0..1).
-    const pxPerKm = camera.scale / 40_075;
     const namePois = pxPerKm > 400;
     // POIs first, so drones draw on top of them.
     const shown = entities.filter((e) => (e.kind === 'poi' ? layers.deliveries : layers.drones));
@@ -670,6 +990,8 @@
     for (const e of ordered) {
       const at = e.kind === 'poi' ? null : predicted(e, now);
       const [x, y] = at ? project(at.lon, at.lat) : project(e.lon, e.lat);
+      const moving = e.kind !== 'poi' && e.speed_ms > 0.3;
+      let right = 9;
       if (e.kind === 'poi') {
         const r = namePois ? 5 : 3.5;
         ctx.globalAlpha = namePois ? 1 : 0.7;
@@ -687,32 +1009,18 @@
         ctx.globalAlpha = 1;
         ctx.lineWidth = 1.5;
       } else {
-        // An arrow pointing along the heading; screen y grows downward.
-        const a = (at.hdg * Math.PI) / 180;
-        const tip = [x + Math.sin(a) * 12, y - Math.cos(a) * 12];
-        const left = [x + Math.sin(a + 2.5) * 8, y - Math.cos(a + 2.5) * 8];
-        const right = [x + Math.sin(a - 2.5) * 8, y - Math.cos(a - 2.5) * 8];
-        ctx.beginPath();
-        ctx.moveTo(...tip);
-        ctx.lineTo(...left);
-        ctx.lineTo(x, y);
-        ctx.lineTo(...right);
-        ctx.closePath();
-        ctx.fillStyle = e.kind === 'intruder' ? bad : accent;
-        ctx.strokeStyle = panel;
-        ctx.fill();
-        ctx.stroke();
+        const sidc = e.kind === 'intruder' ? SIDC.intruder : SIDC.drone;
+        const reach = stamp(ctx, sidc, size, x, y, moving ? at.hdg : null);
+        if (reach === null) arrow(x, y, at.hdg, e.kind === 'intruder' ? bad : accent, panel);
+        else right = reach + 4;
       }
       // Drones parked together on a roof would print their names on top of
-      // each other: name the ones moving, and the rest once zoomed in.
-      const moving = e.kind !== 'poi' && e.speed_ms > 0.3;
+      // each other: name the ones moving, and the rest once zoomed in. A
+      // drone's label says what it is doing, or failing that its mode.
       if (e.callsign && (moving || namePois || (e.kind === 'intruder'))) {
-        const label = e.kind === 'drone' && e.mode ? `${e.callsign} · ${e.mode}` : e.callsign;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = panel;
-        ctx.strokeText(label, x + 9, y + 4);
-        ctx.fillStyle = ink;
-        ctx.fillText(label, x + 9, y + 4);
+        const doing = e.activity || e.mode;
+        const label = e.kind === 'drone' && doing ? `${e.callsign} · ${doing}` : e.callsign;
+        haloText(label, x + right, y + 4, panel, ink);
         ctx.lineWidth = 1.5;
       }
     }
@@ -765,8 +1073,10 @@
     }
   }
 
-  // People, vehicles and open orders change less often and cost more to
-  // send, so they come once a second, and only while their layer is on.
+  // People, vehicles, open orders, stations and regions of interest change
+  // less often and cost more to send, so they come once a second, and only
+  // while their layer is on. Each overlay key may be missing (a model that
+  // has none, or an older one): that layer is then just empty.
   async function refreshSlow() {
     try {
       if (layers.people) {
@@ -775,14 +1085,19 @@
       } else {
         people = [];
       }
-      if (layers.deliveries) {
+      if (layers.deliveries || layers.stations || layers.rois) {
         const response = await fetch('/api/v1/state/overlays');
         if (response.ok) {
-          const body = await response.json();
-          orders = (body && body.orders) || [];
+          const body = (await response.json()) || {};
+          const list = (key, on) => (on && Array.isArray(body[key]) ? body[key] : []);
+          orders = list('orders', layers.deliveries);
+          stations = list('stations', layers.stations);
+          rois = list('rois', layers.rois);
         }
       } else {
         orders = [];
+        stations = [];
+        rois = [];
       }
       if (camera) draw();
     } catch {
@@ -1044,27 +1359,46 @@
       const f = fences.find((x) => x.id === id);
       if (!f) return;
       fenceSelected = id;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const [lon, lat] of fenceRing(f)) {
-        const [x, y] = toWorld(lon, lat);
-        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      }
-      const { w, h } = cssSize();
-      const span = Math.max(maxX - minX, maxY - minY, 1e-9);
-      camera = {
-        cx: (minX + maxX) / 2,
-        cy: (minY + maxY) / 2,
-        scale: Math.min(Math.min(w, h) / span / 3, TILE * 2 ** 24),
-      };
+      showRing(fenceRing(f));
+    },
+    fenceBand,
+    refreshOverlays: refreshSlow,
+    stationAt,
+    roiAt,
+    // Pick out a station or region of interest ({ kind: 'station' | 'roi',
+    // id }), or nothing (null).
+    selectMark(mark) {
+      markSelected = mark;
       draw();
     },
+    // Centre on a point and zoom to show `radiusM` round it.
+    showPlace(lon, lat, radiusM) {
+      showRing(circleRing(lon, lat, Math.max(radiusM, 50), 16));
+    },
   };
+
+  function showRing(ring) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [lon, lat] of ring) {
+      const [x, y] = toWorld(lon, lat);
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const { w, h } = cssSize();
+    const span = Math.max(maxX - minX, maxY - minY, 1e-9);
+    camera = {
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
+      scale: Math.min(Math.min(w, h) / span / 3, TILE * 2 ** 24),
+    };
+    draw();
+  }
 
   window.addEventListener('keydown', (event) => {
     if (tool && tool.key && tool.key(event)) draw();
   });
 
+  drawKeys();
   refresh();
   refreshEntities();
   refreshFences();
