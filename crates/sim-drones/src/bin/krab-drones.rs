@@ -62,6 +62,15 @@ fn main() -> anyhow::Result<()> {
         "running '{}' for {} steps × {} on krABMaga",
         blob.manifest.id, cli.steps, cli.reps
     );
+    println!(
+        "brain:         {} nodes ({})",
+        world.brain().size(),
+        if blob.fields.get("behaviour").is_some() {
+            "the pack's world/behaviour.json"
+        } else {
+            "the default behaviour tree"
+        }
+    );
     if cli.tui {
         #[cfg(not(feature = "parallel"))]
         {
@@ -99,6 +108,16 @@ fn main() -> anyhow::Result<()> {
             dispatch.placed,
             dispatch.delivered,
             dispatch.queued()
+        );
+    }
+    if !world.stations().is_empty() {
+        println!("stations:      {}", world.stations().list.len());
+    }
+    if !world.regions().is_empty() {
+        let surveys: u32 = world.regions().list.iter().map(|r| r.surveys).sum();
+        println!(
+            "regions:       {} of interest, {surveys} surveys",
+            world.regions().list.len()
         );
     }
     println!(

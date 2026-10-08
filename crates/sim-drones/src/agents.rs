@@ -76,6 +76,7 @@ impl Body {
             wander: None,
             courier: None,
             survey: None,
+            activity: String::new(),
         }
     }
 
@@ -97,6 +98,8 @@ pub struct DroneAgent {
     pub courier: Option<Courier>,
     /// The survey of a region of interest it is flying, if any.
     pub survey: Option<Survey>,
+    /// What it is doing, as of its last step; see [`Saved::activity`].
+    pub activity: &'static str,
     /// Crashed: off the board, and off the schedule after this step.
     pub wrecked: bool,
 }
@@ -159,6 +162,7 @@ impl Agent for DroneAgent {
             return;
         }
 
+        self.activity = self.activity_now(world);
         self.body.refresh(world);
         world.place(self.record());
     }
@@ -174,6 +178,7 @@ impl DroneAgent {
         saved.drone = Some(self.drone.clone());
         saved.courier = self.courier.clone();
         saved.survey = self.survey.clone();
+        saved.activity = self.activity.to_owned();
         self.body.record(saved)
     }
 
@@ -559,6 +564,39 @@ impl DroneAgent {
         true
     }
 
+    /// What it is doing, in a word.
+    fn activity_now(&self, world: &World) -> &'static str {
+        let grounded = self.drone.grounded(&self.body.pose, &world.terrain);
+        let homing = world.ops.get(&self.body.id).is_some_and(|o| o.homing);
+        let order = self
+            .courier
+            .as_ref()
+            .and_then(|c| c.order.as_ref().map(|_| c.delivered));
+        if self.survey.as_ref().is_some_and(|s| !s.done) {
+            "surveying"
+        } else if order == Some(false) {
+            "delivering"
+        } else if grounded {
+            let charging = self.drone.battery_ppm < 1_000_000
+                && (self.drone.at_station
+                    || (self.drone.on_home_pad(&self.body.pose, &world.terrain)
+                        && world.settings.tuning.charge_ppm_tick > 0));
+            if charging {
+                "charging"
+            } else {
+                "idle"
+            }
+        } else if order.is_some()
+            || self.survey.is_some()
+            || homing
+            || matches!(self.drone.mode, Mode::Rtl | Mode::Land)
+        {
+            "returning"
+        } else {
+            "flying"
+        }
+    }
+
     /// On a station's pad (not its own home pad).
     fn at_station(&self, world: &World) -> bool {
         !world.stations.is_empty()
@@ -913,6 +951,7 @@ impl Member {
                 drone: saved.drone.ok_or_else(|| missing("drone"))?,
                 courier: saved.courier,
                 survey: saved.survey,
+                activity: "",
                 wrecked: false,
             }),
             Kind::Intruder => Member::Intruder(IntruderAgent {

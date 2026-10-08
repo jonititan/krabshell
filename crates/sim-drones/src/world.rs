@@ -218,6 +218,11 @@ pub struct Saved {
     /// A survey of a region of interest it is flying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub survey: Option<Survey>,
+    /// What a drone is doing, for people: `delivering`, `surveying`,
+    /// `returning`, `charging`, `flying`, `idle`. Derived from the rest each
+    /// step, so a restore ignores it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub activity: String,
 }
 
 /// One agent as it was at the end of the last step.
@@ -782,6 +787,7 @@ impl World {
                     drone,
                     courier,
                     survey: None,
+                    activity: "",
                     wrecked: false,
                 })
             }
@@ -1250,6 +1256,7 @@ impl World {
                 ..c
             }),
             survey: None,
+            activity: "",
             wrecked: false,
         };
         if let Some(depot) = spare_for {
