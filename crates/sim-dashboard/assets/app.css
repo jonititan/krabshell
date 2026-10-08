@@ -468,6 +468,7 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 13px;
 rect.k-vehicle { fill: var(--accent); }
 .legend[hidden] { display: none; }
 #fence-table td.waiting { color: var(--warn); }
+table.grid td.raised { color: var(--accent); }
 #previous-table td:last-child { text-align: right; padding-right: 0; }
 #previous-table input { width: 6ch; }
 #fence-table form.extend { display: flex; align-items: center; gap: 6px; white-space: nowrap; }

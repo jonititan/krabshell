@@ -134,7 +134,10 @@ battery left.
 
 ### Geofences
 
-Geofences are keep-out zones, at every altitude: circles and polygons. A
+Geofences are keep-out zones: circles and polygons, from the surface up
+without limit unless they have an altitude band (`floor_m`, `ceiling_m`,
+metres above ground level; drones may fly beneath a fence whose floor is
+high enough). A
 pack lists the ones it starts with in `world/geofences.json`, each with an
 optional `name` and `minutes` (until it closes by itself):
 
@@ -154,8 +157,10 @@ A fence over a drone's pad, or outside the world, stops the pack loading. A
 reset opens the pack's fences again. While the run goes on, the dashboard's
 Geofences tab, the API and intents open and close fences: `Custom` 110 with
 `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
-...]}` and optionally `"name"`, `"minutes"` (-1: until closed) and
-`"after_minutes"` (it waits to open until then); `Custom` 111 with `{"id"}`
+...]}` and optionally `"name"`, `"minutes"` (-1: until closed),
+`"after_minutes"` (it waits to open until then), `"floor_m"` and
+`"ceiling_m"` (numbers of 0 or more with the ceiling above the floor; null
+or absent: the surface, unlimited); `Custom` 111 with `{"id"}`
 closes one, or cancels one still waiting; `Custom` 113 with `{"id",
 "minutes"}` changes how long an open one stays open (from now; -1: until
 closed); `Custom` 114 with `{"id", "name"}` renames one.
@@ -203,15 +208,18 @@ cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 
 ```
 
 The dashboard's **Geofences** tab manages them. **Current fences** lists
-every fence open or waiting to open (shape and area, who opened it, when it
-opened or will, when it closes, breaches), each with Close (or Cancel), and
+every fence open or waiting to open (shape and area, altitude band, who
+opened it, when it opened or will, when it closes, breaches), each with
+Close (or Cancel), and
 Extend for one due to close: a number of minutes from now, or -1 to keep it
 open until closed. The ✎ beside a fence's name renames it, current or
 previous. Draw
 a circle (centre, then edge) or a polygon (corners, then click the first
 again or press Enter) on the map to open one, with a name and optionally a
-number of minutes. **Previous fences** lists those that have closed: reopen
-any as it was, now or after some minutes (0 for now), for some minutes or
+number of minutes and a floor and ceiling in metres above ground level
+(blank: the surface, unlimited). **Previous fences** lists those that have
+closed: reopen any as it was (altitude band included), now or after some
+minutes (0 for now), for some minutes or
 until closed (-1). It opens with a new number. **Recent activity** shows
 breaches and the operator's reroutes. The State page's map draws the fences
 too. Both maps have layers to show or hide: drones; delivery locations
@@ -395,7 +403,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
 | GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
-| GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed) and `"after_minutes"`). |
+| GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed), `"after_minutes"`, and an altitude band in metres above ground level, `"floor_m"` (null: the surface) and `"ceiling_m"` (null: unlimited), with the ceiling above the floor). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
 | PATCH | `/geofences/{id}` | `{"name": "..."}`: rename a geofence, open, waiting or previously closed (empty clears the name). |
 | POST | `/geofences/{id}/extend` | `{"minutes": m}`: keep an open geofence open `m` minutes from now, or with -1 until it is closed. |

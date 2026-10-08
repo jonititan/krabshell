@@ -8,6 +8,9 @@
 // then edge) or a polygon (corners, closed by clicking the first again, by
 // Enter, or by Open fence). Fences open with POST /api/v1/geofences and close
 // with DELETE /api/v1/geofences/{id}; both take effect on the next tick.
+// A fence may have an altitude band (`floor_m`, `ceiling_m`, metres above
+// ground level): without a floor it starts at the surface, without a
+// ceiling it has no top.
 
 (function () {
   'use strict';
@@ -22,6 +25,8 @@
   const radiusField = $('draft-radius-field');
   const radiusInput = $('draft-radius');
   const minutesInput = $('draft-minutes');
+  const floorInput = $('draft-floor');
+  const ceilingInput = $('draft-ceiling');
   const summary = $('draft-summary');
   const draftError = $('draft-error');
   const undoButton = $('draft-undo');
@@ -276,6 +281,27 @@
     draftError.hidden = false;
   }
 
+  // The altitude band typed into the draft, as POST /api/v1/geofences
+  // takes it, or why it will not do. A blank floor is the surface, a blank
+  // ceiling unlimited.
+  function draftBand() {
+    const band = {};
+    const fields = [['floor_m', floorInput, 'The floor'], ['ceiling_m', ceilingInput, 'The ceiling']];
+    for (const [key, input, what] of fields) {
+      const text = input.value.trim();
+      if (!text) continue;
+      const m = Number(text);
+      if (!Number.isFinite(m) || m < 0) {
+        return { error: `${what} must be 0 or more metres above ground level, or blank.` };
+      }
+      band[key] = m;
+    }
+    if (band.ceiling_m !== undefined && band.ceiling_m <= (band.floor_m || 0)) {
+      return { error: 'The ceiling must be above the floor (blank floor: the surface).' };
+    }
+    return { band };
+  }
+
   async function submit() {
     if (!ready()) {
       showError(draft && draft.kind === 'polygon' ? 'A polygon needs at least 3 corners.' : 'Place the edge, or type a radius.');
@@ -302,6 +328,12 @@
       }
       body.minutes = minutes;
     }
+    const { band, error } = draftBand();
+    if (error) {
+      showError(error);
+      return;
+    }
+    Object.assign(body, band);
     $('draft-open').disabled = true;
     try {
       const response = await fetch('/api/v1/geofences', {
@@ -319,9 +351,15 @@
         pending.set(result.id, { what: 'The fence', at: Date.now() });
         say('Fence queued: it opens when the simulation next steps.', 'warn');
       } else {
-        say('Fence opened. The drones the simulation flies are being rerouted round it.', 'ok');
+        say(
+          'Fence opened. The drones the simulation flies are being rerouted round it' +
+            (band.floor_m > 0 ? ', or may pass beneath it.' : '.'),
+          'ok',
+        );
       }
       minutesInput.value = '';
+      floorInput.value = '';
+      ceilingInput.value = '';
       $('draft-name').value = '';
       setMode(mode);
       map.refreshFences();
@@ -373,6 +411,17 @@
     }
     const ring = (f.points || []).map(([lat, lon]) => [lon * 1e-7, lat * 1e-7]);
     return `Polygon · ${ring.length} corners · ${fmtArea(areaKm2(ring))}`;
+  }
+
+  // The fence's altitude band, SFC–UNL style; a raised floor is picked out,
+  // since drones may pass beneath it.
+  function bandCell(f) {
+    const td = cell(map.fenceBand(f, true), 'mono small');
+    if (Number(f.floor_m) > 0) {
+      td.classList.add('raised');
+      td.title = 'Drones may pass beneath this fence';
+    }
+    return td;
   }
 
   function cell(text, cls) {
@@ -621,6 +670,7 @@
         tr.append(
           nameCell(f),
           cell(shapeText(f)),
+          bandCell(f),
           cell(SOURCES[f.source] || f.source),
           f.waiting
             ? cell(`waiting, opens ${inTime(f.opened_tick)}`, 'waiting')
@@ -657,7 +707,7 @@
             }
             extending = f.id;
             const row = tableBody.querySelector(`tr[data-id="${f.id}"]`);
-            row?.cells[4].replaceWith(closesCell(f));
+            row?.cells[5].replaceWith(closesCell(f));
           });
           action.append(more, ' ');
         }
@@ -683,12 +733,15 @@
   // What has been typed into each previous fence's row, kept across polls.
   const typed = new Map(); // id -> { after, duration }
 
-  // The fence as POST /api/v1/geofences takes it.
+  // The fence as POST /api/v1/geofences takes it: its shape and its
+  // altitude band, if it has one.
   function shapeBody(f) {
-    if (f.shape === 'circle') {
-      return { circle: { lat: f.lat_e7 * 1e-7, lon: f.lon_e7 * 1e-7, radius_m: f.radius_m } };
-    }
-    return { polygon: (f.points || []).map(([lat, lon]) => [lon * 1e-7, lat * 1e-7]) };
+    const body = f.shape === 'circle'
+      ? { circle: { lat: f.lat_e7 * 1e-7, lon: f.lon_e7 * 1e-7, radius_m: f.radius_m } }
+      : { polygon: (f.points || []).map(([lat, lon]) => [lon * 1e-7, lat * 1e-7]) };
+    if (f.floor_m != null) body.floor_m = f.floor_m;
+    if (f.ceiling_m != null) body.ceiling_m = f.ceiling_m;
+    return body;
   }
 
   function numberInput(value, label, onInput) {
@@ -764,6 +817,7 @@
         tr.append(
           nameCell(f),
           cell(shapeText(f)),
+          bandCell(f),
           cell(SOURCES[f.source] || f.source),
           cell(`${simTime(f.closed_tick)} · ${CLOSED[f.closed] || f.closed}`, 'small'),
         );

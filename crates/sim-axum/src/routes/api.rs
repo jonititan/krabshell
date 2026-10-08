@@ -812,15 +812,45 @@ fn cell_near(view: &Published, lon: f64, lat: f64) -> ApiResult<GeoCell> {
     Ok(cell)
 }
 
+/// A fence's altitude band, `floor_m` and `ceiling_m` in metres above
+/// ground level: each a number of 0 or more, or null or absent (the surface;
+/// unlimited), with the ceiling above the floor. The model checks again;
+/// this is for a clear answer before the intent takes a queue slot.
+fn check_band(body: &serde_json::Value) -> ApiResult<()> {
+    let metres = |key: &str| -> ApiResult<Option<f64>> {
+        match body.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => match v.as_f64() {
+                Some(m) if m.is_finite() && m >= 0.0 => Ok(Some(m)),
+                _ => Err(ApiError::bad_request(format!(
+                    "{key} is metres above ground level: a number of 0 or more, or null"
+                ))),
+            },
+        }
+    };
+    let floor = metres("floor_m")?;
+    if let Some(ceiling) = metres("ceiling_m")? {
+        if ceiling <= floor.unwrap_or(0.0) {
+            return Err(ApiError::bad_request(
+                "ceiling_m must be above floor_m (or above the surface)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Open a geofence: `{"circle": {"lat", "lon", "radius_m"}}` or
 /// `{"polygon": [[lon, lat], ...]}`, in degrees, with optionally a `"name"`,
-/// `"minutes"` it stays open (-1 or absent: until closed) and
-/// `"after_minutes"` before it opens (0 or absent: on the next tick).
+/// `"minutes"` it stays open (-1 or absent: until closed),
+/// `"after_minutes"` before it opens (0 or absent: on the next tick), and an
+/// altitude band: `"floor_m"` (absent or null: from the surface) and
+/// `"ceiling_m"` (absent or null: unlimited), metres above ground level.
 pub async fn geofences_open(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<IntentAccepted>> {
     let view = state.driver.view();
+    check_band(&body)?;
     let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64);
     let (lon, lat) = if let Some(c) = body.get("circle") {
         match (num(c, "lon"), num(c, "lat")) {

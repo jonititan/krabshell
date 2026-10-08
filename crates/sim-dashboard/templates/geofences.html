@@ -3,7 +3,9 @@
 {% block content %}
 <h1>Geofences</h1>
 <p class="lede">
-  Keep-out zones at every altitude. The scenario starts with its own
+  Keep-out zones, from the surface up or within an altitude band (metres
+  above ground level; drones may fly beneath a fence whose floor is raised,
+  or over one with a ceiling). The scenario starts with its own
   (<span class="mono">world/geofences.json</span>); draw more here, close any
   of them, and ground stations can upload their own as a fence plan. The
   drones the simulation flies are rerouted round each one by MAVLink; a drone
@@ -73,6 +75,12 @@
       <label>Closes after, minutes
         <input id="draft-minutes" type="text" inputmode="decimal" size="8" placeholder="until closed" autocomplete="off">
       </label>
+      <label title="Metres above ground level where the fence starts; blank for the surface">Floor, m AGL
+        <input id="draft-floor" type="text" inputmode="decimal" size="6" placeholder="surface" autocomplete="off">
+      </label>
+      <label title="Metres above ground level where the fence ends; blank for unlimited">Ceiling, m AGL
+        <input id="draft-ceiling" type="text" inputmode="decimal" size="6" placeholder="unlimited" autocomplete="off">
+      </label>
       <p id="draft-summary" class="dim small mono"></p>
     </div>
     <div id="draft-error" class="banner bad" hidden></div>
@@ -138,7 +146,8 @@
     <table class="grid" id="fence-table">
       <thead>
         <tr>
-          <th>Fence</th><th>Shape</th><th>Opened by</th><th>Opened</th>
+          <th>Fence</th><th>Shape</th><th title="Metres above ground level; SFC is the surface, UNL unlimited">Altitude</th>
+          <th>Opened by</th><th>Opened</th>
           <th>Closes</th><th>Breaches</th><th><span class="visually-hidden">Close</span></th>
         </tr>
       </thead>
@@ -151,7 +160,8 @@
 <section class="panel">
   <h2>Previous fences</h2>
   <p class="dim small">
-    Fences that have closed, newest first. Reopen one as it was, now or after
+    Fences that have closed, newest first. Reopen one as it was (shape,
+    name and altitude band), now or after
     a number of minutes, for a number of minutes or (with -1) until it is
     closed. It opens with a new number.
   </p>
@@ -159,7 +169,8 @@
     <table class="grid" id="previous-table">
       <thead>
         <tr>
-          <th>Fence</th><th>Shape</th><th>Opened by</th><th>Closed</th>
+          <th>Fence</th><th>Shape</th><th title="Metres above ground level; SFC is the surface, UNL unlimited">Altitude</th>
+          <th>Opened by</th><th>Closed</th>
           <th>Opens after, min</th><th>Open for, min</th><th><span class="visually-hidden">Reopen</span></th>
         </tr>
       </thead>

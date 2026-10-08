@@ -1203,3 +1203,42 @@ async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
     let (status, _, _) = call(&h, delete("/api/v1/geofences/999")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_geofence_altitude_band_is_checked_before_it_is_sent() {
+    let h = pack_harness("london-patrol");
+    let circle = json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": 150 });
+    for (band, why) in [
+        (json!({ "floor_m": -5 }), "a negative floor"),
+        (json!({ "floor_m": "high" }), "a floor that is not a number"),
+        (json!({ "ceiling_m": 0 }), "a ceiling at the surface"),
+        (
+            json!({ "floor_m": 80, "ceiling_m": 50 }),
+            "a ceiling below the floor",
+        ),
+        (
+            json!({ "floor_m": 60, "ceiling_m": 60 }),
+            "a ceiling at the floor",
+        ),
+    ] {
+        let mut body = band;
+        body["circle"] = circle.clone();
+        let (status, problem, _) = call(&h, post("/api/v1/geofences", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+
+    // A raised floor with no ceiling, and a band with both, are queued for
+    // the model; null is the same as leaving a bound out.
+    for band in [
+        json!({ "floor_m": 60, "ceiling_m": null }),
+        json!({ "floor_m": 0, "ceiling_m": 120.5 }),
+        json!({ "floor_m": null }),
+    ] {
+        let mut body = band.clone();
+        body["circle"] = circle.clone();
+        let (status, accepted, text) = call(&h, post("/api/v1/geofences", body)).await;
+        assert_eq!(status, StatusCode::OK, "{band}: {text}");
+        assert_eq!(accepted["status"], "queued", "{band}");
+    }
+}
