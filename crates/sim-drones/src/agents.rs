@@ -10,6 +10,7 @@ use krabmaga::engine::agent::Agent;
 use krabmaga::engine::state::State;
 use sim_core::{AgentId, GeoCell, Report, ReportKind};
 
+use crate::behaviour::Node;
 use crate::dispatch::{self, AddressBook, Courier, Order};
 use crate::flight::Pose;
 use crate::mission::{self, Drone, Event, Mode};
@@ -116,9 +117,8 @@ pub struct PoiAgent {
     pub body: Body,
 }
 
-/// First on every step: opens and closes the geofences due, places the
-/// delivery orders due, and has the operator reroute its drones round the
-/// fences, all before any drone moves.
+/// First on every step: opens and closes the geofences due and places the
+/// delivery orders due, before any drone moves.
 #[derive(Debug, Clone, Copy)]
 pub struct Dispatcher;
 
@@ -127,7 +127,6 @@ impl Agent for Dispatcher {
         let world = world(state);
         world.update_airspace();
         world.place_orders();
-        world.operate();
     }
 }
 
@@ -138,41 +137,20 @@ impl Agent for DroneAgent {
             return;
         }
         let tick = world.tick;
-        let tuning = world.settings.tuning;
 
         // A spare called up to replace a courier that crashed.
         if let Some(courier) = world.call_ups.remove(&self.body.id) {
             self.courier = Some(courier);
         }
 
-        // Instructions were checked against this same state when they
-        // arrived, so they cannot fail now.
-        for instruction in world.take_mail(self.body.id) {
-            let _ = instruction.apply(&mut self.drone, &self.body.pose, &tuning, &world.terrain);
-        }
-
-        let mut events = Vec::new();
-        self.drone
-            .step(&mut self.body.pose, &tuning, &world.terrain, &mut events);
-        for event in events {
-            match event {
-                Event::Reached(item) => self.reached(world, tick, item),
-                Event::Landed => self.landed(world, tick),
-                Event::Crashed => {
-                    self.crashed(world, tick);
-                    return;
-                }
-                Event::LowBattery => {}
-            }
-        }
-
-        self.courier_duty(world, tick);
-        self.check_fences(world, tick);
-
-        if world.settings.sensor.scans_on(tick)
-            && !self.drone.grounded(&self.body.pose, &world.terrain)
-        {
-            self.scan(world, tick);
+        // What it does this tick is up to its brain.
+        let mut brain = world.brain.take().expect("a world always has a brain");
+        brain.tick(world.settings.tuning.dt, |node| {
+            self.leaf(node, world, tick)
+        });
+        world.brain = Some(brain);
+        if self.wrecked {
+            return;
         }
 
         self.body.refresh(world);
@@ -343,49 +321,134 @@ impl DroneAgent {
         }
     }
 
-    /// A courier that landed gives up or finishes its order; a ready one takes
-    /// the oldest order at its depot.
-    fn courier_duty(&mut self, world: &mut World, tick: u64) {
-        let DroneAgent {
-            body,
-            drone,
-            courier,
-            ..
-        } = self;
-        let Some(courier) = courier.as_mut() else {
+    /// Answer a sense or carry out an act of the behaviour tree: true for
+    /// success, false for failure, `None` for still running.
+    fn leaf(&mut self, node: Node, world: &mut World, tick: u64) -> Option<bool> {
+        let grounded = || self.drone.grounded(&self.body.pose, &world.terrain);
+        Some(match node {
+            Node::Airborne => !grounded(),
+            Node::IsCourier => self.courier.is_some() && !world.book.depots.is_empty(),
+            Node::FlownBySimulation => world.ops.contains_key(&self.body.id),
+            Node::BackFromTrip => {
+                self.courier.as_ref().is_some_and(|c| c.order.is_some())
+                    && self.drone.mode == Mode::Disarmed
+            }
+            Node::ReadyForWork => self.ready_for_work(world, tick),
+            Node::SensorDue => world.settings.sensor.scans_on(tick),
+            Node::AtStation => false,
+            Node::LowBattery => self.drone.failsafe,
+            Node::AvoidGeofences => {
+                world.operate_drone(
+                    self.body.id,
+                    &self.body.callsign,
+                    &self.drone,
+                    &self.body.pose,
+                    self.courier.as_ref(),
+                );
+                true
+            }
+            Node::ObeyCommands => {
+                let tuning = world.settings.tuning;
+                // Instructions were checked against this same state when
+                // they arrived, so they cannot fail now.
+                for instruction in world.take_mail(self.body.id) {
+                    let _ = instruction.apply(
+                        &mut self.drone,
+                        &self.body.pose,
+                        &tuning,
+                        &world.terrain,
+                    );
+                }
+                true
+            }
+            Node::Fly => self.fly(world, tick),
+            Node::FinishTrip => {
+                self.finish_trip(world, tick);
+                true
+            }
+            Node::TakeOrder => self.take_order(world, tick),
+            Node::Survey | Node::DivertToStation | Node::ReturnToBase => false,
+            Node::LogBreaches => {
+                self.check_fences(world, tick);
+                true
+            }
+            Node::Scan => {
+                self.scan(world, tick);
+                true
+            }
+        })
+    }
+
+    /// One tick of the autopilot, and what came of it. False if it crashed.
+    fn fly(&mut self, world: &mut World, tick: u64) -> bool {
+        let tuning = world.settings.tuning;
+        let mut events = Vec::new();
+        self.drone
+            .step(&mut self.body.pose, &tuning, &world.terrain, &mut events);
+        for event in events {
+            match event {
+                Event::Reached(item) => self.reached(world, tick, item),
+                Event::Landed => self.landed(world, tick),
+                Event::Crashed => {
+                    self.crashed(world, tick);
+                    return false;
+                }
+                Event::LowBattery => {}
+            }
+        }
+        true
+    }
+
+    /// Back from a trip without delivering: the order goes back to the front
+    /// of the queue, unless a geofence opened over the address and such
+    /// orders are turned away. Loading starts now either way.
+    fn finish_trip(&mut self, world: &mut World, tick: u64) {
+        let Some(courier) = self.courier.as_mut() else {
             return;
         };
-        if world.book.depots.is_empty() {
+        let Some(mut order) = courier.order.take() else {
             return;
+        };
+        if !courier.delivered {
+            order.dispatched_tick = None;
+            if !world.reject_if_fenced(&order, crate::world::Stage::Returned) {
+                world.dispatch.queues[usize::from(courier.depot)].push_front(order);
+            }
+        }
+        courier.delivered = false;
+        courier.landed_tick = Some(tick);
+    }
+
+    /// On its home pad with nothing to do and charged to launch; a courier
+    /// also loaded, and a drone that is not one flown by the simulation.
+    fn ready_for_work(&self, world: &World, tick: u64) -> bool {
+        let on_pad = matches!(self.drone.mode, Mode::Disarmed | Mode::Idle)
+            && self.drone.on_home_pad(&self.body.pose, &world.terrain)
+            && self.drone.battery_ppm >= world.settings.tuning.launch_ppm;
+        match &self.courier {
+            Some(courier) => {
+                on_pad
+                    && !world.book.depots.is_empty()
+                    && courier.order.is_none()
+                    && courier.landed_tick.is_none_or(|landed| {
+                        tick.saturating_sub(landed) >= world.settings.dispatch.load_ticks
+                    })
+            }
+            None => on_pad && world.ops.contains_key(&self.body.id),
+        }
+    }
+
+    /// Take the oldest order at its depot whose address is not inside a
+    /// geofence, and set off with it. False if there is none.
+    fn take_order(&mut self, world: &mut World, tick: u64) -> bool {
+        let DroneAgent { drone, courier, .. } = self;
+        let Some(courier) = courier.as_mut() else {
+            return false;
+        };
+        if world.book.depots.is_empty() {
+            return false;
         }
         let depot = usize::from(courier.depot);
-        if courier.order.is_some() && drone.mode == Mode::Disarmed {
-            let mut order = courier.order.take().expect("checked");
-            if !courier.delivered {
-                // Back without delivering: first in line again, unless a
-                // geofence opened over the address and such orders are
-                // turned away.
-                order.dispatched_tick = None;
-                if !world.reject_if_fenced(&order, crate::world::Stage::Returned) {
-                    world.dispatch.queues[depot].push_front(order);
-                }
-            }
-            courier.delivered = false;
-            courier.landed_tick = Some(tick);
-        }
-
-        let ds = world.settings.dispatch;
-        let ready = courier.order.is_none()
-            && matches!(drone.mode, Mode::Disarmed | Mode::Idle)
-            && drone.on_home_pad(&body.pose, &world.terrain)
-            && drone.battery_ppm >= world.settings.tuning.launch_ppm
-            && courier
-                .landed_tick
-                .is_none_or(|landed| tick.saturating_sub(landed) >= ds.load_ticks);
-        if !ready {
-            return;
-        }
-        // The oldest order whose address is not inside a geofence.
         let next = world.dispatch.queues[depot].iter().position(|o| {
             world.airspace.is_empty() || {
                 let a = &world.book.addresses[o.address as usize];
@@ -397,8 +460,9 @@ impl DroneAgent {
             }
         });
         let Some(mut order) = next.and_then(|i| world.dispatch.queues[depot].remove(i)) else {
-            return;
+            return false;
         };
+        let ds = world.settings.dispatch;
         let to = &world.book.addresses[order.address as usize];
         drone.upload(dispatch::delivery_mission(
             &drone.home,
@@ -410,6 +474,7 @@ impl DroneAgent {
         order.dispatched_tick = Some(tick);
         courier.order = Some(order);
         courier.delivered = false;
+        true
     }
 
     /// Look at everything committed to the cells around, through the grid.

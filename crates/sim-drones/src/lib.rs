@@ -6,18 +6,19 @@
 //! simulation [`State`](krabmaga::engine::state::State) they step against:
 //!
 //! - [`agents::DroneAgent`]: flown by ground stations through krabshell's
-//!   MAVLink gateway, or by its own courier duty. Missions and commands arrive
-//!   as intents (see [`codes`]) carrying the same fields as `MISSION_ITEM_INT`
-//!   and `COMMAND_LONG`. Its camera scans the grid around it on a fixed
-//!   cadence.
+//!   MAVLink gateway, or by the simulation itself. Missions and commands
+//!   arrive as intents (see [`codes`]) carrying the same fields as
+//!   `MISSION_ITEM_INT` and `COMMAND_LONG`. What it does each tick is decided
+//!   by a behaviour tree ([`behaviour`]), the same one for every drone, read
+//!   from a JSON file: obey its commands, fly, take delivery orders, keep
+//!   clear of geofences the way the [`operator`] would, look around with its
+//!   camera.
 //! - [`agents::IntruderAgent`]: an uncontrolled drone flying a fixed circuit.
 //! - [`agents::GroundAgent`]: a person or vehicle wandering near where it
 //!   started.
 //! - [`agents::PoiAgent`]: a named point of interest that never moves.
 //! - [`agents::Dispatcher`]: first on every step, opens and closes geofences
-//!   (see [`airspace`]), places delivery orders, and lets the [`operator`]
-//!   reroute the drones it flies round the fences, by MAVLink mission upload
-//!   and command.
+//!   (see [`airspace`]) and places delivery orders.
 //!
 //! Occupancy of record is krABMaga's `SparseA5Grid`, double-buffered the
 //! krABMaga way: during a step, agents read the committed side (where
@@ -35,6 +36,7 @@
 
 pub mod agents;
 pub mod airspace;
+pub mod behaviour;
 pub mod dispatch;
 pub mod flight;
 pub mod mission;

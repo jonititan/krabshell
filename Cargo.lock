@@ -1996,6 +1996,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bonsai-bt"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e1674327521eb98cf7ac79d3b3203929119ec1d3a4aa32ba0077bf5e7f447d5"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5610,6 +5619,7 @@ name = "sim-drones"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bonsai-bt",
  "clap 4.6.6",
  "krabmaga",
  "libm",

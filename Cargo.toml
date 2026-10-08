@@ -34,6 +34,9 @@ libm = "0.2.16"
 # drops mission replies that do not echo it.
 mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions", "serde"] }
 
+# Behaviour trees for the drones (sim-drones/behaviour), read from JSON.
+bonsai-bt = { version = "0.14", features = ["serde"] }
+
 anyhow = "1"
 arc-swap = "1.9"
 axum = { version = "0.8", features = ["ws", "multipart", "macros"] }

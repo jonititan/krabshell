@@ -1,0 +1,26 @@
+{
+  "description": "Every drone, every tick: keep clear of geofences if the simulation flies it, obey its commands, fly; a courier back from a trip hands back what it did not deliver; a drone free for work takes the oldest order it can reach; log breaches; look around with the camera when it is due.",
+  "root": { "Sequence": [
+    { "AlwaysSucceed": { "Sequence": [
+      { "Action": "FlownBySimulation" },
+      { "Action": "AvoidGeofences" }
+    ] } },
+    { "Action": "ObeyCommands" },
+    { "Action": "Fly" },
+    { "AlwaysSucceed": { "Sequence": [
+      { "Action": "IsCourier" },
+      { "Action": "BackFromTrip" },
+      { "Action": "FinishTrip" }
+    ] } },
+    { "AlwaysSucceed": { "Sequence": [
+      { "Action": "ReadyForWork" },
+      { "Action": "TakeOrder" }
+    ] } },
+    { "Action": "LogBreaches" },
+    { "AlwaysSucceed": { "Sequence": [
+      { "Action": "SensorDue" },
+      { "Action": "Airborne" },
+      { "Action": "Scan" }
+    ] } }
+  ] }
+}

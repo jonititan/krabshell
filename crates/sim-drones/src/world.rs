@@ -41,6 +41,7 @@ use sim_core::{
 
 use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
 use crate::airspace::{Airspace, Fence, SavedAirspace, Shape};
+use crate::behaviour::Brain;
 use crate::dispatch::{AddressBook, Courier, Dispatch};
 use crate::flight::{self, Point, Pose};
 use crate::mission::{self, Drone, MissionItem, Mode, Tuning};
@@ -449,6 +450,10 @@ pub struct World {
     /// The drones the operator flies, and its notes on each.
     pub(crate) ops: BTreeMap<AgentId, Ops>,
 
+    /// The behaviour tree every drone thinks with. Taken out while a drone
+    /// ticks it, so the drone can reach the rest of the world.
+    pub(crate) brain: Option<Brain>,
+
     /// Grid cells a drone in a given cell could see into.
     caps: HashMap<GeoCell, Vec<A5Cell>>,
     scan_radius_m: f64,
@@ -519,6 +524,7 @@ impl World {
             scheduled: Vec::new(),
             previous: VecDeque::new(),
             ops: BTreeMap::new(),
+            brain: Some(Brain::from_fields(&blob.fields)?),
             caps: HashMap::new(),
             scan_radius_m,
         };
@@ -1829,76 +1835,63 @@ impl World {
         }
     }
 
-    /// The operator looks over every drone it flies and sends what it needs
-    /// to stay clear of the geofences. Its messages are applied by each
-    /// drone at the start of its step, like a ground station's.
-    pub(crate) fn operate(&mut self) {
-        if self.ops.is_empty() {
+    /// Keep a drone the simulation flies clear of the geofences, the way a
+    /// ground station would: what it sends joins the drone's mail, after any
+    /// commands that arrived since the last tick, and is obeyed with them.
+    /// Its own committed state is what it plans from.
+    pub(crate) fn operate_drone(
+        &mut self,
+        id: AgentId,
+        callsign: &str,
+        drone: &Drone,
+        pose: &Pose,
+        courier: Option<&Courier>,
+    ) {
+        let Some(ops) = self.ops.get(&id) else {
+            return;
+        };
+        if self.airspace.is_empty() && ops.is_clean() && ops.checked.is_none() {
             return;
         }
-        let ids: Vec<AgentId> = self.ops.keys().copied().collect();
-        for id in ids {
-            let ops = &self.ops[&id];
-            if self.airspace.is_empty() && ops.is_clean() && ops.checked.is_none() {
-                continue;
-            }
-            let Some(record) = self.record(id).filter(|_| !self.retiring(id)).cloned() else {
-                continue;
-            };
-            let Some(drone) = record.saved.drone.as_ref() else {
-                continue;
-            };
-            let pose = record.saved.pose;
-            let airborne = !drone.grounded(&pose, &self.terrain);
-            let address = record
-                .saved
-                .courier
-                .as_ref()
-                .filter(|c| !c.delivered)
-                .and_then(|c| c.order.as_ref())
-                .map(|o| {
-                    let a = &self.book.addresses[o.address as usize];
-                    Point {
-                        lat_e7: a.lat_e7,
-                        lon_e7: a.lon_e7,
-                        alt_mm: 0,
-                    }
-                });
-            let mut ops = self.ops[&id].clone();
-            let orders = operator::orders(
-                drone,
-                &pose,
-                airborne,
-                address,
-                &mut ops,
-                &self.airspace,
-                &self.settings.tuning,
-                self.settings.max_mission_items,
-            );
-            self.ops.insert(id, ops);
-            let Some(orders) = orders else { continue };
-            self.report(Report {
-                seq: 0,
-                tick: self.tick,
-                kind: ReportKind::Reroute,
-                uid: format!("reroute-{id}-{}", self.tick),
-                observer: Some(id),
-                target: None,
-                target_kind: String::new(),
-                lat_e7: pose.lat_e7,
-                lon_e7: pose.lon_e7,
-                alt_mm: pose.alt_mm,
-                detail: serde_json::json!({
-                    "sysid": drone.sysid,
-                    "callsign": record.saved.callsign,
-                    "reason": orders.reason,
-                    "messages": orders.messages,
-                    "detours": orders.detours,
-                    "airspace_rev": self.airspace.rev(),
-                }),
-            });
-            self.mail.entry(id).or_default().extend(orders.instructions);
-        }
+        let airborne = !drone.grounded(pose, &self.terrain);
+        let address = courier
+            .filter(|c| !c.delivered)
+            .and_then(|c| c.order.as_ref())
+            .map(|o| address_point(&self.book, o.address));
+        let mut ops = ops.clone();
+        let orders = operator::orders(
+            drone,
+            pose,
+            airborne,
+            address,
+            &mut ops,
+            &self.airspace,
+            &self.settings.tuning,
+            self.settings.max_mission_items,
+        );
+        self.ops.insert(id, ops);
+        let Some(orders) = orders else { return };
+        self.report(Report {
+            seq: 0,
+            tick: self.tick,
+            kind: ReportKind::Reroute,
+            uid: format!("reroute-{id}-{}", self.tick),
+            observer: Some(id),
+            target: None,
+            target_kind: String::new(),
+            lat_e7: pose.lat_e7,
+            lon_e7: pose.lon_e7,
+            alt_mm: pose.alt_mm,
+            detail: serde_json::json!({
+                "sysid": drone.sysid,
+                "callsign": callsign,
+                "reason": orders.reason,
+                "messages": orders.messages,
+                "detours": orders.detours,
+                "airspace_rev": self.airspace.rev(),
+            }),
+        });
+        self.mail.entry(id).or_default().extend(orders.instructions);
     }
 
     /// What the published view carries beside the agents: the geofences
@@ -1933,6 +1926,11 @@ impl World {
             },
             "orders": orders,
         })
+    }
+
+    /// The behaviour tree every drone in this world thinks with.
+    pub fn brain(&self) -> &Brain {
+        self.brain.as_ref().expect("a world always has a brain")
     }
 
     pub fn airspace(&self) -> &Airspace {
