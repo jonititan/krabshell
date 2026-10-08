@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Stations &amp; regions &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Stations &amp; regions</h1>
+<p class="lede">
+  Launch and recovery stations are where drones take off, land and charge.
+  Regions of interest are places for the drones to survey; one is added by
+  itself wherever a drone crashes. Add either on the map, and remove any of
+  them, the scenario's included.
+</p>
+
+{% include "fragments/control.html" %}
+
+<div id="marks-unavailable" class="banner warn" hidden>
+  This scenario's model publishes no stations or regions of interest, so
+  there are none to show, and adding one will be refused.
+</div>
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Map</h2>
+    <div class="map-controls">
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label title="Hubs and landmarks, the addresses of open orders, and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Delivery locations</label>
+    <label title="Where people and vehicles are, and camera sightings of them"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
+  </fieldset>
+
+  <div class="fence-tools" role="toolbar" aria-label="Map tool">
+    <div class="segmented">
+      <button type="button" data-tool="select" aria-pressed="true">Select</button>
+      <button type="button" data-tool="station" aria-pressed="false">Add station</button>
+      <button type="button" data-tool="roi" aria-pressed="false">Add region</button>
+    </div>
+    <p id="mark-hint" class="dim small">Click a station or region to pick it out in its list. Drag to pan, scroll to zoom.</p>
+  </div>
+
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" aria-label="Stations and regions of interest over the occupancy map"></canvas>
+    <div id="map-legend" class="legend"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map and the lists need JavaScript.</p></noscript>
+  </div>
+
+  <form id="mark-draft" class="draft" hidden>
+    <h3 id="mark-title">New station</h3>
+    <div class="row">
+      <label>Name
+        <input id="mark-name" type="text" size="24" maxlength="80" placeholder="required" autocomplete="off">
+      </label>
+      <label id="mark-radius-field">Radius, m
+        <input id="mark-radius" type="text" inputmode="decimal" size="8" placeholder="10 to 5000" autocomplete="off">
+      </label>
+      <p id="mark-summary" class="dim small mono"></p>
+    </div>
+    <div id="mark-error" class="banner bad" hidden></div>
+    <div class="row">
+      <button id="mark-add" type="submit" class="primary">Add</button>
+      <button id="mark-cancel" type="button" class="ghost">Cancel</button>
+    </div>
+  </form>
+
+  <ul class="map-key" aria-label="Map key">
+    <li>
+      <canvas class="sym" data-sidc="SFGPIBA---H----" aria-hidden="true"></canvas>
+      Launch and recovery station, with the drones on the ground at it
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true"><ellipse class="k-nai" cx="20" cy="10" rx="18" ry="8.5"/><text class="k-nai-text" x="20" y="12.5">NAI</text></svg>
+      Region of interest (NAI); heavier and blue while drones are tasked to survey it, red where a drone crashed
+    </li>
+    <li><span class="swatch draft" aria-hidden="true"></span>Being placed</li>
+    <li>
+      <canvas class="sym moving" data-sidc="SFAPMFQ--------" data-heading="45" aria-hidden="true"></canvas>
+      Friendly drone (air)
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="SUAPMFQ--------" aria-hidden="true"></canvas>
+      Unknown air (intruder)
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="SUGPUCI--------" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="SUGPEV---------" aria-hidden="true"></canvas>
+      Unknown ground: person / vehicle sighting
+    </li>
+    <li><span class="swatch fence" aria-hidden="true"></span>Geofence</li>
+  </ul>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+<section class="panel">
+  <h2>Launch and recovery stations</h2>
+  <div id="mark-flash" class="banner" hidden></div>
+  <div class="table-scroll">
+    <table class="grid marks" id="station-table">
+      <thead>
+        <tr>
+          <th>Station</th><th>Position</th><th>Added by</th><th>Added</th>
+          <th title="Drones on the ground at the station now">On the ground</th>
+          <th><span class="visually-hidden">Remove</span></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="station-empty" class="dim">No stations.</p>
+</section>
+
+<section class="panel">
+  <h2>Regions of interest</h2>
+  <div class="table-scroll">
+    <table class="grid marks" id="roi-table">
+      <thead>
+        <tr>
+          <th>Region</th><th>Radius</th><th>Added by</th><th>Added</th>
+          <th>Surveys</th><th>Last surveyed</th>
+          <th title="Drones on their way to survey it">Tasked drones</th>
+          <th><span class="visually-hidden">Remove</span></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="roi-empty" class="dim">No regions of interest.</p>
+</section>
+
+<section class="panel">
+  <h2>Recent activity</h2>
+  <p class="dim small">Stations added and removed, regions designated, removed or added at a crash, and surveys done, newest first, from the run's latest reports.</p>
+  <div class="table-scroll">
+    <table class="grid" id="mark-events">
+      <thead><tr><th>Sim time</th><th>Event</th><th>Detail</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p id="mark-events-empty" class="dim">Nothing yet.</p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
+<script src="/assets/map.js" defer></script>
+<script src="/assets/stations.js" defer></script>
+{% endblock %}

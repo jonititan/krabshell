@@ -209,7 +209,6 @@ that applies it instead of walking off it.
 - Intra-step parallelism and parent-cell partitioning (Phases 6+). `run.parallel`
   and `run.threads` are accepted and shown but nothing reads them yet.
 - MAVLink is unsigned and CoT is plain UDP; neither is authenticated.
-- The dashboard map shows occupancy, not individual drones or sightings.
 - Tested against pymavlink and a CoT listener, not yet against QGroundControl
   or ATAK themselves.
 - CORS allowlist (§13): the dashboard is same-origin, so none is configured.

@@ -30,8 +30,13 @@ use crate::AppState;
 const APP_CSS: &str = include_str!("../../../sim-dashboard/assets/app.css");
 const MAP_JS: &str = include_str!("../../../sim-dashboard/assets/map.js");
 const GEOFENCES_JS: &str = include_str!("../../../sim-dashboard/assets/geofences.js");
+const STATIONS_JS: &str = include_str!("../../../sim-dashboard/assets/stations.js");
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
+/// milsymbol 3.0.4 (MIT), which draws the maps' APP-6 / MIL-STD-2525 symbols.
+/// Vendored so the dashboard works offline. Its path carries the version, so
+/// browsers may keep it for good; a new version gets a new path.
+const MILSYMBOL_JS: &str = include_str!("../../../sim-dashboard/assets/milsymbol.js");
 
 pub fn router(auth: Arc<Auth>) -> Router<AppState> {
     let public = Router::new()
@@ -43,10 +48,27 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
             "/assets/geofences.js",
             get(|| asset(GEOFENCES_JS, "text/javascript")),
         )
+        .route(
+            "/assets/stations.js",
+            get(|| asset(STATIONS_JS, "text/javascript")),
+        )
         .route("/assets/live.js", get(|| asset(LIVE_JS, "text/javascript")))
         .route(
             "/assets/htmx.min.js",
             get(|| asset(HTMX_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/milsymbol-3.0.4.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript"),
+                        (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    ],
+                    MILSYMBOL_JS,
+                )
+                    .into_response()
+            }),
         );
 
     let guarded = Router::new()
@@ -55,6 +77,7 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/scenarios", get(scenarios_page))
         .route("/state", get(state_page))
         .route("/geofences", get(geofences_page))
+        .route("/stations", get(stations_page))
         .route("/intents", get(intents_page))
         .route("/io", get(io_page))
         .route("/fragments/control", get(control_fragment))
@@ -322,6 +345,14 @@ struct GeofencesTemplate {
     basemaps: &'static [Basemap],
 }
 
+#[derive(Template)]
+#[template(path = "stations.html")]
+struct StationsTemplate {
+    nav: &'static str,
+    control: ControlView,
+    basemaps: &'static [Basemap],
+}
+
 /// A raster tile layer the map can draw under the cells.
 ///
 /// Tiles are fetched by the operator's browser straight from the provider, so
@@ -504,6 +535,14 @@ async fn state_page(State(state): State<AppState>, Query(query): Query<CellQuery
 async fn geofences_page(State(state): State<AppState>) -> Response {
     render(GeofencesTemplate {
         nav: "geofences",
+        control: ControlView::build(&state, None),
+        basemaps: BASEMAPS,
+    })
+}
+
+async fn stations_page(State(state): State<AppState>) -> Response {
+    render(StationsTemplate {
+        nav: "stations",
         control: ControlView::build(&state, None),
         basemaps: BASEMAPS,
     })

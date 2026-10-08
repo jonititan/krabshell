@@ -15,8 +15,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sim_core::cell::{self, CellError};
 use sim_core::{
-    CellBag, Config, DriverHealth, ErrorCode, GeoCell, Intent, Metrics, Profile, Report, RunMode,
-    ScenarioSummary, SnapshotMeta,
+    CellBag, Config, DriverHealth, ErrorCode, GeoCell, Intent, Metrics, Profile, Report,
+    ReportKind, RunMode, ScenarioSummary, SnapshotMeta,
 };
 use sim_engine::{checkpoint, Control, IntentAck, Published, Submission};
 
@@ -748,18 +748,10 @@ fn tick_seconds(view: &Published) -> Option<f64> {
 pub async fn geofences_list(State(state): State<AppState>) -> Json<GeofencesBody> {
     let view = state.driver.view();
     let g = &view.overlays["geofences"];
-    let kind = |r: &Report| {
-        matches!(
-            r.kind,
-            sim_core::ReportKind::Breach | sim_core::ReportKind::Reroute
-        )
-    };
     let breaches = |id: u64| {
         view.reports
             .iter()
-            .filter(|r| {
-                r.kind == sim_core::ReportKind::Breach && r.detail["fence"].as_u64() == Some(id)
-            })
+            .filter(|r| r.kind == ReportKind::Breach && r.detail["fence"].as_u64() == Some(id))
             .count()
     };
     let fences = g["fences"]
@@ -778,30 +770,42 @@ pub async fn geofences_list(State(state): State<AppState>) -> Json<GeofencesBody
     Json(GeofencesBody {
         tick: view.meta.tick,
         tick_seconds: tick_seconds(&view),
-        mode: format!("{:?}", view.health.mode).to_lowercase(),
+        mode: mode_of(&view),
         rev: g["rev"].as_u64().unwrap_or(0),
         margin_m: g["margin_m"].as_f64().unwrap_or(0.0),
         fences,
         scheduled: g["scheduled"].as_array().cloned().unwrap_or_default(),
         previous: g["previous"].as_array().cloned().unwrap_or_default(),
-        recent: view
-            .reports
-            .iter()
-            .rev()
-            .filter(|r| kind(r))
-            .take(100)
-            .cloned()
-            .collect(),
-        refused: view
-            .recent_intents
-            .iter()
-            .filter(|r| r.rejected.is_some())
-            .map(|r| Refused {
-                id: r.id,
-                detail: r.detail.clone(),
-            })
-            .collect(),
+        recent: recent_reports(&view, &[ReportKind::Breach, ReportKind::Reroute]),
+        refused: refused(&view),
     })
+}
+
+/// The latest reports of some kinds, newest first.
+fn recent_reports(view: &Published, kinds: &[ReportKind]) -> Vec<Report> {
+    view.reports
+        .iter()
+        .rev()
+        .filter(|r| kinds.contains(&r.kind))
+        .take(100)
+        .cloned()
+        .collect()
+}
+
+/// Intents the model refused lately.
+fn refused(view: &Published) -> Vec<Refused> {
+    view.recent_intents
+        .iter()
+        .filter(|r| r.rejected.is_some())
+        .map(|r| Refused {
+            id: r.id,
+            detail: r.detail.clone(),
+        })
+        .collect()
+}
+
+fn mode_of(view: &Published) -> String {
+    format!("{:?}", view.health.mode).to_lowercase()
 }
 
 /// A cell inside the world near a point, to address a geofence intent to.
@@ -812,15 +816,45 @@ fn cell_near(view: &Published, lon: f64, lat: f64) -> ApiResult<GeoCell> {
     Ok(cell)
 }
 
+/// A fence's altitude band, `floor_m` and `ceiling_m` in metres above
+/// ground level: each a number of 0 or more, or null or absent (the surface;
+/// unlimited), with the ceiling above the floor. The model checks again;
+/// this is for a clear answer before the intent takes a queue slot.
+fn check_band(body: &serde_json::Value) -> ApiResult<()> {
+    let metres = |key: &str| -> ApiResult<Option<f64>> {
+        match body.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => match v.as_f64() {
+                Some(m) if m.is_finite() && m >= 0.0 => Ok(Some(m)),
+                _ => Err(ApiError::bad_request(format!(
+                    "{key} is metres above ground level: a number of 0 or more, or null"
+                ))),
+            },
+        }
+    };
+    let floor = metres("floor_m")?;
+    if let Some(ceiling) = metres("ceiling_m")? {
+        if ceiling <= floor.unwrap_or(0.0) {
+            return Err(ApiError::bad_request(
+                "ceiling_m must be above floor_m (or above the surface)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Open a geofence: `{"circle": {"lat", "lon", "radius_m"}}` or
 /// `{"polygon": [[lon, lat], ...]}`, in degrees, with optionally a `"name"`,
-/// `"minutes"` it stays open (-1 or absent: until closed) and
-/// `"after_minutes"` before it opens (0 or absent: on the next tick).
+/// `"minutes"` it stays open (-1 or absent: until closed),
+/// `"after_minutes"` before it opens (0 or absent: on the next tick), and an
+/// altitude band: `"floor_m"` (absent or null: from the surface) and
+/// `"ceiling_m"` (absent or null: unlimited), metres above ground level.
 pub async fn geofences_open(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<IntentAccepted>> {
     let view = state.driver.view();
+    check_band(&body)?;
     let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64);
     let (lon, lat) = if let Some(c) = body.get("circle") {
         match (num(c, "lon"), num(c, "lat")) {
@@ -878,7 +912,7 @@ pub async fn geofences_extend(
         .as_array()
         .and_then(|list| list.iter().find(|f| f["id"].as_u64() == Some(id)))
         .ok_or_else(|| ApiError::not_found(format!("no open geofence {id}")))?;
-    let cell = fence_cell(&view, fence)?;
+    let cell = overlay_cell(&view, fence)?;
     let verb = sim_core::IntentVerb::Custom(GEOFENCE_EXTEND);
     let payload = serde_json::json!({ "id": id, "minutes": body.minutes });
     submit_intent(&state, Intent::operator(cell, verb, payload)).await
@@ -905,18 +939,20 @@ pub async fn geofences_rename(
         .flatten()
         .find(|f| f["id"].as_u64() == Some(id))
         .ok_or_else(|| ApiError::not_found(format!("no geofence {id}")))?;
-    let cell = fence_cell(&view, fence)?;
+    let cell = overlay_cell(&view, fence)?;
     let verb = sim_core::IntentVerb::Custom(GEOFENCE_RENAME);
     let payload = serde_json::json!({ "id": id, "name": body.name });
     submit_intent(&state, Intent::operator(cell, verb, payload)).await
 }
 
-/// A cell the fence touches, to address an intent about it to.
-fn fence_cell(view: &Published, fence: &serde_json::Value) -> ApiResult<GeoCell> {
-    let (lat_e7, lon_e7) = match (fence["lat_e7"].as_i64(), fence["lon_e7"].as_i64()) {
+/// A cell a published fence, station or region of interest touches (its
+/// `lat_e7`/`lon_e7`, or a polygon's first corner), to address an intent
+/// about it to.
+fn overlay_cell(view: &Published, item: &serde_json::Value) -> ApiResult<GeoCell> {
+    let (lat_e7, lon_e7) = match (item["lat_e7"].as_i64(), item["lon_e7"].as_i64()) {
         (Some(lat), Some(lon)) => (lat, lon),
         _ => {
-            let first = &fence["points"][0];
+            let first = &item["points"][0];
             (
                 first[0].as_i64().unwrap_or(0),
                 first[1].as_i64().unwrap_or(0),
@@ -940,8 +976,217 @@ pub async fn geofences_close(
         .flatten()
         .find(|f| f["id"].as_u64() == Some(id))
         .ok_or_else(|| ApiError::not_found(format!("no open or scheduled geofence {id}")))?;
-    let cell = fence_cell(&view, fence)?;
+    let cell = overlay_cell(&view, fence)?;
     let verb = sim_core::IntentVerb::Custom(GEOFENCE_CLOSE);
+    let payload = serde_json::json!({ "id": id });
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+// ------------------------------------ stations and regions of interest
+
+/// `Custom` intent codes for launch and recovery stations and regions of
+/// interest; see `sim_drones::codes`.
+const STATION_ADD: u16 = 120;
+const STATION_REMOVE: u16 = 121;
+const ROI_ADD: u16 = 130;
+const ROI_REMOVE: u16 = 131;
+
+/// How big a region of interest may be, as a radius in metres.
+const ROI_RADIUS_M: std::ops::RangeInclusive<f64> = 10.0..=5000.0;
+
+/// The longest name a station or region may have, in characters.
+const MAX_NAME_CHARS: usize = 80;
+
+#[derive(Serialize)]
+pub struct StationsBody {
+    pub tick: u64,
+    /// Simulated seconds per tick, when the model says.
+    pub tick_seconds: Option<f64>,
+    pub mode: String,
+    /// Whether the model publishes stations at all.
+    pub available: bool,
+    /// The launch and recovery stations, as the model publishes them, each
+    /// with `drones`: how many are on the ground at it now.
+    pub stations: Vec<serde_json::Value>,
+    /// The latest station reports (added, removed), newest first.
+    pub recent: Vec<Report>,
+    /// Intents the model refused lately, as in [`GeofencesBody`].
+    pub refused: Vec<Refused>,
+}
+
+#[derive(Serialize)]
+pub struct RoisBody {
+    pub tick: u64,
+    /// Simulated seconds per tick, when the model says.
+    pub tick_seconds: Option<f64>,
+    pub mode: String,
+    /// Whether the model publishes regions of interest at all.
+    pub available: bool,
+    /// The regions of interest, as the model publishes them, with the
+    /// surveys done, when last, and the drones `assigned` to survey them.
+    pub rois: Vec<serde_json::Value>,
+    /// The latest region (designated, removed, added at a crash) and survey
+    /// reports, newest first.
+    pub recent: Vec<Report>,
+    /// Intents the model refused lately, as in [`GeofencesBody`].
+    pub refused: Vec<Refused>,
+}
+
+/// The launch and recovery stations, and what has happened to them lately.
+/// Empty, and not `available`, for a model without them.
+pub async fn stations_list(State(state): State<AppState>) -> Json<StationsBody> {
+    let view = state.driver.view();
+    let list = view.overlays["stations"].as_array();
+    Json(StationsBody {
+        tick: view.meta.tick,
+        tick_seconds: tick_seconds(&view),
+        mode: mode_of(&view),
+        available: list.is_some(),
+        stations: list.cloned().unwrap_or_default(),
+        recent: recent_reports(&view, &[ReportKind::Station]),
+        refused: refused(&view),
+    })
+}
+
+/// The regions of interest, and the latest region and survey reports.
+/// Empty, and not `available`, for a model without them.
+pub async fn rois_list(State(state): State<AppState>) -> Json<RoisBody> {
+    let view = state.driver.view();
+    let list = view.overlays["rois"].as_array();
+    Json(RoisBody {
+        tick: view.meta.tick,
+        tick_seconds: tick_seconds(&view),
+        mode: mode_of(&view),
+        available: list.is_some(),
+        rois: list.cloned().unwrap_or_default(),
+        recent: recent_reports(&view, &[ReportKind::Roi, ReportKind::Survey]),
+        refused: refused(&view),
+    })
+}
+
+/// Where a new station or region goes and what it is called, from
+/// `{"lat", "lon", "name"}` in degrees: a name is needed, of at most
+/// `MAX_NAME_CHARS` once trimmed.
+fn place(body: &serde_json::Value, what: &str) -> ApiResult<(f64, f64, String)> {
+    let num = |k: &str| body.get(k).and_then(serde_json::Value::as_f64);
+    let (Some(lat), Some(lon)) = (num("lat"), num("lon")) else {
+        return Err(ApiError::bad_request(format!(
+            "a {what} needs lat and lon, in degrees"
+        )));
+    };
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err(ApiError::bad_request(
+            "lat is from -90 to 90 degrees and lon from -180 to 180",
+        ));
+    }
+    let name = match body.get("name") {
+        Some(serde_json::Value::String(name)) => name.trim().to_owned(),
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(_) => return Err(ApiError::bad_request("name is a string")),
+    };
+    if name.is_empty() {
+        return Err(ApiError::bad_request(format!("a {what} needs a name")));
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(ApiError::bad_request(format!(
+            "a name is at most {MAX_NAME_CHARS} characters"
+        )));
+    }
+    Ok((lat, lon, name))
+}
+
+/// The `STATION_ADD` payload for a body of `{"lat", "lon", "name"}`, and
+/// where it is.
+fn station_payload(body: &serde_json::Value) -> ApiResult<(f64, f64, serde_json::Value)> {
+    let (lat, lon, name) = place(body, "station")?;
+    let payload = serde_json::json!({
+        "lat": lat, "lon": lon, "name": name, "source": "dashboard",
+    });
+    Ok((lat, lon, payload))
+}
+
+/// The `ROI_ADD` payload for a body of `{"lat", "lon", "radius_m",
+/// "name"}`, and where it is.
+fn roi_payload(body: &serde_json::Value) -> ApiResult<(f64, f64, serde_json::Value)> {
+    let (lat, lon, name) = place(body, "region of interest")?;
+    let radius = body
+        .get("radius_m")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|r| ROI_RADIUS_M.contains(r))
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "a region of interest needs radius_m, from {} to {} metres",
+                ROI_RADIUS_M.start(),
+                ROI_RADIUS_M.end()
+            ))
+        })?;
+    let payload = serde_json::json!({
+        "lat": lat, "lon": lon, "radius_m": radius, "name": name, "source": "dashboard",
+    });
+    Ok((lat, lon, payload))
+}
+
+/// One item of a published list (`overlays[key]`) by its id.
+fn listed<'a>(view: &'a Published, key: &str, id: u64) -> Option<&'a serde_json::Value> {
+    view.overlays[key]
+        .as_array()?
+        .iter()
+        .find(|item| item["id"].as_u64() == Some(id))
+}
+
+/// Add a launch and recovery station: `{"lat", "lon", "name"}`, in
+/// degrees. From the next tick.
+pub async fn stations_add(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let (lat, lon, payload) = station_payload(&body)?;
+    let cell = cell_near(&view, lon, lat)?;
+    let verb = sim_core::IntentVerb::Custom(STATION_ADD);
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+/// Remove a launch and recovery station, whoever added it. From the next
+/// tick.
+pub async fn stations_remove(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let station = listed(&view, "stations", id)
+        .ok_or_else(|| ApiError::not_found(format!("no station {id}")))?;
+    let cell = overlay_cell(&view, station)?;
+    let verb = sim_core::IntentVerb::Custom(STATION_REMOVE);
+    let payload = serde_json::json!({ "id": id });
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+/// Designate a region of interest for the drones to survey: `{"lat",
+/// "lon", "radius_m", "name"}`, degrees and metres (10 to 5000). From the
+/// next tick.
+pub async fn rois_add(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let (lat, lon, payload) = roi_payload(&body)?;
+    let cell = cell_near(&view, lon, lat)?;
+    let verb = sim_core::IntentVerb::Custom(ROI_ADD);
+    submit_intent(&state, Intent::operator(cell, verb, payload)).await
+}
+
+/// Remove a region of interest, whoever designated it (a crash's
+/// included). From the next tick.
+pub async fn rois_remove(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<IntentAccepted>> {
+    let view = state.driver.view();
+    let roi = listed(&view, "rois", id)
+        .ok_or_else(|| ApiError::not_found(format!("no region of interest {id}")))?;
+    let cell = overlay_cell(&view, roi)?;
+    let verb = sim_core::IntentVerb::Custom(ROI_REMOVE);
     let payload = serde_json::json!({ "id": id });
     submit_intent(&state, Intent::operator(cell, verb, payload)).await
 }
@@ -968,6 +1213,10 @@ pub struct Entity {
     pub callsign: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// What a drone's behaviour is doing ("delivering", "surveying",
+    /// "charging", ...), when the model says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 /// Every object that carries an exact position (`lat_e7`/`lon_e7` in its
@@ -1038,6 +1287,10 @@ pub async fn state_entities(
                     .get("drone")
                     .and_then(|d| d.get("mode"))
                     .and_then(|m| m.as_str())
+                    .map(str::to_owned),
+                activity: s
+                    .get("activity")
+                    .and_then(|a| a.as_str())
                     .map(str::to_owned),
             });
         }
@@ -1241,4 +1494,84 @@ pub async fn cells_lookup(
         in_world,
         edge_meters: cell::nominal_cell_edge_meters(resolution),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_new_station_goes_to_the_model_as_the_dashboard_s() {
+        let body = json!({ "lat": 54.93, "lon": 23.85, "name": "  Šilainiai ", "x": 1 });
+        let (lat, lon, payload) = station_payload(&body).unwrap();
+        assert_eq!((lat, lon), (54.93, 23.85));
+        assert_eq!(
+            payload,
+            json!({ "lat": 54.93, "lon": 23.85, "name": "Šilainiai", "source": "dashboard" })
+        );
+    }
+
+    #[test]
+    fn a_new_region_carries_its_radius() {
+        let body = json!({ "lat": 54.93, "lon": 23.85, "radius_m": 150, "name": "Park" });
+        let (_, _, payload) = roi_payload(&body).unwrap();
+        assert_eq!(payload["radius_m"], 150.0);
+        assert_eq!(payload["name"], "Park");
+        assert_eq!(payload["source"], "dashboard");
+        for radius in [json!(10), json!(5000)] {
+            let mut body = body.clone();
+            body["radius_m"] = radius;
+            assert!(roi_payload(&body).is_ok());
+        }
+    }
+
+    #[test]
+    fn places_without_a_position_name_or_sensible_radius_are_refused() {
+        for body in [
+            json!({ "lat": 54.93, "name": "x" }),
+            json!({ "lat": "54.93", "lon": 23.85, "name": "x" }),
+            json!({ "lat": 91, "lon": 23.85, "name": "x" }),
+            json!({ "lat": 54.93, "lon": -181, "name": "x" }),
+            json!({ "lat": 54.93, "lon": 23.85 }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "   " }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": 7 }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "n".repeat(81) }),
+        ] {
+            assert!(station_payload(&body).is_err(), "{body}");
+        }
+        for radius in [
+            json!(9.9),
+            json!(5000.5),
+            json!(-1),
+            json!("big"),
+            json!(null),
+        ] {
+            let body = json!({ "lat": 54.93, "lon": 23.85, "name": "x", "radius_m": radius });
+            assert!(roi_payload(&body).is_err(), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_fence_band_needs_its_ceiling_above_its_floor() {
+        for ok in [
+            json!({}),
+            json!({ "floor_m": null, "ceiling_m": null }),
+            json!({ "floor_m": 0 }),
+            json!({ "floor_m": 60 }),
+            json!({ "ceiling_m": 120 }),
+            json!({ "floor_m": 30, "ceiling_m": 30.5 }),
+        ] {
+            assert!(check_band(&ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            json!({ "floor_m": -1 }),
+            json!({ "floor_m": "60" }),
+            json!({ "ceiling_m": 0 }),
+            json!({ "floor_m": 60, "ceiling_m": 60 }),
+            json!({ "floor_m": 60, "ceiling_m": 10 }),
+        ] {
+            assert!(check_band(&bad).is_err(), "{bad}");
+        }
+    }
 }

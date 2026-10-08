@@ -58,7 +58,7 @@ crates/
   sim-mavlink/    MAVLink gateway: drones as UDP vehicles for ground stations
   sim-cot/        Cursor-on-Target emitter: tracks and sightings for TAK
   sim-axum/       REST + WebSocket edge, auth, the krabshell binary
-  sim-dashboard/  Askama templates and static assets (htmx, canvas map)
+  sim-dashboard/  Askama templates and static assets (htmx, milsymbol, canvas map)
 scenarios/        drone packs: london-patrol (gold), kaunas-deliveries (gold),
                   swarm-survey (fast)
 bench/scenarios/  random-walker packs for benchmarks and the krABMaga replay
@@ -134,7 +134,10 @@ battery left.
 
 ### Geofences
 
-Geofences are keep-out zones, at every altitude: circles and polygons. A
+Geofences are keep-out zones: circles and polygons, from the surface up
+without limit unless they have an altitude band (`floor_m`, `ceiling_m`,
+metres above ground level; drones may fly beneath a fence whose floor is
+high enough). A
 pack lists the ones it starts with in `world/geofences.json`, each with an
 optional `name` and `minutes` (until it closes by itself):
 
@@ -154,8 +157,10 @@ A fence over a drone's pad, or outside the world, stops the pack loading. A
 reset opens the pack's fences again. While the run goes on, the dashboard's
 Geofences tab, the API and intents open and close fences: `Custom` 110 with
 `{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat],
-...]}` and optionally `"name"`, `"minutes"` (-1: until closed) and
-`"after_minutes"` (it waits to open until then); `Custom` 111 with `{"id"}`
+...]}` and optionally `"name"`, `"minutes"` (-1: until closed),
+`"after_minutes"` (it waits to open until then), `"floor_m"` and
+`"ceiling_m"` (numbers of 0 or more with the ceiling above the floor; null
+or absent: the surface, unlimited); `Custom` 111 with `{"id"}`
 closes one, or cancels one still waiting; `Custom` 113 with `{"id",
 "minutes"}` changes how long an open one stays open (from now; -1: until
 closed); `Custom` 114 with `{"id", "name"}` renames one.
@@ -203,21 +208,76 @@ cargo run --release -p sim-engine --bin simctl -- fly kaunas-deliveries --hours 
 ```
 
 The dashboard's **Geofences** tab manages them. **Current fences** lists
-every fence open or waiting to open (shape and area, who opened it, when it
-opened or will, when it closes, breaches), each with Close (or Cancel), and
+every fence open or waiting to open (shape and area, altitude band, who
+opened it, when it opened or will, when it closes, breaches), each with
+Close (or Cancel), and
 Extend for one due to close: a number of minutes from now, or -1 to keep it
 open until closed. The ✎ beside a fence's name renames it, current or
 previous. Draw
 a circle (centre, then edge) or a polygon (corners, then click the first
 again or press Enter) on the map to open one, with a name and optionally a
-number of minutes. **Previous fences** lists those that have closed: reopen
-any as it was, now or after some minutes (0 for now), for some minutes or
+number of minutes and a floor and ceiling in metres above ground level
+(blank: the surface, unlimited). **Previous fences** lists those that have
+closed: reopen any as it was (altitude band included), now or after some
+minutes (0 for now), for some minutes or
 until closed (-1). It opens with a new number. **Recent activity** shows
 breaches and the operator's reroutes. The State page's map draws the fences
 too. Both maps have layers to show or hide: drones; delivery locations
 (hubs and landmarks, open orders' addresses, recent drop-offs); people and
-vehicles (where they are, and camera sightings); geofences; and the A5
-occupancy grid. The choice is remembered in the browser.
+vehicles (where they are, and camera sightings); geofences; launch and
+recovery stations; regions of interest; and the A5 occupancy grid. The
+choice is remembered in the browser.
+
+### Stations and regions of interest
+
+Launch and recovery stations are where drones take off, land and charge;
+regions of interest are circles for the drones to survey, and the model
+adds one by itself where a drone crashes. A model that has them publishes
+both in its overlays (`stations`, with the drones on the ground at each;
+`rois`, with the surveys done, when last, and the drones `assigned` to
+survey each), and reports what happens to them (`station`, `roi` and
+`survey` reports). Intents add and remove them: `Custom` 120 with `{"lat",
+"lon", "name", "source"}` adds a station and `Custom` 121 with `{"id"}`
+removes one; `Custom` 130 with `{"lat", "lon", "radius_m", "name",
+"source"}` (10 to 5000 m) designates a region and `Custom` 131 with
+`{"id"}` removes one.
+
+The dashboard's **Stations & regions** tab manages them. Add a station
+(click where it goes, then name it) or a region (centre, then edge, or type
+the radius, then name it) on the map. **Launch and recovery stations** lists
+each with its position, who added it and when, and the drones on the ground
+at it, with Remove. **Regions of interest** lists each with its radius, who
+added it (crash sites are marked), when, the surveys done and the last, and
+the drones on their way to survey it, with Remove. **Recent activity** shows
+stations added and removed, regions designated, removed or added at a
+crash, and surveys done. A model that publishes neither leaves the page
+empty.
+
+### Map symbols
+
+The maps draw NATO joint military symbology (APP-6 / MIL-STD-2525C), the
+same symbols the CoT emitter sends to TAK, with
+[milsymbol](https://github.com/spatialillusions/milsymbol) 3.0.4 (MIT),
+which is compiled into the binary so the dashboard needs no internet:
+
+| What | Symbol | SIDC |
+|---|---|---|
+| Delivery drone | friendly air, drone, with its direction of movement | `SFAPMFQ--------` |
+| Intruder drone, and camera sightings of one | unknown air, drone | `SUAPMFQ--------` |
+| Camera sighting of a person | unknown ground unit, infantry | `SUGPUCI--------` |
+| Camera sighting of a vehicle | unknown ground equipment, vehicle | `SUGPEV---------` |
+| Launch and recovery station | friendly ground installation, air base | `SFGPIBA---H----` |
+
+Sightings fade over 30 seconds. Where people and vehicles really are (not
+what the cameras saw) stays as faint dots, and points of interest as
+diamonds. A region of interest is a named area of interest: a dashed circle
+labelled `NAI` and its name, heavier while drones are on their way to survey
+it, red when a crash put it there. A geofence's label carries its altitude
+band when it has one (`#4 · 60 m–UNL`, `#4 · SFC–120 m`; SFC is the surface,
+UNL unlimited), and a fence whose floor is raised is drawn lighter and
+dashed, since drones may pass beneath it. A drone's label says what it is
+doing (`MEGA-3 · delivering`) when the model says, and its flight mode
+otherwise.
 
 ### Drones: MAVLink and CoT
 
@@ -367,11 +427,15 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/metrics` | Prometheus text. |
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
-| GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
-| GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed) and `"after_minutes"`). |
+| GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses, stations and regions of interest (each key absent for a model without it). |
+| GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed), `"after_minutes"`, and an altitude band in metres above ground level, `"floor_m"` (null: the surface) and `"ceiling_m"` (null: unlimited), with the ceiling above the floor). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
 | PATCH | `/geofences/{id}` | `{"name": "..."}`: rename a geofence, open, waiting or previously closed (empty clears the name). |
 | POST | `/geofences/{id}/extend` | `{"minutes": m}`: keep an open geofence open `m` minutes from now, or with -1 until it is closed. |
+| GET POST | `/stations` | Launch and recovery stations as the model publishes them (`available` is false for a model without them), with recent station reports; add one (`{"lat", "lon", "name"}`, degrees). |
+| DELETE | `/stations/{id}` | Remove a station, whoever added it. 404 if the model does not list it. |
+| GET POST | `/rois` | Regions of interest as the model publishes them, with recent region and survey reports; designate one (`{"lat", "lon", "radius_m", "name"}`, degrees, 10 to 5000 m). |
+| DELETE | `/rois/{id}` | Remove a region of interest, a crash site's included. 404 if the model does not list it. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 
 Errors are `application/problem+json` with a stable `code`.
