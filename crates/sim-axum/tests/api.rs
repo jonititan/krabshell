@@ -834,7 +834,15 @@ async fn logging_in_sets_the_cookie_the_pages_accept() {
 #[tokio::test]
 async fn every_dashboard_screen_renders() {
     let h = harness(Profile::Gold, 30);
-    for path in ["/run", "/scenarios", "/state", "/intents", "/io"] {
+    for path in [
+        "/run",
+        "/scenarios",
+        "/state",
+        "/geofences",
+        "/stations",
+        "/intents",
+        "/io",
+    ] {
         let (status, _, html) = call(&h, page(path)).await;
         assert_eq!(status, StatusCode::OK, "{path} did not render");
         assert!(html.contains("krab"), "{path} is missing the layout");
@@ -957,6 +965,7 @@ async fn dashboard_assets_are_served_from_the_binary() {
         ("/assets/app.css", "krabshell operator console"),
         ("/assets/map.js", "Occupancy map"),
         ("/assets/live.js", "WebSocket"),
+        ("/assets/stations.js", "/api/v1/rois"),
         ("/assets/htmx.min.js", "htmx"),
         ("/assets/milsymbol-3.0.4.js", "Måns Beckman"),
     ] {
@@ -1031,7 +1040,7 @@ async fn the_state_page_offers_basemaps_with_none_as_the_default() {
 #[tokio::test]
 async fn both_maps_load_the_symbols_first_and_offer_every_layer() {
     let h = harness(Profile::Fast, 0);
-    for path in ["/state", "/geofences"] {
+    for path in ["/state", "/geofences", "/stations"] {
         let (status, _, html) = call(&h, page(path)).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         let symbols = html.find("/assets/milsymbol-3.0.4.js").expect(path);
@@ -1241,4 +1250,135 @@ async fn a_geofence_altitude_band_is_checked_before_it_is_sent() {
         assert_eq!(status, StatusCode::OK, "{band}: {text}");
         assert_eq!(accepted["status"], "queued", "{band}");
     }
+}
+
+// ------------------------------------- stations and regions of interest
+
+/// The verb the driver recorded for intent `id`, once it has been handled.
+async fn handled_verb(h: &Harness, id: &Value) -> Option<String> {
+    let (_, run, _) = call(h, get("/api/v1/run")).await;
+    run["recent_intents"]
+        .as_array()?
+        .iter()
+        .find(|r| &r["id"] == id)
+        .and_then(|r| r["verb"].as_str())
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn a_model_without_stations_or_regions_lists_none() {
+    let h = harness(Profile::Fast, 10);
+    let (status, body, _) = call(&h, get("/api/v1/stations")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stations"], json!([]));
+    assert_eq!(body["available"], false);
+    let (status, body, _) = call(&h, get("/api/v1/rois")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rois"], json!([]));
+    assert_eq!(body["available"], false);
+    assert_eq!(body["recent"], json!([]));
+}
+
+#[tokio::test]
+async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
+    let h = pack_harness("london-patrol");
+    let (status, _, html) = call(&h, page("/stations")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Launch and recovery stations") && html.contains("Regions of interest"));
+    assert!(html.contains("/assets/stations.js"));
+    assert!(html.contains("href=\"/stations\" class=\"on\""));
+
+    for (body, why) in [
+        (json!({ "lat": 51.5313, "name": "x" }), "no lon"),
+        (json!({ "lat": 51.5313, "lon": -0.1527 }), "no name"),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "  " }),
+            "a blank name",
+        ),
+        (
+            json!({ "lat": 95, "lon": -0.1527, "name": "x" }),
+            "a latitude past the pole",
+        ),
+    ] {
+        let (status, problem, _) = call(&h, post("/api/v1/stations", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+    // Somewhere on Earth but outside this world.
+    let (status, problem, _) = call(
+        &h,
+        post(
+            "/api/v1/stations",
+            json!({ "lat": 54.93, "lon": 23.85, "name": "Kaunas" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "cell_out_of_bounds");
+
+    // In Regent's Park. The world is paused, so it queues; once the world
+    // steps the driver has handed it to the model as STATION_ADD, whatever
+    // the model makes of it.
+    let (status, accepted, text) = call(
+        &h,
+        post(
+            "/api/v1/stations",
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "Regent's Park" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(accepted["status"], "queued");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    assert_eq!(
+        handled_verb(&h, &accepted["id"]).await.as_deref(),
+        Some("Custom(120)")
+    );
+
+    // Only a station the model lists can be removed.
+    let (status, problem, _) = call(&h, delete("/api/v1/stations/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "not_found");
+}
+
+#[tokio::test]
+async fn regions_of_interest_are_checked_and_sent_to_the_model() {
+    let h = pack_harness("london-patrol");
+    let park = |radius: Value| json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": radius, "name": "Regent's Park" });
+    for (body, why) in [
+        (park(json!(9)), "too small"),
+        (park(json!(5001)), "too big"),
+        (park(json!("wide")), "not a number"),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "x" }),
+            "no radius",
+        ),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": 100 }),
+            "no name",
+        ),
+    ] {
+        let (status, problem, _) = call(&h, post("/api/v1/rois", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+
+    // Both ends of the range are allowed.
+    let mut ids = Vec::new();
+    for radius in [10, 5000] {
+        let (status, accepted, text) = call(&h, post("/api/v1/rois", park(json!(radius)))).await;
+        assert_eq!(status, StatusCode::OK, "{radius} m: {text}");
+        assert_eq!(accepted["status"], "queued");
+        ids.push(accepted["id"].clone());
+    }
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    for id in &ids {
+        assert_eq!(handled_verb(&h, id).await.as_deref(), Some("Custom(130)"));
+    }
+
+    let (status, problem, _) = call(&h, delete("/api/v1/rois/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "not_found");
+    let (status, _, _) = call(&h, get("/api/v1/rois")).await;
+    assert_eq!(status, StatusCode::OK);
 }

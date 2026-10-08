@@ -228,6 +228,31 @@ vehicles (where they are, and camera sightings); geofences; launch and
 recovery stations; regions of interest; and the A5 occupancy grid. The
 choice is remembered in the browser.
 
+### Stations and regions of interest
+
+Launch and recovery stations are where drones take off, land and charge;
+regions of interest are circles for the drones to survey, and the model
+adds one by itself where a drone crashes. A model that has them publishes
+both in its overlays (`stations`, with the drones on the ground at each;
+`rois`, with the surveys done, when last, and the drones `assigned` to
+survey each), and reports what happens to them (`station`, `roi` and
+`survey` reports). Intents add and remove them: `Custom` 120 with `{"lat",
+"lon", "name", "source"}` adds a station and `Custom` 121 with `{"id"}`
+removes one; `Custom` 130 with `{"lat", "lon", "radius_m", "name",
+"source"}` (10 to 5000 m) designates a region and `Custom` 131 with
+`{"id"}` removes one.
+
+The dashboard's **Stations & regions** tab manages them. Add a station
+(click where it goes, then name it) or a region (centre, then edge, or type
+the radius, then name it) on the map. **Launch and recovery stations** lists
+each with its position, who added it and when, and the drones on the ground
+at it, with Remove. **Regions of interest** lists each with its radius, who
+added it (crash sites are marked), when, the surveys done and the last, and
+the drones on their way to survey it, with Remove. **Recent activity** shows
+stations added and removed, regions designated, removed or added at a
+crash, and surveys done. A model that publishes neither leaves the page
+empty.
+
 ### Map symbols
 
 The maps draw NATO joint military symbology (APP-6 / MIL-STD-2525C), the
@@ -402,11 +427,15 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/metrics` | Prometheus text. |
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
-| GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses. |
+| GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses, stations and regions of interest (each key absent for a model without it). |
 | GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed), `"after_minutes"`, and an altitude band in metres above ground level, `"floor_m"` (null: the surface) and `"ceiling_m"` (null: unlimited), with the ceiling above the floor). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
 | PATCH | `/geofences/{id}` | `{"name": "..."}`: rename a geofence, open, waiting or previously closed (empty clears the name). |
 | POST | `/geofences/{id}/extend` | `{"minutes": m}`: keep an open geofence open `m` minutes from now, or with -1 until it is closed. |
+| GET POST | `/stations` | Launch and recovery stations as the model publishes them (`available` is false for a model without them), with recent station reports; add one (`{"lat", "lon", "name"}`, degrees). |
+| DELETE | `/stations/{id}` | Remove a station, whoever added it. 404 if the model does not list it. |
+| GET POST | `/rois` | Regions of interest as the model publishes them, with recent region and survey reports; designate one (`{"lat", "lon", "radius_m", "name"}`, degrees, 10 to 5000 m). |
+| DELETE | `/rois/{id}` | Remove a region of interest, a crash site's included. 404 if the model does not list it. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 
 Errors are `application/problem+json` with a stable `code`.

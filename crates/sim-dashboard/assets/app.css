@@ -469,6 +469,13 @@ rect.k-vehicle { fill: var(--accent); }
 .legend[hidden] { display: none; }
 #fence-table td.waiting { color: var(--warn); }
 table.grid td.raised { color: var(--accent); }
+
+/* ------------------------------------------------ stations and regions */
+
+table.marks tbody tr { cursor: pointer; }
+table.marks tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+table.marks td:last-child { text-align: right; padding-right: 0; white-space: nowrap; }
+table.marks td.tasked { color: var(--accent); font-weight: 550; }
 #previous-table td:last-child { text-align: right; padding-right: 0; }
 #previous-table input { width: 6ch; }
 #fence-table form.extend { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
