@@ -973,6 +973,9 @@ impl World {
             ReportKind::Breach => "breach",
             ReportKind::Reroute => "reroute",
             ReportKind::OrderRejected => "order_rejected",
+            ReportKind::Station => "station",
+            ReportKind::Roi => "roi",
+            ReportKind::Survey => "survey",
         };
         *self.report_counts.entry(kind).or_default() += 1;
         if let Some(sink) = self.sink.as_mut() {

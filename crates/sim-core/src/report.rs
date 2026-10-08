@@ -42,6 +42,14 @@ pub enum ReportKind {
     /// An order was turned away when it was placed, at the given address:
     /// `detail.reason` says why (inside a geofence, say).
     OrderRejected,
+    /// A launch and recovery station was added or removed. `detail` carries
+    /// the station and `action`; the position is the station.
+    Station,
+    /// A region of interest was designated or removed (`detail.action`), or
+    /// added by itself where a drone crashed. The position is its centre.
+    Roi,
+    /// `observer` finished surveying region of interest `detail.roi`.
+    Survey,
 }
 
 /// One model-generated event.
