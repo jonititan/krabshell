@@ -63,10 +63,14 @@ body.centered {
 }
 
 main {
-  max-width: 1240px;
+  max-width: var(--page-width, 1240px);
   margin: 0 auto;
   padding: 24px 20px 64px;
 }
+
+/* The Width picker in the top bar. */
+:root[data-width="wide"] { --page-width: 1800px; }
+:root[data-width="full"] { --page-width: none; }
 
 h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
 h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); }
@@ -111,11 +115,13 @@ h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacin
 .topbar nav a:hover { background: var(--bg); color: var(--ink); }
 .topbar nav a.on { background: var(--bg); color: var(--ink); font-weight: 550; }
 .logout { margin: 0; }
+.topbar label.page-width { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
 
 /* On a phone the nav gets its own row under the wordmark and sign-out. */
 @media (max-width: 640px) {
   .topbar { flex-wrap: wrap; row-gap: 2px; padding-block: 8px; justify-content: space-between; }
   .topbar nav { order: 3; flex-basis: 100%; margin-inline: -10px; }
+  .topbar label.page-width { display: none; }
 }
 
 /* -------------------------------------------------------------- panels */
@@ -311,6 +317,9 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 13px;
   width: 100%;
   height: auto;
   aspect-ratio: 15 / 7;
+  /* On a wide page, keep the whole map on screen under the top bar. */
+  max-height: calc(100vh - 120px);
+  min-height: 320px;
   display: block;
   border-radius: 8px;
   border: 1px solid var(--line);

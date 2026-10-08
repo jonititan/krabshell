@@ -145,6 +145,11 @@ optional `name` and `minutes` (until it closes by itself):
 ]
 ```
 
+`kaunas-deliveries` also carries the UAS geographical zones Oro navigacija
+publishes over Kaunas (each with a `"zone"` id, which the simulation
+ignores); `uv run tools/lt_geozones.py` fetches the current zones and
+rewrites them, leaving fences without a `"zone"` alone.
+
 A fence over a drone's pad, or outside the world, stops the pack loading. A
 reset opens the pack's fences again. While the run goes on, the dashboard's
 Geofences tab, the API and intents open and close fences: `Custom` 110 with

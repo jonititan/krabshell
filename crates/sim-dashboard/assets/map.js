@@ -998,6 +998,8 @@
   }
 
   window.addEventListener('resize', draw);
+  // The page width can change without the window changing (the Width picker).
+  if (window.ResizeObserver) new ResizeObserver(() => draw()).observe(canvas);
 
   for (const input of layerInputs) {
     input.checked = layers[input.dataset.layer] !== false;
