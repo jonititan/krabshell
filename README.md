@@ -324,9 +324,10 @@ empty.
 
 ### Map symbols
 
-The maps draw NATO joint military symbology (APP-6 D / MIL-STD-2525D
-20-digit SIDCs, which have the vertical-takeoff UAV and civilian individuals
-and vehicles the older letter codes lack), with
+The maps draw NATO joint military symbology (drones as the 2525 letter
+SIDC of the CoT type TAK gets for them, so the dashboard and TAK agree; the
+rest as APP-6 D / MIL-STD-2525D 20-digit SIDCs, which have the civilian
+individuals and vehicles the letter codes lack), with
 [milsymbol](https://github.com/spatialillusions/milsymbol) 3.0.4 (MIT),
 which is compiled into the binary so the dashboard needs no internet. Symbols
 stay upright, as the standard has them; a moving drone's heading is its
@@ -334,7 +335,7 @@ direction-of-movement arrow.
 
 | What | Symbol | SIDC |
 |---|---|---|
-| Delivery drone | friendly air, vertical-takeoff UAV, with its direction of movement | `10030100001104000000` |
+| Delivery drone | friendly air, military rotary-wing UAV (CoT `a-f-A-M-H-Q`), with its direction of movement | `SFAPMHQ--------` |
 | Intruder drone, and camera sightings of one | unknown air, UAV | `10010100001103000000` |
 | Camera sighting of a person | unknown land civilian unit, individual | `10011100001103000000` |
 | Camera sighting of a car / van / pickup / bus / lorry | unknown land equipment, civilian automobile / utility vehicle / open-bed truck / multiple passenger vehicle / tractor-trailer | `100115000016` + `0100` / `0400` / `0200` / `0300` / `0600` + `0000` |
@@ -344,8 +345,9 @@ Civilians are drawn in the unknown identity's yellow rather than APP-6's
 optional civilian purple, since who they are is not known. Every vehicle has
 a type (`car`, `van`, `pickup`, `bus`, `lorry`), drawn from the seed unless
 `world/agents.json` gives one as `"type"`, and its sightings carry it as
-`vehicle_type`. The CoT emitter still sends TAK the 2525B-style types it
-always has (`a-f-A-M-H-Q`, `a-u-G-U-C-I`, `a-u-G-E-V`).
+`vehicle_type`. The CoT emitter sends TAK the types it always has: drones
+`a-f-A-M-H-Q`, the same symbol as the dashboard's; sightings `a-u-G-U-C-I`
+and `a-u-G-E-V`, which CoT has no civilian individual for.
 
 Sightings fade over 30 seconds. Where people and vehicles really are (not
 what the cameras saw) stays as faint dots, and points of interest as
