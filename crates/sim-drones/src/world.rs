@@ -48,7 +48,7 @@ use crate::mission::{self, Drone, MissionItem, Mode, Tuning};
 use crate::operator::{self, Ops};
 use crate::regions::{Region, Regions, Survey};
 use crate::settings::{cms, settings, Settings};
-use crate::stations::{Station, Stations};
+use crate::stations::{Planner, Range, Station, Stations};
 use crate::targets::{Route, VehicleType, Wander};
 use crate::terrain::Terrain;
 
@@ -85,9 +85,10 @@ pub mod codes {
     /// under the new name). Payload `{"id": n, "name": "..."}`; an empty
     /// name clears it.
     pub const GEOFENCE_RENAME: u16 = 114;
-    /// Add a launch and recovery station. Payload `{"lat": deg, "lon": deg}`
-    /// and optionally `"name"`. Refused under a geofence that cannot be
-    /// flown beneath, or on top of another station.
+    /// Add a launch and recovery station. Payload `{"lat": deg, "lon": deg,
+    /// "slots": n}` (1 to 100 launch and recovery slots) and optionally
+    /// `"name"`. Refused under a geofence that cannot be flown beneath, or
+    /// on top of another station.
     pub const STATION_ADD: u16 = 120;
     /// Remove a station. Payload `{"id": n}`.
     pub const STATION_REMOVE: u16 = 121;
@@ -227,6 +228,13 @@ pub struct Saved {
     /// step, so a restore ignores it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub activity: String,
+    /// Holding off this station until one of its slots is free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for_slot: Option<u32>,
+    /// Holding a slot at this station: coming in to land on it, or down on
+    /// it, until it takes off again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
 }
 
 /// One agent as it was at the end of the last step.
@@ -514,6 +522,13 @@ pub struct World {
     pub(crate) stations: Stations,
     pub(crate) regions: Regions,
     site_mail: Vec<SiteChange>,
+    /// Station slots taken this step, by station, by drones that set off
+    /// to land on one: the board shows them only from the next.
+    pub(crate) slot_claims: BTreeMap<u32, u32>,
+    /// How far couriers can deliver ([`World::delivery_range`]), and the
+    /// station and airspace revisions it was worked out for.
+    range: serde_json::Value,
+    range_key: Option<(u64, u64)>,
 
     /// The behaviour tree every drone thinks with. Taken out while a drone
     /// ticks it, so the drone can reach the rest of the world.
@@ -594,6 +609,9 @@ impl World {
             stations: Stations::default(),
             regions: Regions::default(),
             site_mail: Vec::new(),
+            slot_claims: BTreeMap::new(),
+            range: serde_json::Value::Null,
+            range_key: None,
             brain: Some(Brain::from_fields(&blob.fields)?),
             caps: HashMap::new(),
             scan_radius_m,
@@ -786,14 +804,16 @@ impl World {
                     }
                     None => None,
                 };
-                Member::Drone(DroneAgent {
+                Member::Drone(Box::new(DroneAgent {
                     body,
                     drone,
                     courier,
                     survey: None,
                     activity: "",
+                    waiting_for_slot: None,
+                    slot: None,
                     wrecked: false,
-                })
+                }))
             }
             Kind::Intruder => {
                 let route: Vec<[f64; 3]> = state
@@ -1278,6 +1298,8 @@ impl World {
             }),
             survey: None,
             activity: "",
+            waiting_for_slot: None,
+            slot: None,
             wrecked: false,
         };
         if let Some(depot) = spare_for {
@@ -1294,7 +1316,7 @@ impl World {
         };
         // On the board from this step, on the schedule from the next.
         self.place(recruit.record());
-        self.recruits.push(Member::Drone(recruit));
+        self.recruits.push(Member::Drone(Box::new(recruit)));
         Some(replacement)
     }
 
@@ -1352,6 +1374,7 @@ impl World {
     }
 
     fn clear_pending(&mut self) {
+        self.slot_claims.clear();
         self.mail.clear();
         self.scratch.clear();
         self.arrivals.clear();
@@ -1367,6 +1390,8 @@ impl World {
             schedule.schedule_repeating(member.boxed(), 0.0, order);
         }
         self.commit();
+        self.range_key = None;
+        self.refresh_range();
     }
 
     /// Step once as `tick`. For embedders that keep their own clock.
@@ -1892,11 +1917,17 @@ impl World {
         {
             return Err(rejected("there is a station there already"));
         }
+        let slots = p
+            .get("slots")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|n| (1..=100).contains(n))
+            .ok_or_else(|| rejected("a station needs slots: 1 to 100 launch and recovery slots"))?;
         Ok(Station {
             id: 0,
             name: fence_name(p),
             lat_e7: at.lat_e7,
             lon_e7: at.lon_e7,
+            slots: slots as u32,
             source: source.to_owned(),
             added_tick: self.tick,
         })
@@ -2330,15 +2361,134 @@ impl World {
             "stations": self.stations.list.iter().map(|s| {
                 let mut v = serde_json::to_value(s).unwrap_or_default();
                 v["drones"] = self.drones_at(&s.point()).into();
+                v["occupied"] = self.slots_taken(s, None).into();
+                v["waiting"] = self.waiting_for(s.id).into();
                 v
             }).collect::<Vec<_>>(),
             "rois": self.regions.list,
+            "range": self.range,
         })
     }
 
     /// The behaviour tree every drone in this world thinks with.
     pub fn brain(&self) -> &Brain {
         self.brain.as_ref().expect("a world always has a brain")
+    }
+
+    /// Slots taken at a station: drones holding one, and anything else down
+    /// on it, as of the last step, and the slots taken this step. `but` is
+    /// left out of the count.
+    pub(crate) fn slots_taken(&self, station: &Station, but: Option<AgentId>) -> u32 {
+        let at = station.point();
+        let committed = self
+            .board
+            .iter()
+            .filter(|r| Some(r.id) != but)
+            .filter(|r| {
+                r.saved.slot == Some(station.id)
+                    || r.saved.drone.as_ref().is_some_and(|d| {
+                        flight::ground_distance_m(&r.saved.pose.point(), &at)
+                            <= mission::PAD_RADIUS_M
+                            && d.grounded(&r.saved.pose, &self.terrain)
+                    })
+            })
+            .count() as u32;
+        committed + self.slot_claims.get(&station.id).copied().unwrap_or(0)
+    }
+
+    /// Drones holding off a station until one of its slots is free.
+    fn waiting_for(&self, station: u32) -> usize {
+        self.board
+            .iter()
+            .filter(|r| r.saved.waiting_for_slot == Some(station))
+            .count()
+    }
+
+    /// Work out again how far the couriers can deliver, if the stations or
+    /// the airspace (which stations can be used) have changed.
+    pub(crate) fn refresh_range(&mut self) {
+        let key = (self.stations.rev, self.airspace.rev());
+        if self.range_key == Some(key) {
+            return;
+        }
+        self.range_key = Some(key);
+        self.range = self.delivery_range();
+    }
+
+    /// How far the couriers at each depot can deliver, from its home pad,
+    /// by way of stations as they plan trips: leaving home charged to the
+    /// launch level (full if there is none), winching at the cruise height,
+    /// with the courier there that reaches furthest. Each depot's `areas`
+    /// are ellipses (`a` and `b` its foci, `[lat_e7, lon_e7]`, and `sum_m`
+    /// the most their distances to a point may add up to), and the reach
+    /// is everywhere inside any of them; `reach_m` is the furthest from
+    /// home, `direct_m` the furthest without stopping. Geofences are not
+    /// subtracted. A null `reach_m` means anywhere.
+    pub fn delivery_range(&self) -> serde_json::Value {
+        let tuning = self.settings.tuning;
+        let ds = self.settings.dispatch;
+        let charge = if tuning.launch_ppm > 0 {
+            f64::from(tuning.launch_ppm)
+        } else {
+            1_000_000.0
+        };
+        let stations = self.usable_stations();
+        let e7 = |p: &Point| [p.lat_e7, p.lon_e7];
+        let hubs: Vec<serde_json::Value> = (0..self.book.depots.len())
+            .filter_map(|depot| {
+                let best = self
+                    .board
+                    .iter()
+                    .filter_map(|r| {
+                        let c = r.saved.courier.as_ref()?;
+                        (usize::from(c.depot) == depot).then_some((r.saved.drone.as_ref()?, c))
+                    })
+                    .map(|(d, c)| {
+                        let range = Range::new(&tuning, d.cruise_cms);
+                        let climb = f64::from(c.cruise_agl_m + ds.takeoff_m);
+                        let work = f64::from(tuning.winch.hold_ms(
+                            mission::WINCH_DELIVER,
+                            0.0,
+                            0.0,
+                            f64::from(c.cruise_agl_m),
+                        )) / 1000.0;
+                        (range.reach_m(charge, climb, work), d, range, climb, work)
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0))?;
+                let (direct, drone, range, climb_m, work) = best;
+                let planner = Planner {
+                    range,
+                    stations: stations.clone(),
+                    climb_m,
+                    home: &drone.home,
+                    charge,
+                };
+                let (areas, reach) = match planner.extent(work) {
+                    None => (Vec::new(), None),
+                    Some(areas) => {
+                        let reach = areas
+                            .iter()
+                            .map(|a| a.farthest_m(&drone.home))
+                            .fold(0.0, f64::max);
+                        (areas, Some(libm::round(reach)))
+                    }
+                };
+                Some(serde_json::json!({
+                    "depot": self.book.depots[depot],
+                    "home": e7(&drone.home),
+                    "direct_m": direct.is_finite().then(|| libm::round(direct / 2.0)),
+                    "reach_m": reach,
+                    "areas": areas.iter().map(|a| serde_json::json!({
+                        "a": e7(&a.a), "b": e7(&a.b), "sum_m": libm::round(a.sum_m),
+                    })).collect::<Vec<_>>(),
+                }))
+            })
+            .collect();
+        serde_json::json!({
+            "stations_rev": self.stations.rev,
+            "airspace_rev": self.airspace.rev(),
+            "hubs": hubs,
+        })
     }
 
     /// Drones on the ground on the pad at `point`.
@@ -2531,6 +2681,7 @@ impl World {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
             self.last_seen = pairs.into_iter().map(|[o, t, at]| ((o, t), at)).collect();
         }
+        self.refresh_range();
         Ok(())
     }
 

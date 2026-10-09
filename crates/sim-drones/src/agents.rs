@@ -78,6 +78,8 @@ impl Body {
             courier: None,
             survey: None,
             activity: String::new(),
+            waiting_for_slot: None,
+            slot: None,
         }
     }
 
@@ -101,6 +103,10 @@ pub struct DroneAgent {
     pub survey: Option<Survey>,
     /// What it is doing, as of its last step; see [`Saved::activity`].
     pub activity: &'static str,
+    /// Holding off this station until one of its slots is free.
+    pub waiting_for_slot: Option<u32>,
+    /// Holding a slot at this station; see [`Saved::slot`].
+    pub slot: Option<u32>,
     /// Crashed: off the board, and off the schedule after this step.
     pub wrecked: bool,
 }
@@ -138,6 +144,7 @@ impl Agent for Dispatcher {
         let world = world(state);
         world.update_airspace();
         world.update_sites();
+        world.refresh_range();
         world.place_orders();
     }
 }
@@ -182,6 +189,8 @@ impl DroneAgent {
         saved.courier = self.courier.clone();
         saved.survey = self.survey.clone();
         saved.activity = self.activity.to_owned();
+        saved.waiting_for_slot = self.waiting_for_slot;
+        saved.slot = self.slot;
         self.body.record(saved)
     }
 
@@ -408,6 +417,10 @@ impl DroneAgent {
                 }
                 true
             }
+            Node::WaitForSlot => {
+                self.wait_for_slot(world);
+                true
+            }
             Node::Fly => self.fly(world, tick),
             Node::FinishTrip => {
                 self.finish_trip(world, tick);
@@ -600,6 +613,96 @@ impl DroneAgent {
         }
     }
 
+    /// Hold off a station whose slots are all taken, and carry on down when
+    /// one comes free. A drone coming in to land on a station takes a slot
+    /// as it comes within [`stations::APPROACH_M`], and keeps it until it
+    /// takes off again. One on its low-battery failsafe lands regardless.
+    fn wait_for_slot(&mut self, world: &mut World) {
+        let id = self.body.id;
+        // Gone from the station it held a slot at: it is free again.
+        if let Some(held) = self.slot {
+            let keep = world
+                .stations
+                .list
+                .iter()
+                .find(|s| s.id == held)
+                .is_some_and(|s| {
+                    let at = s.point();
+                    self.drone.grounded(&self.body.pose, &world.terrain)
+                        || stations::landing_on(&self.drone, &at)
+                });
+            if !keep {
+                self.slot = None;
+            }
+        }
+        // On its failsafe there is no charge left to wait with: it lands
+        // anyway, a slot free or not.
+        if self.drone.failsafe {
+            if self.waiting_for_slot.take().is_some() && self.drone.mode == Mode::Loiter {
+                self.drone.mode = Mode::Auto;
+            }
+            return;
+        }
+        if let Some(waiting) = self.waiting_for_slot {
+            if self.drone.mode != Mode::Loiter {
+                // Something else took over (the failsafe, a ground station).
+                self.waiting_for_slot = None;
+                return;
+            }
+            let station = world
+                .stations
+                .list
+                .iter()
+                .find(|s| s.id == waiting)
+                .cloned();
+            match station {
+                Some(s) if world.slots_taken(&s, Some(id)) >= s.slots => {}
+                Some(s) => {
+                    self.take_slot(world, s.id);
+                    self.waiting_for_slot = None;
+                    self.drone.mode = Mode::Auto;
+                }
+                None => {
+                    self.waiting_for_slot = None;
+                    self.drone.mode = Mode::Auto;
+                }
+            }
+            return;
+        }
+        if world.stations.is_empty() || self.drone.mode != Mode::Auto || self.drone.arrived {
+            return;
+        }
+        let Some(item) = self.drone.mission.get(usize::from(self.drone.mission_seq)) else {
+            return;
+        };
+        let at = Point {
+            lat_e7: item.x,
+            lon_e7: item.y,
+            alt_mm: 0,
+        };
+        // Coming in to land at a station it has no slot at yet.
+        let Some(station) = world.stations.at(&at).cloned() else {
+            return;
+        };
+        if item.command != mission::NAV_LAND
+            || self.slot == Some(station.id)
+            || flight::ground_distance_m(&self.body.pose.point(), &at) > stations::APPROACH_M
+        {
+            return;
+        }
+        if world.slots_taken(&station, Some(id)) >= station.slots {
+            self.drone.mode = Mode::Loiter;
+            self.waiting_for_slot = Some(station.id);
+        } else {
+            self.take_slot(world, station.id);
+        }
+    }
+
+    fn take_slot(&mut self, world: &mut World, station: u32) {
+        *world.slot_claims.entry(station).or_default() += 1;
+        self.slot = Some(station);
+    }
+
     /// On a station's pad (not its own home pad).
     fn at_station(&self, world: &World) -> bool {
         !world.stations.is_empty()
@@ -686,7 +789,25 @@ impl DroneAgent {
         }
         let here = self.body.pose.point();
         let (station, at) = {
-            let planner = self.planner(world, f64::from(self.drone.battery_ppm));
+            let mut planner = self.planner(world, f64::from(self.drone.battery_ppm));
+            // Somewhere with a slot free if it can, so it need not hold off.
+            let free: Vec<Point> = planner
+                .stations
+                .iter()
+                .copied()
+                .filter(|p| {
+                    world
+                        .stations
+                        .at(p)
+                        .is_some_and(|s| world.slots_taken(s, Some(self.body.id)) < s.slots)
+                })
+                .collect();
+            if !free.is_empty() {
+                let all = std::mem::replace(&mut planner.stations, free);
+                if planner.nearest_in_reach(&here).is_none() {
+                    planner.stations = all;
+                }
+            }
             if planner.home_in_reach(&here) {
                 return false;
             }
@@ -907,7 +1028,7 @@ impl PoiAgent {
 /// Any agent but the dispatcher, before it joins a schedule.
 #[derive(Debug, Clone)]
 pub(crate) enum Member {
-    Drone(DroneAgent),
+    Drone(Box<DroneAgent>),
     Ground(GroundAgent),
     Intruder(IntruderAgent),
     Poi(PoiAgent),
@@ -934,7 +1055,7 @@ impl Member {
 
     pub(crate) fn boxed(self) -> Box<dyn Agent> {
         match self {
-            Member::Drone(a) => Box::new(a),
+            Member::Drone(a) => a,
             Member::Ground(a) => Box::new(a),
             Member::Intruder(a) => Box::new(a),
             Member::Poi(a) => Box::new(a),
@@ -953,14 +1074,16 @@ impl Member {
         body.callsign = saved.callsign;
         let missing = |what: &str| format!("a {} without {what} state", kind.name());
         Ok(match kind {
-            Kind::Drone => Member::Drone(DroneAgent {
+            Kind::Drone => Member::Drone(Box::new(DroneAgent {
                 body,
                 drone: saved.drone.ok_or_else(|| missing("drone"))?,
                 courier: saved.courier,
                 survey: saved.survey,
                 activity: "",
+                waiting_for_slot: saved.waiting_for_slot,
+                slot: saved.slot,
                 wrecked: false,
-            }),
+            })),
             Kind::Intruder => Member::Intruder(IntruderAgent {
                 body,
                 route: saved.route.ok_or_else(|| missing("route"))?,

@@ -1462,7 +1462,7 @@ fn far_blob(address_east: f64, stations_east: &[f64], rate_per_day: f64) -> Scen
         .iter()
         .map(|e| {
             let (lon, lat) = at(*e, 0.0);
-            serde_json::json!({ "name": format!("{e:.0} E"), "lat": lat, "lon": lon })
+            serde_json::json!({ "name": format!("{e:.0} E"), "lat": lat, "lon": lon, "slots": 1 })
         })
         .collect();
     blob.fields = serde_json::json!({
@@ -1549,8 +1549,7 @@ fn stations_are_added_and_removed_by_intent_and_bad_ones_are_refused() {
     model.reset(&far_blob(1_600.0, &[], 0.0)).unwrap();
     let add = |model: &mut Drones, east: f64| {
         let (lon, lat) = at(east, 0.0);
-        let payload =
-            serde_json::json!({ "lat": lat, "lon": lon, "name": "Pad", "source": "dashboard" });
+        let payload = serde_json::json!({ "lat": lat, "lon": lon, "name": "Pad", "source": "dashboard", "slots": 2 });
         let i = intent(model, 5, codes::STATION_ADD, payload);
         model.apply_intent(&Intent { agent: None, ..i })
     };
@@ -1561,14 +1560,27 @@ fn stations_are_added_and_removed_by_intent_and_bad_ones_are_refused() {
     );
     let none = serde_json::json!({ "lat": 51.5, "lon": -0.12 });
     let mut bad = intent(&model, 5, codes::STATION_ADD, none);
-    bad.payload = serde_json::json!({ "lat": 51.5 });
+    bad.payload = serde_json::json!({ "lat": 51.5, "slots": 1 });
     assert!(model.apply_intent(&bad).is_err());
+    // Slots must be given, 1 to 100.
+    for slots in [serde_json::Value::Null, 0.into(), 101.into()] {
+        let (lon, lat) = at(-900.0, 0.0);
+        bad.payload = serde_json::json!({ "lat": lat, "lon": lon, "slots": slots });
+        assert!(model
+            .apply_intent(&Intent {
+                agent: None,
+                ..bad.clone()
+            })
+            .is_err());
+    }
     let reports = run(&mut model, 1, 1);
     let station = model.world().stations().list[0].clone();
     assert_eq!(
         (station.name.as_str(), station.source.as_str()),
         ("Pad", "dashboard")
     );
+    assert_eq!(station.slots, 2);
+    assert_eq!(model.overlays()["stations"][0]["slots"], 2);
     assert!(reports
         .iter()
         .any(|r| r.kind == ReportKind::Station && r.detail["action"] == "add"));
@@ -1742,4 +1754,112 @@ fn a_packs_own_behaviour_tree_replaces_the_default_and_a_bad_one_stops_it_loadin
     ] } });
     let err = Drones::new(&blob).err().expect("refused").to_string();
     assert!(err.contains("world/behaviour.json"), "{err}");
+}
+
+#[test]
+fn the_delivery_range_reaches_further_with_a_station_and_shrinks_back_when_it_goes() {
+    let mut model = drones(Profile::Gold);
+    model.reset(&far_blob(1_600.0, &[], 0.0)).unwrap();
+    run(&mut model, 1, 1);
+    let hub = |model: &Drones| model.overlays()["range"]["hubs"][0].clone();
+    let alone = hub(&model);
+    assert_eq!(alone["depot"], "HUB");
+    let direct = alone["direct_m"].as_f64().unwrap();
+    assert!((alone["reach_m"].as_f64().unwrap() - direct).abs() <= 1.0);
+    assert_eq!(alone["areas"].as_array().unwrap().len(), 1);
+    // The address 1600 m out is beyond one charge there and back.
+    assert!(direct < 1_600.0, "{direct}");
+
+    let (lon, lat) = at(1_000.0, 0.0);
+    let payload = serde_json::json!({ "lat": lat, "lon": lon, "slots": 1 });
+    let i = intent(&model, 5, codes::STATION_ADD, payload);
+    model.apply_intent(&Intent { agent: None, ..i }).unwrap();
+    run(&mut model, 2, 1);
+    let with = hub(&model);
+    let reach = with["reach_m"].as_f64().unwrap();
+    assert!(reach > 1_600.0, "{reach}");
+    // The planner and the published range agree: it can be delivered now.
+    let point = |v: &serde_json::Value| flight::Point {
+        lat_e7: v[0].as_i64().unwrap() as i32,
+        lon_e7: v[1].as_i64().unwrap() as i32,
+        alt_mm: 0,
+    };
+    let areas: Vec<sim_drones::stations::Area> = with["areas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| sim_drones::stations::Area {
+            a: point(&a["a"]),
+            b: point(&a["b"]),
+            sum_m: a["sum_m"].as_f64().unwrap(),
+        })
+        .collect();
+    let address = &model.world().book().addresses[0];
+    let address = flight::Point {
+        lat_e7: address.lat_e7,
+        lon_e7: address.lon_e7,
+        alt_mm: 0,
+    };
+    assert!(areas.iter().any(|a| a.contains(&address)));
+
+    let id = model.world().stations().list[0].id;
+    let i = intent(
+        &model,
+        5,
+        codes::STATION_REMOVE,
+        serde_json::json!({ "id": id }),
+    );
+    model.apply_intent(&Intent { agent: None, ..i }).unwrap();
+    run(&mut model, 3, 1);
+    assert_eq!(hub(&model)["reach_m"], alone["reach_m"]);
+}
+
+#[test]
+fn two_couriers_share_a_one_slot_station_one_holding_off_while_the_other_is_down() {
+    // Orders for both at once, so they meet there.
+    let mut blob = far_blob(1_600.0, &[1_000.0], 5_000.0);
+    blob.config
+        .model
+        .insert("charge_pct_s".into(), Param::Float(1.0));
+    blob.agents.push(SeedAgent {
+        id: Some(7),
+        kind: "drone".into(),
+        cell: None,
+        lon: Some(at(0.0, -80.0).0),
+        lat: Some(at(0.0, -80.0).1),
+        state: serde_json::json!({ "sysid": 7, "callsign": "COURIER-2", "depot": "HUB", "cruise_agl_m": 50 }),
+    });
+    let mut model = drones(Profile::Gold);
+    model.reset(&blob).unwrap();
+    let station = model.world().stations().list[0].clone();
+    let mut held = false;
+    let mut reports = Vec::new();
+    for tick in 1..=20_000 {
+        model.step(tick);
+        model.drain_reports(&mut reports);
+        let down: Vec<bool> = [5, 7]
+            .iter()
+            .filter_map(|id| {
+                let r = record(&model, *id);
+                let d = r.saved.drone.as_ref().unwrap();
+                (near(r, 1_000.0) && d.grounded(&r.saved.pose, model.world().terrain()))
+                    .then_some(d.failsafe)
+            })
+            .collect();
+        // Over the one slot only for a drone with no charge left to wait.
+        assert!(
+            down.len() <= 1 || down.contains(&true),
+            "two drones down on a one-slot station at tick {tick}"
+        );
+        held |= [5, 7]
+            .iter()
+            .any(|id| record(&model, *id).saved.waiting_for_slot == Some(station.id));
+    }
+    assert!(held, "one of them had to hold off");
+    let delivered = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::Delivery)
+        .count();
+    assert!(delivered >= 2, "{delivered}");
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash));
 }

@@ -39,6 +39,7 @@
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
     <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
     <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed"><input type="checkbox" data-layer="range" checked> Delivery range</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
   </fieldset>
   <div class="map-wrap">
@@ -48,6 +49,7 @@
     <noscript><p class="dim">The map needs JavaScript. Cell inspection below works without it.</p></noscript>
   </div>
   <ul class="map-key" aria-label="Map key">
+    <li><span class="swatch range" aria-hidden="true"></span>Delivery range: where couriers can deliver and get back, by way of stations</li>
     <li>
       <canvas class="sym moving" data-sidc="SFAPMHQ--------" data-heading="45" aria-hidden="true"></canvas>
       Friendly drone (air), with its direction of movement; named while moving, with what it is doing

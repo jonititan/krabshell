@@ -1290,7 +1290,14 @@ async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
 
     for (body, why) in [
         (json!({ "lat": 51.5313, "name": "x" }), "no lon"),
-        (json!({ "lat": 51.5313, "lon": -0.1527 }), "no name"),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "slots": 2 }),
+            "no name",
+        ),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "x" }),
+            "no slots",
+        ),
         (
             json!({ "lat": 51.5313, "lon": -0.1527, "name": "  " }),
             "a blank name",
@@ -1309,7 +1316,7 @@ async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
         &h,
         post(
             "/api/v1/stations",
-            json!({ "lat": 54.93, "lon": 23.85, "name": "Kaunas" }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "Kaunas", "slots": 2 }),
         ),
     )
     .await;
@@ -1323,7 +1330,7 @@ async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
         &h,
         post(
             "/api/v1/stations",
-            json!({ "lat": 51.5313, "lon": -0.1527, "name": "Regent's Park" }),
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "Regent's Park", "slots": 3 }),
         ),
     )
     .await;
@@ -1334,6 +1341,11 @@ async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
         handled_verb(&h, &accepted["id"]).await.as_deref(),
         Some("Custom(120)")
     );
+    // And the model has it, with its slots.
+    let (_, listed, _) = call(&h, get("/api/v1/stations")).await;
+    assert_eq!(listed["stations"][0]["name"], "Regent's Park");
+    assert_eq!(listed["stations"][0]["slots"], 3);
+    assert_eq!(listed["stations"][0]["occupied"], 0);
 
     // Only a station the model lists can be removed.
     let (status, problem, _) = call(&h, delete("/api/v1/stations/999")).await;

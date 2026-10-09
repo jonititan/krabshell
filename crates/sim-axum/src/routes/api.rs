@@ -1006,8 +1006,12 @@ pub struct StationsBody {
     /// Whether the model publishes stations at all.
     pub available: bool,
     /// The launch and recovery stations, as the model publishes them, each
-    /// with `drones`: how many are on the ground at it now.
+    /// with its `slots`, `occupied` (slots taken), `waiting` (drones holding
+    /// off for one) and `drones` (on the ground at it now).
     pub stations: Vec<serde_json::Value>,
+    /// How far each hub's couriers can deliver, by way of the stations, as
+    /// the model publishes it (null without one).
+    pub range: serde_json::Value,
     /// The latest station reports (added, removed), newest first.
     pub recent: Vec<Report>,
     /// Intents the model refused lately, as in [`GeofencesBody`].
@@ -1043,6 +1047,7 @@ pub async fn stations_list(State(state): State<AppState>) -> Json<StationsBody> 
         mode: mode_of(&view),
         available: list.is_some(),
         stations: list.cloned().unwrap_or_default(),
+        range: view.overlays["range"].clone(),
         recent: recent_reports(&view, &[ReportKind::Station]),
         refused: refused(&view),
     })
@@ -1095,12 +1100,19 @@ fn place(body: &serde_json::Value, what: &str) -> ApiResult<(f64, f64, String)> 
     Ok((lat, lon, name))
 }
 
-/// The `STATION_ADD` payload for a body of `{"lat", "lon", "name"}`, and
-/// where it is.
+/// The `STATION_ADD` payload for a body of `{"lat", "lon", "name",
+/// "slots"}` (1 to 100 launch and recovery slots), and where it is.
 fn station_payload(body: &serde_json::Value) -> ApiResult<(f64, f64, serde_json::Value)> {
     let (lat, lon, name) = place(body, "station")?;
+    let slots = body
+        .get("slots")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|n| (1..=100).contains(n))
+        .ok_or_else(|| {
+            ApiError::bad_request("a station needs slots: 1 to 100 launch and recovery slots")
+        })?;
     let payload = serde_json::json!({
-        "lat": lat, "lon": lon, "name": name, "source": "dashboard",
+        "lat": lat, "lon": lon, "name": name, "slots": slots, "source": "dashboard",
     });
     Ok((lat, lon, payload))
 }
@@ -1503,12 +1515,13 @@ mod tests {
 
     #[test]
     fn a_new_station_goes_to_the_model_as_the_dashboard_s() {
-        let body = json!({ "lat": 54.93, "lon": 23.85, "name": "  Šilainiai ", "x": 1 });
+        let body =
+            json!({ "lat": 54.93, "lon": 23.85, "name": "  Šilainiai ", "slots": 4, "x": 1 });
         let (lat, lon, payload) = station_payload(&body).unwrap();
         assert_eq!((lat, lon), (54.93, 23.85));
         assert_eq!(
             payload,
-            json!({ "lat": 54.93, "lon": 23.85, "name": "Šilainiai", "source": "dashboard" })
+            json!({ "lat": 54.93, "lon": 23.85, "name": "Šilainiai", "slots": 4, "source": "dashboard" })
         );
     }
 
@@ -1537,6 +1550,10 @@ mod tests {
             json!({ "lat": 54.93, "lon": 23.85, "name": "   " }),
             json!({ "lat": 54.93, "lon": 23.85, "name": 7 }),
             json!({ "lat": 54.93, "lon": 23.85, "name": "n".repeat(81) }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "x" }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "x", "slots": 0 }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "x", "slots": 101 }),
+            json!({ "lat": 54.93, "lon": 23.85, "name": "x", "slots": 2.5 }),
         ] {
             assert!(station_payload(&body).is_err(), "{body}");
         }

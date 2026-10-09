@@ -20,6 +20,8 @@
   const draftTitle = $('mark-title');
   const nameInput = $('mark-name');
   const radiusField = $('mark-radius-field');
+  const slotsField = $('mark-slots-field');
+  const slotsInput = $('mark-slots');
   const radiusInput = $('mark-radius');
   const summary = $('mark-summary');
   const draftError = $('mark-error');
@@ -191,6 +193,7 @@
     draftTitle.textContent = roi ? 'New region of interest' : 'New launch and recovery station';
     addButton.textContent = roi ? 'Add region' : 'Add station';
     radiusField.hidden = !roi;
+    slotsField.hidden = roi;
     if (roi && draft.placed) radiusInput.value = String(draft.radius);
     renderSummary();
     map.redraw();
@@ -238,8 +241,13 @@
     let path;
     let body;
     if (draft.kind === 'station') {
+      const slots = Number(slotsInput.value.trim());
+      if (!Number.isInteger(slots) || slots < 1 || slots > 100) {
+        showError('Give the station 1 to 100 launch and recovery slots.');
+        return;
+      }
       path = '/api/v1/stations';
-      body = { lat: draft.at[1], lon: draft.at[0], name };
+      body = { lat: draft.at[1], lon: draft.at[0], name, slots };
     } else {
       const r = Number(radiusInput.value.trim() || draft.radius);
       if (!Number.isFinite(r) || r < MIN_RADIUS_M || r > MAX_RADIUS_M) {
@@ -271,6 +279,7 @@
       }
       nameInput.value = '';
       radiusInput.value = '';
+      slotsInput.value = '';
       setMode(mode);
       refresh();
       map.refreshOverlays();
@@ -437,18 +446,40 @@
       ...list.map((s) => {
         const tr = row('station', s, 300);
         const [lon, lat] = degrees(s);
-        const n = Number(s.drones);
+        const used = Number(s.occupied);
+        const slots = Number(s.slots);
+        const waiting = Number(s.waiting);
         tr.append(
           nameCell(s, 'station'),
           cell(Number.isFinite(lat) ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : '', 'mono small'),
           cell(SOURCES[s.source] || s.source || ''),
           cell(simTime(s.added_tick), 'mono small'),
-          cell(Number.isFinite(n) ? String(n) : ''),
+          cell(Number.isFinite(slots) ? `${Number.isFinite(used) ? used : 0} of ${slots}` : ''),
+          cell(Number.isFinite(waiting) && waiting > 0 ? String(waiting) : ''),
           removeButton('station', s),
         );
         return tr;
       }),
     );
+  }
+
+  // Each hub's delivery reach, and how much of it the stations add.
+  function renderRange(range) {
+    const hubs = (range && range.hubs) || [];
+    const out = $('range-summary');
+    if (hubs.length === 0) {
+      out.textContent = 'No delivery hubs.';
+      return;
+    }
+    out.textContent = hubs
+      .map((h) => {
+        if (h.reach_m === null || h.reach_m === undefined) return `${h.depot}: anywhere (the battery never runs down)`;
+        const extra = Number(h.reach_m) > Number(h.direct_m) + 1
+          ? ` (${fmtLength(Number(h.direct_m))} on one charge)`
+          : ' (one charge; no station extends it)';
+        return `${h.depot}: up to ${fmtLength(Number(h.reach_m))}${extra}`;
+      })
+      .join(' · ');
   }
 
   // The drones on their way to survey a region, by callsign where known.
@@ -579,6 +610,7 @@
         stations = s;
         checkPending(s);
         renderStations(s);
+        renderRange(s.range);
       }
       if (r) {
         rois = r;

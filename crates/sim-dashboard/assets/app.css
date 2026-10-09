@@ -418,6 +418,10 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 13px;
 .draft[hidden], .draft [hidden] { display: none; }
 
 .swatch { width: 22px; height: 14px; border-radius: 3px; flex: none; }
+.swatch.range {
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border: 2px dashed var(--ok);
+}
 .swatch.fence {
   background: repeating-linear-gradient(-45deg, var(--bad) 0 2px, color-mix(in srgb, var(--panel) 60%, transparent) 2px 6px);
   border: 2px solid var(--bad);

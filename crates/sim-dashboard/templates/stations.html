@@ -42,6 +42,7 @@
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
     <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
     <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed"><input type="checkbox" data-layer="range" checked> Delivery range</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
   </fieldset>
 
@@ -67,6 +68,9 @@
       <label>Name
         <input id="mark-name" type="text" size="24" maxlength="80" placeholder="required" autocomplete="off">
       </label>
+      <label id="mark-slots-field" title="How many drones can be down on it, or coming down onto it, at once">Launch and recovery slots
+        <input id="mark-slots" type="text" inputmode="numeric" size="4" placeholder="1 to 100" autocomplete="off">
+      </label>
       <label id="mark-radius-field">Radius, m
         <input id="mark-radius" type="text" inputmode="decimal" size="8" placeholder="10 to 5000" autocomplete="off">
       </label>
@@ -80,6 +84,7 @@
   </form>
 
   <ul class="map-key" aria-label="Map key">
+    <li><span class="swatch range" aria-hidden="true"></span>Delivery range: where couriers can deliver and get back, by way of stations</li>
     <li>
       <canvas class="sym" data-sidc="SFGPIBA---H----" aria-hidden="true"></canvas>
       Launch and recovery station, with the drones on the ground at it
@@ -119,7 +124,8 @@
       <thead>
         <tr>
           <th>Station</th><th>Position</th><th>Added by</th><th>Added</th>
-          <th title="Drones on the ground at the station now">On the ground</th>
+          <th title="Slots taken (drones down on it or coming in to land) of the station's launch and recovery slots">Slots in use</th>
+          <th title="Drones holding off the station until a slot is free">Waiting</th>
           <th><span class="visually-hidden">Remove</span></th>
         </tr>
       </thead>
@@ -127,6 +133,14 @@
     </table>
   </div>
   <p id="station-empty" class="dim">No stations.</p>
+  <h3>Delivery range</h3>
+  <p class="dim small">
+    How far each hub's couriers can deliver and get back, stopping to charge
+    at stations on the way: worked out again whenever a station is added or
+    removed, or a geofence changes which can be used. Geofences themselves
+    are not taken out of it.
+  </p>
+  <p id="range-summary" class="small">No delivery hubs.</p>
 </section>
 
 <section class="panel">

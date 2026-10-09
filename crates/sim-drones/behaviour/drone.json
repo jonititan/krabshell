@@ -1,11 +1,15 @@
 {
-  "description": "Every drone, every tick: keep clear of geofences if the simulation flies it, obey its commands, and fly. Back from a trip, hand back any order it did not deliver. If the simulation flies it: low on battery and out of reach of home, land at the nearest station instead; charged at a station away from home, fly home. Free for work, take the oldest order it can reach (by way of stations if it must), or else survey the region of interest most overdue a look. Log any geofence it has flown into, and look around with the camera when it is due.",
+  "description": "Every drone, every tick: keep clear of geofences if the simulation flies it, obey its commands, hold off a station with no slot free, and fly. Back from a trip, hand back any order it did not deliver. If the simulation flies it: low on battery and out of reach of home, land at the nearest station instead; charged at a station away from home, fly home. Free for work, take the oldest order it can reach (by way of stations if it must), or else survey the region of interest most overdue a look. Log any geofence it has flown into, and look around with the camera when it is due.",
   "root": { "Sequence": [
     { "AlwaysSucceed": { "Sequence": [
       { "Action": "FlownBySimulation" },
       { "Action": "AvoidGeofences" }
     ] } },
     { "Action": "ObeyCommands" },
+    { "AlwaysSucceed": { "Sequence": [
+      { "Action": "FlownBySimulation" },
+      { "Action": "WaitForSlot" }
+    ] } },
     { "Action": "Fly" },
     { "AlwaysSucceed": { "Sequence": [
       { "Action": "BackFromTrip" },

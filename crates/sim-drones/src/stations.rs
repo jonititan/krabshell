@@ -24,6 +24,29 @@ use crate::mission::{MissionItem, Tuning, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT};
 
 const FRAME_TERRAIN: u8 = 11;
 
+/// How near a station a drone coming in to land on it takes one of its
+/// slots, or holds off until one is free, metres.
+pub const APPROACH_M: f64 = 50.0;
+
+/// Is the drone flying a mission whose current item lands at `at`?
+pub fn landing_on(drone: &crate::mission::Drone, at: &Point) -> bool {
+    drone.mode == crate::mission::Mode::Auto
+        && drone
+            .mission
+            .get(usize::from(drone.mission_seq))
+            .is_some_and(|i| {
+                i.command == NAV_LAND
+                    && flight::ground_distance_m(
+                        &Point {
+                            lat_e7: i.x,
+                            lon_e7: i.y,
+                            alt_mm: 0,
+                        },
+                        at,
+                    ) <= crate::mission::PAD_RADIUS_M
+            })
+}
+
 /// How much more than the straight-line estimate a hop is allowed to need.
 pub const SAFETY: f64 = 1.25;
 
@@ -38,6 +61,9 @@ pub struct Station {
     pub name: String,
     pub lat_e7: i32,
     pub lon_e7: i32,
+    /// Launch and recovery slots: how many drones can be down on it (or
+    /// coming down onto it) at once.
+    pub slots: u32,
     /// Who added it: `scenario`, `dashboard` or `intent`.
     pub source: String,
     pub added_tick: u64,
@@ -58,6 +84,9 @@ impl Station {
 pub struct Stations {
     pub list: Vec<Station>,
     pub next_id: u32,
+    /// Bumped whenever a station is added or removed.
+    #[serde(default)]
+    pub rev: u64,
 }
 
 impl Stations {
@@ -75,10 +104,12 @@ impl Stations {
     pub fn add(&mut self, station: Station) {
         self.list.push(station);
         self.list.sort_by_key(|s| s.id);
+        self.rev += 1;
     }
 
     pub fn remove(&mut self, id: u32) -> Option<Station> {
         let at = self.list.iter().position(|s| s.id == id)?;
+        self.rev += 1;
         Some(self.list.remove(at))
     }
 
@@ -126,6 +157,18 @@ impl Range {
     /// down again at the end, and `work_s` hovering, with the margin.
     pub fn need(&self, metres: f64, climb_m: f64, work_s: f64) -> f64 {
         SAFETY * (metres * self.per_m + 2.0 * climb_m * self.per_m_up + work_s * self.per_s)
+    }
+
+    /// The furthest a hop can go level, metres, starting with `charge`,
+    /// climbing `climb_m` and doing `work_s` at the far end, the reserve
+    /// kept and the margin allowed. Infinite if the battery never runs down.
+    pub fn reach_m(&self, charge: f64, climb_m: f64, work_s: f64) -> f64 {
+        if self.endless() {
+            return f64::INFINITY;
+        }
+        let left =
+            (charge - self.reserve) / SAFETY - 2.0 * climb_m * self.per_m_up - work_s * self.per_s;
+        (left / self.per_m).max(0.0)
     }
 
     /// Can a hop needing `need` be flown starting with `charge`?
@@ -190,17 +233,10 @@ impl Planner<'_> {
         if self.stations.is_empty() || !r.charging {
             return direct_anyway.then(Trip::direct);
         }
-        // Node 0 is home, the rest the stations.
-        let mut nodes = vec![*self.home];
-        nodes.extend(self.stations.iter().copied());
+        let Chains { nodes, out, back } = self.chains();
         let n = nodes.len();
         let d = |a: usize, b: usize| flight::ground_distance_m(&nodes[a], &nodes[b]);
-        let cap = |a: usize| if a == 0 { self.charge } else { FULL };
-        let hop = |a: usize, b: usize| r.fits(r.need(d(a, b), self.climb_m, 0.0), cap(a));
-        // Out from home, and (on the reverse graph) back to it. On the way
-        // back home is only ever the end.
-        let out = shortest(n, 0, |a, b| hop(a, b).then(|| d(a, b)));
-        let back = shortest(n, 0, |a, b| (b != 0 && hop(b, a)).then(|| d(b, a)));
+        let cap = |a: usize| self.cap(a);
         let mut best: Option<(f64, usize, usize)> = None;
         for c1 in 0..n {
             let Some(to_c1) = out.0[c1] else { continue };
@@ -244,6 +280,64 @@ impl Planner<'_> {
             trip.back.push((nodes[s], leave(d(s, next), 0.0)));
         }
         Some(trip)
+    }
+
+    /// What a node of [`Planner::chains`] starts a hop with: what the drone
+    /// has at home (node 0), a full charge at a station.
+    fn cap(&self, node: usize) -> f64 {
+        if node == 0 {
+            self.charge
+        } else {
+            FULL
+        }
+    }
+
+    /// Home (node 0) and the stations, with the shortest chains of hops
+    /// out from home to each, and (on the reverse graph) back home from
+    /// each. On the way back home is only ever the end.
+    fn chains(&self) -> Chains {
+        let r = &self.range;
+        let mut nodes = vec![*self.home];
+        nodes.extend(self.stations.iter().copied());
+        let n = nodes.len();
+        let d = |a: usize, b: usize| flight::ground_distance_m(&nodes[a], &nodes[b]);
+        let hop = |a: usize, b: usize| r.fits(r.need(d(a, b), self.climb_m, 0.0), self.cap(a));
+        let out = shortest(n, 0, |a, b| hop(a, b).then(|| d(a, b)));
+        let back = shortest(n, 0, |a, b| (b != 0 && hop(b, a)).then(|| d(b, a)));
+        Chains { nodes, out, back }
+    }
+
+    /// Everywhere a trip from home can do `work_s` of work and come back,
+    /// by way of stations as [`Planner::trip`] would: the union of the
+    /// [`Area`]s, one for each station (or home) it can get out to and each
+    /// it can get home from, within one charge between them. `None` if
+    /// anywhere can be reached.
+    pub fn extent(&self, work_s: f64) -> Option<Vec<Area>> {
+        let r = &self.range;
+        if r.endless() {
+            return None;
+        }
+        let stations = if r.charging { self.stations.len() } else { 0 };
+        let planner = Planner {
+            stations: self.stations[..stations].to_vec(),
+            home: self.home,
+            ..*self
+        };
+        let Chains { nodes, out, back } = planner.chains();
+        let mut areas = Vec::new();
+        for c1 in (0..nodes.len()).filter(|c| out.0[*c].is_some()) {
+            let reach = r.reach_m(planner.cap(c1), self.climb_m, work_s);
+            for c2 in (0..nodes.len()).filter(|c| back.0[*c].is_some()) {
+                if flight::ground_distance_m(&nodes[c1], &nodes[c2]) <= reach {
+                    areas.push(Area {
+                        a: nodes[c1],
+                        b: nodes[c2],
+                        sum_m: reach,
+                    });
+                }
+            }
+        }
+        Some(areas)
     }
 
     /// The way home from where it stands, by way of stations if one charge
@@ -297,6 +391,54 @@ impl Planner<'_> {
     pub fn home_in_reach(&self, here: &Point) -> bool {
         let d = flight::ground_distance_m(here, self.home);
         self.range.endless() || self.range.need(d, 0.0, 0.0) <= self.charge
+    }
+}
+
+/// See [`Planner::chains`].
+struct Chains {
+    nodes: Vec<Point>,
+    out: (Vec<Option<f64>>, Vec<usize>),
+    back: (Vec<Option<f64>>, Vec<usize>),
+}
+
+/// Somewhere a trip can reach: every point whose distances to `a` and to
+/// `b` add up to no more than `sum_m`, an ellipse with them as its foci
+/// (a circle when they are the same). It sets out from `a` and comes back
+/// to `b`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Area {
+    pub a: Point,
+    pub b: Point,
+    pub sum_m: f64,
+}
+
+impl Area {
+    pub fn contains(&self, p: &Point) -> bool {
+        flight::ground_distance_m(&self.a, p) + flight::ground_distance_m(p, &self.b) <= self.sum_m
+    }
+
+    /// The furthest any point of the ellipse is from `from`, metres:
+    /// from its centre, out along its long axis or across it.
+    pub fn farthest_m(&self, from: &Point) -> f64 {
+        let (bx, by) = flight::offset_m(self.a.lat_e7, self.a.lon_e7, self.b.lat_e7, self.b.lon_e7);
+        let (fx, fy) = flight::offset_m(self.a.lat_e7, self.a.lon_e7, from.lat_e7, from.lon_e7);
+        let (cx, cy) = (bx / 2.0, by / 2.0);
+        let half = self.sum_m / 2.0;
+        let focal = libm::sqrt(bx * bx + by * by) / 2.0;
+        let minor = libm::sqrt((half * half - focal * focal).max(0.0));
+        let (ux, uy) = if focal > 1e-9 {
+            (bx / (2.0 * focal), by / (2.0 * focal))
+        } else {
+            (1.0, 0.0)
+        };
+        (0..72)
+            .map(|i| {
+                let t = i as f64 / 72.0 * core::f64::consts::TAU;
+                let (u, v) = (half * libm::cos(t), minor * libm::sin(t));
+                let (x, y) = (cx + u * ux - v * uy, cy + u * uy + v * ux);
+                libm::sqrt((x - fx) * (x - fx) + (y - fy) * (y - fy))
+            })
+            .fold(0.0, f64::max)
     }
 }
 

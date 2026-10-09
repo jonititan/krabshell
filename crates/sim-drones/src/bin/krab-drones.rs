@@ -111,7 +111,21 @@ fn main() -> anyhow::Result<()> {
         );
     }
     if !world.stations().is_empty() {
-        println!("stations:      {}", world.stations().list.len());
+        let slots: u32 = world.stations().list.iter().map(|s| s.slots).sum();
+        println!(
+            "stations:      {} ({slots} launch and recovery slots)",
+            world.stations().list.len()
+        );
+    }
+    let range = world.delivery_range();
+    for hub in range["hubs"].as_array().into_iter().flatten() {
+        let km = |k: &str| hub[k].as_f64().map(|m| format!("{:.1} km", m / 1000.0));
+        println!(
+            "range:         {} up to {} ({} on one charge)",
+            hub["depot"].as_str().unwrap_or("?"),
+            km("reach_m").unwrap_or_else(|| "anywhere".into()),
+            km("direct_m").unwrap_or_else(|| "anywhere".into()),
+        );
     }
     if !world.regions().is_empty() {
         let surveys: u32 = world.regions().list.iter().map(|r| r.surveys).sum();

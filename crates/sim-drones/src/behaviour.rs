@@ -60,6 +60,10 @@ pub enum Node {
     /// mission, reposition out of a fence, send a courier whose address is
     /// fenced home. Queued with the commands it obeys this tick.
     AvoidGeofences,
+    /// Coming in to land at a station whose slots are all taken: hold off
+    /// until one is free, then carry on down; on its low-battery failsafe,
+    /// land regardless. Always succeeds.
+    WaitForSlot,
     /// Carry out the commands sent since the last tick, by ground stations
     /// and by its own `AvoidGeofences`.
     ObeyCommands,

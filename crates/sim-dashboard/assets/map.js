@@ -45,7 +45,7 @@
   // grid.
   const layers = {
     drones: true, deliveries: true, people: true, fences: true,
-    stations: true, rois: true, grid: true,
+    stations: true, rois: true, range: true, grid: true,
   };
   try {
     Object.assign(layers, JSON.parse(localStorage.getItem('krabshell.layers') || '{}'));
@@ -90,6 +90,10 @@
   // empty, and nothing is drawn.
   let stations = [];
   let rois = [];
+  // How far the couriers can deliver, per hub: [{ depot, reach_m, rings }],
+  // each ring an ellipse as [lon, lat] corners; see drawRange.
+  let range = [];
+  let rangeKey = '';
   let markSelected = null; // { kind: 'station' | 'roi', id }: picked out by a page
   const DROP_MS = 120_000;
   let lastReport = null;  // seq of the newest report seen; null until primed
@@ -384,6 +388,7 @@
       ctx.setLineDash([]);
     }
 
+    if (layers.range) drawRange(style);
     if (layers.fences) drawFences(style);
     if (layers.rois) drawRois(style);
     if (layers.stations) drawStations(style);
@@ -792,6 +797,94 @@
     return Number.isFinite(lat) && Number.isFinite(lon) && item.lat_e7 != null ? [lon, lat] : null;
   }
 
+  // ------------------------------------------------------- delivery range
+
+  // The model publishes each hub's reach as ellipses: foci `a` and `b`
+  // ([lat_e7, lon_e7]) and the most the distances to them may add up to.
+  // They are turned into rings of [lon, lat] once, when the range changes
+  // (a station added or removed, a fence changing which can be used).
+  function setRange(published) {
+    const hubs = (published && Array.isArray(published.hubs)) ? published.hubs : [];
+    const key = JSON.stringify(hubs);
+    if (key === rangeKey) return;
+    rangeKey = key;
+    range = hubs.map((h) => ({
+      depot: h.depot,
+      reach_m: h.reach_m,
+      rings: (h.areas || []).map((a) => ellipseRing(a.a, a.b, a.sum_m)),
+    }));
+  }
+
+  function ellipseRing(a, b, sumM, sides = 72) {
+    const k = (Math.PI / 180) * 6_371_000;
+    const lat0 = a[0] * 1e-7, lon0 = a[1] * 1e-7;
+    const cos0 = Math.cos((lat0 * Math.PI) / 180);
+    const bx = (b[1] * 1e-7 - lon0) * k * cos0;
+    const by = (b[0] * 1e-7 - lat0) * k;
+    const focal = Math.hypot(bx, by) / 2;
+    const half = sumM / 2;
+    const minor = Math.sqrt(Math.max(half * half - focal * focal, 0));
+    const [ux, uy] = focal > 1e-9 ? [bx / (2 * focal), by / (2 * focal)] : [1, 0];
+    const ring = [];
+    for (let i = 0; i < sides; i++) {
+      const t = (i / sides) * Math.PI * 2;
+      const u = half * Math.cos(t), v = minor * Math.sin(t);
+      const x = bx / 2 + u * ux - v * uy;
+      const y = by / 2 + u * uy + v * ux;
+      ring.push([lon0 + x / (k * cos0), lat0 + y / k]);
+    }
+    return ring;
+  }
+
+  // Each hub's reach is the union of its ellipses: filled lightly, and
+  // outlined along the union's edge only. The outline comes from stroking
+  // every ellipse on a scratch canvas and then cutting out their insides,
+  // which leaves just the outer half of the strokes on the edge.
+  let rangeCanvas = null;
+  function drawRange(style) {
+    if (range.length === 0) return;
+    const ok = style.getPropertyValue('--ok').trim() || '#1f7a4d';
+    const { w, h } = cssSize();
+    const dpr = window.devicePixelRatio || 1;
+    rangeCanvas = rangeCanvas || document.createElement('canvas');
+    rangeCanvas.width = Math.round(w * dpr);
+    rangeCanvas.height = Math.round(h * dpr);
+    const g = rangeCanvas.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const outline = (rings) => {
+      g.beginPath();
+      for (const ring of rings) {
+        ring.forEach(([lon, lat], i) => {
+          const [x, y] = project(lon, lat);
+          if (i === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        });
+        g.closePath();
+      }
+    };
+    for (const hub of range) {
+      g.globalCompositeOperation = 'source-over';
+      g.strokeStyle = ok;
+      g.lineWidth = 4;
+      g.setLineDash([10, 6]);
+      for (const ring of hub.rings) {
+        outline([ring]);
+        g.stroke();
+      }
+      g.setLineDash([]);
+      g.globalCompositeOperation = 'destination-out';
+      outline(hub.rings);
+      g.fill('nonzero');
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = 0.07;
+      g.fillStyle = ok;
+      outline(hub.rings);
+      g.fill('nonzero');
+      g.globalAlpha = 1;
+    }
+    ctx.drawImage(rangeCanvas, 0, 0, w, h);
+  }
+
   // Launch and recovery stations: friendly ground installations (air base),
   // named once the map is zoomed in far enough to have room.
   function drawStations(style) {
@@ -826,8 +919,11 @@
       }
       if (pxPerKm > 20 || mark) {
         const name = s.name || `Station ${s.id}`;
-        const n = Number(s.drones);
-        const label = Number.isFinite(n) ? `${name} · ${n} drone${n === 1 ? '' : 's'}` : name;
+        const used = Number(s.occupied);
+        const slots = Number(s.slots);
+        const label = Number.isFinite(slots) && slots > 0
+          ? `${name} · ${Number.isFinite(used) ? used : 0}/${slots} slots`
+          : name;
         haloText(label, x + right + 4, y + 4, panel, ink);
       }
     }
@@ -1106,7 +1202,7 @@
       } else {
         people = [];
       }
-      if (layers.deliveries || layers.stations || layers.rois) {
+      if (layers.deliveries || layers.stations || layers.rois || layers.range) {
         const response = await fetch('/api/v1/state/overlays');
         if (response.ok) {
           const body = (await response.json()) || {};
@@ -1114,11 +1210,13 @@
           orders = list('orders', layers.deliveries);
           stations = list('stations', layers.stations);
           rois = list('rois', layers.rois);
+          setRange(layers.range ? body.range : null);
         }
       } else {
         orders = [];
         stations = [];
         rois = [];
+        setRange(null);
       }
       if (camera) draw();
     } catch {

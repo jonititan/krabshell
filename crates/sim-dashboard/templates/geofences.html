@@ -44,6 +44,7 @@
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
     <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
     <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed"><input type="checkbox" data-layer="range" checked> Delivery range</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
   </fieldset>
 
@@ -92,6 +93,7 @@
   </form>
 
   <ul class="map-key" aria-label="Map key">
+    <li><span class="swatch range" aria-hidden="true"></span>Delivery range: where couriers can deliver and get back, by way of stations</li>
     <li><span class="swatch fence" aria-hidden="true"></span>Geofence, with its number and altitude band if it has one</li>
     <li><span class="swatch fence raised" aria-hidden="true"></span>Raised floor: drones may pass beneath</li>
     <li><span class="swatch fence picked" aria-hidden="true"></span>Picked out in the list</li>
