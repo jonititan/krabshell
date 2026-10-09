@@ -632,15 +632,16 @@
 
   // ------------------------------------------------------------- symbols
 
-  // NATO joint military symbology. Drones are the 2525 letter SIDC of the
-  // CoT type TAK gets for them (a-f-A-M-H-Q), so both show the same thing;
+  // NATO joint military symbology. Drones and intruders are the 2525
+  // letter SIDCs of the CoT types TAK gets for them (a-f-A-M-H-Q,
+  // a-u-A-M-H-Q), so both show the same thing;
   // the rest are APP-6 D / MIL-STD-2525D 20-digit SIDCs (version 10,
   // identity, symbol set, then the entity), which have the civilian
   // individuals and vehicles the letter codes lack. milsymbol's isValid()
   // accepts each of them.
   const SIDC = {
     drone: 'SFAPMHQ--------',         // friend, air, military rotary-wing UAV
-    intruder: '10010100001103000000', // unknown, air, UAV
+    intruder: 'SUAPMHQ--------',         // unknown, air, military rotary-wing UAV
     person: '10011100001103000000',   // unknown, land civilian unit, individual
     station: 'SFGPIBA---H----',       // friend, ground installation, airport / air base
   };
