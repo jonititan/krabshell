@@ -5,6 +5,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::flight::{self, Limits, Point, Pose};
 
+/// What sort of vehicle a vehicle is. Each is one of APP-6's civilian
+/// vehicles, so a map can draw it as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VehicleType {
+    Car,
+    Van,
+    Pickup,
+    Bus,
+    Lorry,
+}
+
+impl VehicleType {
+    pub fn name(self) -> &'static str {
+        match self {
+            VehicleType::Car => "car",
+            VehicleType::Van => "van",
+            VehicleType::Pickup => "pickup",
+            VehicleType::Bus => "bus",
+            VehicleType::Lorry => "lorry",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<VehicleType> {
+        Some(match name {
+            "car" => VehicleType::Car,
+            "van" => VehicleType::Van,
+            "pickup" => VehicleType::Pickup,
+            "bus" => VehicleType::Bus,
+            "lorry" => VehicleType::Lorry,
+            _ => return None,
+        })
+    }
+
+    /// One drawn from city traffic by a uniform number: mostly cars, then
+    /// vans, pickups, lorries and buses.
+    pub fn draw(u: f64) -> VehicleType {
+        match u {
+            u if u < 0.70 => VehicleType::Car,
+            u if u < 0.84 => VehicleType::Van,
+            u if u < 0.92 => VehicleType::Pickup,
+            u if u < 0.97 => VehicleType::Lorry,
+            _ => VehicleType::Bus,
+        }
+    }
+}
+
 /// A ground target that walks or drives between random destinations near
 /// where it started.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -632,17 +632,30 @@
 
   // ------------------------------------------------------------- symbols
 
-  // NATO joint military symbology (APP-6 / MIL-STD-2525C letter SIDCs),
-  // the same symbols the CoT emitter sends to TAK (a-f-A-M-H-Q and so on).
+  // NATO joint military symbology: APP-6 D / MIL-STD-2525D 20-digit SIDCs
+  // (version 10, identity, symbol set, then the entity), which have the
+  // vertical-takeoff UAV and civilian individuals and vehicles that the
+  // older letter codes lack; the station keeps its 2525C letter code.
   // milsymbol's isValid() accepts each of them.
   const SIDC = {
-    drone: 'SFAPMFQ--------',    // friend, air, military drone
-    intruder: 'SUAPMFQ--------', // unknown, air, military drone
-    person: 'SUGPUCI--------',   // unknown, ground unit, infantry
-    vehicle: 'SUGPEV---------',  // unknown, ground equipment, ground vehicle
-    station: 'SFGPIBA---H----',  // friend, ground installation, airport / air base
+    drone: '10030100001104000000',    // friend, air, vertical-takeoff UAV
+    intruder: '10010100001103000000', // unknown, air, UAV
+    person: '10011100001103000000',   // unknown, land civilian unit, individual
+    station: 'SFGPIBA---H----',       // friend, ground installation, airport / air base
   };
-  const SIGHTED = { person: SIDC.person, vehicle: SIDC.vehicle, intruder: SIDC.intruder };
+  // Unknown, land equipment, civilian vehicles, by the model's vehicle type.
+  const VEHICLE = {
+    car: '10011500001601000000',    // automobile
+    pickup: '10011500001602000000', // open-bed truck
+    bus: '10011500001603000000',    // multiple passenger vehicle
+    van: '10011500001604000000',    // utility vehicle
+    lorry: '10011500001606000000',  // tractor trailer truck with box
+  };
+  // A sighting's symbol: what was seen, and for a vehicle, what sort.
+  function sighted(s) {
+    if (s.kind === 'vehicle') return VEHICLE[s.vehicleType] || VEHICLE.car;
+    return s.kind === 'person' ? SIDC.person : s.kind === 'intruder' ? SIDC.intruder : null;
+  }
   // A pale halo round every symbol and line, so the black frames read on a
   // dark theme and over any basemap.
   const HALO = 'rgba(255,255,255,0.85)';
@@ -658,7 +671,11 @@
     if (!symbolCache.has(key)) {
       let made = null;
       try {
-        const s = new window.ms.Symbol(sidc, { size, outlineWidth: 2, outlineColor: HALO });
+        // Civilians keep the unknown identity's yellow, not APP-6's
+        // optional civilian purple: who they are is not yet known.
+        const s = new window.ms.Symbol(sidc, {
+          size, outlineWidth: 2, outlineColor: HALO, civilianColor: false,
+        });
         if (s.isValid()) {
           const image = s.asCanvas(ratio);
           const anchor = s.getAnchor();
@@ -968,7 +985,7 @@
 
     for (const s of layers.people ? sightings : []) {
       const age = (now - s.at) / SIGHTING_MS;
-      const sidc = SIGHTED[s.kind];
+      const sidc = sighted(s);
       if (age >= 1 || !sidc) continue;
       const [x, y] = project(s.lon, s.lat);
       if (stamp(ctx, sidc, size - 4, x, y, null, 0.9 * (1 - age)) !== null) continue;
@@ -1058,7 +1075,9 @@
           const now = performance.now();
           for (const r of body.reports) {
             const at = { lat: r.lat_e7 * 1e-7, lon: r.lon_e7 * 1e-7, at: now };
-            if (r.kind === 'detection') sightings.push({ ...at, kind: r.target_kind });
+            if (r.kind === 'detection') sightings.push({
+              ...at, kind: r.target_kind, vehicleType: r.detail && r.detail.vehicle_type,
+            });
             else if (r.kind === 'delivery') drops.push(at);
           }
         }

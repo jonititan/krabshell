@@ -193,3 +193,45 @@ fn a_committed_view_stays_put_while_the_world_steps_on() {
     assert_ne!(hash(&world), before, "the world moved on");
     assert_eq!(held.records().len() as u64, world.agent_count());
 }
+
+#[test]
+fn every_vehicle_has_a_type_drawn_from_the_seed_and_sightings_of_it_say_which() {
+    let (mut world, mut schedule) = started("london-patrol");
+    let types: Vec<_> = world
+        .records()
+        .iter()
+        .filter(|r| r.kind == Kind::Vehicle)
+        .map(|r| r.saved.vehicle_type.expect("every vehicle has a type"))
+        .collect();
+    let distinct: BTreeSet<&str> = types.iter().map(|t| t.name()).collect();
+    assert!(distinct.len() >= 3, "{distinct:?}");
+    assert!(world
+        .records()
+        .iter()
+        .filter(|r| r.kind != Kind::Vehicle)
+        .all(|r| r.saved.vehicle_type.is_none()));
+    // The same pack draws the same types.
+    let (again, _) = started("london-patrol");
+    let again: Vec<_> = again
+        .records()
+        .iter()
+        .filter_map(|r| r.saved.vehicle_type)
+        .collect();
+    assert_eq!(types, again);
+
+    let mut reports = Vec::new();
+    for _ in 0..3_000 {
+        schedule.step(&mut world);
+        world.drain_reports(&mut reports);
+    }
+    let vehicles: Vec<_> = reports
+        .iter()
+        .filter(|r| r.target_kind == "vehicle")
+        .collect();
+    assert!(!vehicles.is_empty());
+    for r in vehicles {
+        let named = r.detail["vehicle_type"].as_str().unwrap();
+        let target = world.record(r.target.unwrap()).unwrap();
+        assert_eq!(Some(named), target.saved.vehicle_type.map(|t| t.name()));
+    }
+}

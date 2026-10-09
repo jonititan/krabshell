@@ -17,7 +17,7 @@ use crate::mission::{self, Drone, Event, MissionItem, Mode};
 use crate::regions::{self, Survey};
 use crate::sensor::{Candidate, Sighting};
 use crate::stations::{self, Planner, Range};
-use crate::targets::{Route, Wander};
+use crate::targets::{Route, VehicleType, Wander};
 use crate::world::{draw_pair, refresh_key, Kind, Record, Saved, World, WANDER_SALT};
 
 fn world(state: &mut dyn State) -> &mut World {
@@ -74,6 +74,7 @@ impl Body {
             drone: None,
             route: None,
             wander: None,
+            vehicle_type: None,
             courier: None,
             survey: None,
             activity: String::new(),
@@ -108,6 +109,8 @@ pub struct DroneAgent {
 #[derive(Debug, Clone)]
 pub struct GroundAgent {
     pub body: Body,
+    /// For a vehicle, what sort.
+    pub vehicle_type: Option<VehicleType>,
     pub wander: Wander,
 }
 
@@ -798,6 +801,9 @@ impl DroneAgent {
             "sysid": self.drone.sysid,
             "range_m": libm::round(sighting.range_m) as i64,
         });
+        if let Some(t) = target.saved.vehicle_type {
+            detail["vehicle_type"] = t.name().into();
+        }
         if !target.saved.callsign.is_empty() {
             detail["callsign"] = serde_json::Value::String(target.saved.callsign.clone());
         }
@@ -848,6 +854,7 @@ impl GroundAgent {
     pub(crate) fn record(&self) -> Record {
         let mut saved = self.body.saved();
         saved.wander = Some(self.wander.clone());
+        saved.vehicle_type = self.vehicle_type;
         self.body.record(saved)
     }
 }
@@ -960,6 +967,7 @@ impl Member {
             }),
             Kind::Person | Kind::Vehicle => Member::Ground(GroundAgent {
                 body,
+                vehicle_type: saved.vehicle_type,
                 wander: saved.wander.ok_or_else(|| missing("wander"))?,
             }),
             Kind::Poi => Member::Poi(PoiAgent { body }),

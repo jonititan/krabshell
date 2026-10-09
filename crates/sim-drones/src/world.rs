@@ -49,7 +49,7 @@ use crate::operator::{self, Ops};
 use crate::regions::{Region, Regions, Survey};
 use crate::settings::{cms, settings, Settings};
 use crate::stations::{Station, Stations};
-use crate::targets::{Route, Wander};
+use crate::targets::{Route, VehicleType, Wander};
 use crate::terrain::Terrain;
 
 /// `IntentVerb::Custom` codes the drones handle. The MAVLink gateway builds
@@ -103,6 +103,7 @@ pub mod codes {
 const SPAWN_SALT: u64 = 0x0b5e_55ed_5a17_0001;
 pub(crate) const WANDER_SALT: u64 = 0x0b5e_55ed_5a17_0002;
 const ORDER_SALT: u64 = 0x0b5e_55ed_5a17_0003;
+const VEHICLE_SALT: u64 = 0x0b5e_55ed_5a17_0004;
 
 /// Occupancy is re-resolved when an entity crosses into a new square of this
 /// many degrees × 10⁷ (≈4.5 m of latitude). Cells are tens of metres across or
@@ -213,6 +214,9 @@ pub struct Saved {
     pub route: Option<Route>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wander: Option<Wander>,
+    /// What sort of vehicle a vehicle is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_type: Option<VehicleType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub courier: Option<Courier>,
     /// A survey of a region of interest it is flying.
@@ -833,10 +837,19 @@ impl World {
                 } else {
                     s.vehicle_speed_cms
                 };
+                let vehicle_type = match (kind, text("type")) {
+                    (Kind::Vehicle, Some(t)) => Some(VehicleType::parse(&t).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "vehicle {id}: type '{t}' is not one of car, van, pickup, bus, lorry"
+                        )
+                    })?),
+                    _ => self.vehicle_type(kind, id),
+                };
                 let mut body = self.body(id, kind, pose)?;
                 body.callsign = text("callsign").unwrap_or_default();
                 Member::Ground(GroundAgent {
                     body,
+                    vehicle_type,
                     wander: Wander {
                         anchor: pose.point(),
                         radius_m: number("radius_m")
@@ -899,8 +912,16 @@ impl World {
         self.next_id = id + 1;
         Ok(Member::Ground(GroundAgent {
             body: self.body(id, kind, pose)?,
+            vehicle_type: self.vehicle_type(kind, id),
             wander: self.wander_from(kind, at),
         }))
+    }
+
+    /// A vehicle's type, drawn from the seed for its id; none for anything
+    /// else.
+    fn vehicle_type(&self, kind: Kind, id: AgentId) -> Option<VehicleType> {
+        (kind == Kind::Vehicle)
+            .then(|| VehicleType::draw(draw_pair(self.seed ^ VEHICLE_SALT, id, 0).0))
     }
 
     fn wander_from(&self, kind: Kind, at: Point) -> Wander {
@@ -2379,8 +2400,16 @@ impl World {
                     .map_or_else(|| format!("POI {id}"), str::to_owned);
                 Member::Poi(PoiAgent { body })
             } else {
+                let vehicle_type = match intent.payload.get("type").and_then(|v| v.as_str()) {
+                    Some(t) if kind == Kind::Vehicle => Some(
+                        VehicleType::parse(t)
+                            .ok_or_else(|| rejected(format!("no vehicle type '{t}'")))?,
+                    ),
+                    _ => self.vehicle_type(kind, id),
+                };
                 Member::Ground(GroundAgent {
                     body,
+                    vehicle_type,
                     wander: self.wander_from(kind, pose.point()),
                 })
             });
