@@ -1212,7 +1212,7 @@
       if (e.callsign && (moving || airborne || namePois)) {
         const doing = e.activity || e.mode;
         const parts = [e.callsign];
-        if (e.kind === 'drone' && doing) parts.push(doing);
+        if ((e.kind === 'drone' || e.kind === 'aircraft') && doing) parts.push(doing);
         if (e.kind !== 'poi') parts.push(flightLevel(e.alt_m));
         const label = parts.join(' · ');
         haloText(label, x + right, y + 4, panel, ink);

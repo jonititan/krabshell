@@ -154,6 +154,7 @@ impl Agent for Dispatcher {
         world.update_sites();
         world.refresh_range();
         world.place_orders();
+        world.run_atc();
     }
 }
 
@@ -168,6 +169,10 @@ impl Agent for DroneAgent {
         // A spare called up to replace a courier that crashed.
         if let Some(courier) = world.call_ups.remove(&self.body.id) {
             self.courier = Some(courier);
+        }
+        // A conflict advisory from this tick's assessment.
+        if let Some(avoid) = world.advice.remove(&self.body.id) {
+            self.drone.avoid = Some(avoid);
         }
 
         // The wind where it is, and at its takeoff height, for everything
@@ -626,7 +631,9 @@ impl DroneAgent {
             .courier
             .as_ref()
             .and_then(|c| c.order.as_ref().map(|_| c.delivered));
-        if self.survey.as_ref().is_some_and(|s| !s.done) {
+        if self.drone.avoid.is_some() {
+            "avoiding"
+        } else if self.survey.as_ref().is_some_and(|s| !s.done) {
             "surveying"
         } else if order == Some(false) {
             "delivering"
@@ -1055,11 +1062,18 @@ impl Agent for AircraftAgent {
         } else {
             (0.0, 0.0)
         };
+        if let Some(avoid) = world.advice.remove(&self.body.id) {
+            self.flight.avoid = Some(avoid);
+        }
+        let ground_mm = world
+            .terrain
+            .ground_mm(self.body.pose.lat_e7, self.body.pose.lon_e7);
         self.flight.step(
             &mut self.body.pose,
             world.tick,
             world.settings.tuning.dt,
             wind,
+            ground_mm,
         );
         self.body.refresh(world);
         world.place(self.record());
@@ -1073,6 +1087,10 @@ impl Agent for AircraftAgent {
 impl AircraftAgent {
     pub(crate) fn record(&self) -> Record {
         let mut saved = self.body.saved();
+        // What it is doing, for people: the advisory it is flying, if any.
+        if let Some(avoid) = &self.flight.avoid {
+            saved.activity = avoid.action.replace('_', " ");
+        }
         saved.flight = Some(self.flight.clone());
         self.body.record(saved)
     }
@@ -1247,6 +1265,7 @@ fn mission_item(command: u16, at: &Point, agl_m: f32) -> MissionItem {
 /// restored board hashes the same as the one saved. Anything else is blank.
 fn activity_named(word: &str) -> &'static str {
     [
+        "avoiding",
         "surveying",
         "delivering",
         "charging",

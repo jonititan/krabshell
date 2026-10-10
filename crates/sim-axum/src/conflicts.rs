@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwapOption;
 use serde::Serialize;
 use sim_conflict::{
-    assess, hotspots, AircraftState, Calm, Config, FieldWind, Fleet, Manoeuvre, Multirotor,
-    Performance, Prediction, Protection, Targets, WindSource,
+    assess, hotspots, AircraftState, Calm, Config, FieldWind, Manoeuvre, Prediction, Targets,
+    WindSource,
 };
 use sim_core::config::Param;
 use sim_core::{GeoCell, WindField};
@@ -122,7 +122,7 @@ pub struct HeatView {
 
 /// Lowest and highest cell resolution an operator may choose: from about
 /// 23 km cells to about 22 m.
-pub const RESOLUTIONS: std::ops::RangeInclusive<i32> = 8..=18;
+pub const RESOLUTIONS: std::ops::RangeInclusive<i32> = sim_drones::atc::RESOLUTIONS;
 
 /// The conflict cells' resolution and where it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -329,109 +329,44 @@ struct Flying {
     callsign: String,
 }
 
-fn param(view: &Published, key: &str, default: f64) -> f64 {
-    view.config
-        .model
-        .get(key)
-        .and_then(Param::as_f64)
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(default)
-}
-
-/// The performance the pack's drones, intruders and manned aircraft fly with.
-fn fleet(view: &Published) -> Fleet {
-    let quad = |name: &str, cruise: f64| {
-        let Performance::Multirotor(base) = Performance::generic_quadcopter() else {
-            unreachable!()
-        };
-        Performance::Multirotor(Multirotor {
-            name: name.into(),
-            cruise_ms: cruise,
-            max_speed_ms: (cruise * 1.5).max(base.max_speed_ms),
-            max_climb_ms: param(view, "climb_ms", base.max_climb_ms),
-            advisory_vs_ms: param(view, "climb_ms", base.advisory_vs_ms),
-            ..base
-        })
-    };
-    Fleet::from([
-        (
-            "drone".to_owned(),
-            quad("krabshell drone", param(view, "cruise_ms", 10.0)),
-        ),
-        (
-            "intruder".to_owned(),
-            quad("intruder", param(view, "intruder_speed_ms", 12.0)),
-        ),
-        ("aircraft".to_owned(), Performance::generic_narrowbody()),
-    ])
-}
-
-/// Separation every drone and intruder must keep from a manned aircraft:
-/// the pack's `manned_lateral_m` and `manned_vertical_m`, 300 m across and
-/// 150 m above or below if it sets none.
-fn manned_protection(view: &Published) -> Protection {
-    Protection {
-        lateral_m: param(view, "manned_lateral_m", 300.0),
-        vertical_m: param(view, "manned_vertical_m", 150.0),
-    }
-}
-
-/// The aircraft in the air: drones not on the ground or charging, every
-/// intruder, and manned aircraft on their route (not parked between flights).
-/// A manned aircraft has its protected volume and the right of way: drones
-/// and intruders give way to it.
+/// The aircraft in the air, as the world's own assessment sees them
+/// ([`sim_drones::atc`]): drones not on the ground, charging, taking off or
+/// landing; every intruder; and manned aircraft on their route (not parked
+/// between flights), with their protected volume. Drones give way first, a
+/// manned aircraft last, an intruder never.
 fn flying(view: &Published) -> Vec<Flying> {
-    let int = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_i64);
-    let manned = manned_protection(view);
+    let manned = sim_drones::atc::manned_protection(&view.config.model);
     let mut out = Vec::new();
     for bag in &view.cells {
         for object in &bag.objects {
             let s = &object.state;
             let kind = object.kind.as_str();
-            if kind != "drone" && kind != "intruder" && kind != "aircraft" {
-                continue;
-            }
-            if kind == "aircraft"
-                && s.pointer("/flight/active") != Some(&serde_json::Value::Bool(true))
-            {
-                continue;
-            }
-            if kind == "drone" {
-                let mode = s
-                    .pointer("/drone/mode")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("");
-                let activity = s.get("activity").and_then(|a| a.as_str()).unwrap_or("");
-                if matches!(mode, "disarmed" | "idle" | "")
-                    || matches!(activity, "charging" | "idle")
-                {
-                    continue;
+            let airborne = match kind {
+                "drone" => {
+                    let mode = s
+                        .pointer("/drone/mode")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("");
+                    let activity = s.get("activity").and_then(|a| a.as_str()).unwrap_or("");
+                    !matches!(mode, "disarmed" | "idle" | "takeoff" | "land" | "")
+                        && !matches!(activity, "charging" | "idle")
                 }
+                "intruder" => true,
+                "aircraft" => s.pointer("/flight/active") == Some(&serde_json::Value::Bool(true)),
+                _ => false,
+            };
+            if !airborne {
+                continue;
             }
-            let (Some(lat), Some(lon)) = (int(s, "lat_e7"), int(s, "lon_e7")) else {
+            let Ok(pose) = serde_json::from_value::<sim_drones::flight::Pose>(s.clone()) else {
                 continue;
             };
-            let speed = int(s, "air_cms").or(int(s, "spd_cms")).unwrap_or(0) as f64 * 0.01;
-            let heading = int(s, "yaw_cdeg").or(int(s, "hdg_cdeg")).unwrap_or(0) as f64 * 0.01;
             out.push(Flying {
                 callsign: s
                     .get("callsign")
                     .and_then(|c| c.as_str())
                     .map_or_else(|| format!("#{}", object.id), str::to_owned),
-                state: AircraftState {
-                    id: object.id,
-                    lat: lat as f64 * 1e-7,
-                    lon: lon as f64 * 1e-7,
-                    alt_m: int(s, "alt_mm").unwrap_or(0) as f64 * 1e-3,
-                    tas_ms: speed,
-                    heading_deg: heading,
-                    vs_ms: int(s, "vs_cms").unwrap_or(0) as f64 * 0.01,
-                    turn_rate_dps: 0.0,
-                    mass_kg: None,
-                    performance: kind.to_owned(),
-                    protection: (kind == "aircraft").then_some(manned),
-                    right_of_way: kind == "aircraft",
-                },
+                state: sim_drones::atc::state(object.id, kind, &pose, manned),
             });
         }
     }
@@ -469,7 +404,7 @@ pub fn compute(
     };
     let states: Vec<AircraftState> = aircraft.into_iter().map(|a| a.state).collect();
     let utc = view.overlays["weather"]["utc"].as_f64();
-    let wind: Box<dyn WindSource + '_> = match (field, utc) {
+    let wind: Box<dyn WindSource + Sync + '_> = match (field, utc) {
         (Some(field), Some(utc_now)) => Box::new(FieldWind {
             field,
             utc_now,
@@ -477,7 +412,12 @@ pub fn compute(
         }),
         _ => Box::new(Calm),
     };
-    let a = assess(&states, &fleet(view), wind.as_ref(), &cfg)?;
+    let a = assess(
+        &states,
+        &sim_drones::atc::fleet(&view.config.model),
+        wind.as_ref(),
+        &cfg,
+    )?;
     // Where they could meet with nobody manoeuvring: what the advisories are
     // for.
     let before_refs: Vec<&Prediction> = a.unadvised.iter().collect();

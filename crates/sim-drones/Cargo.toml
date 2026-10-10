@@ -15,6 +15,7 @@ parallel = ["krabmaga/parallel"]
 
 [dependencies]
 sim-core.workspace = true
+sim-conflict.workspace = true
 anyhow.workspace = true
 bonsai-bt.workspace = true
 clap.workspace = true

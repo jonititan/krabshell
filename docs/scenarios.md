@@ -315,8 +315,11 @@ These are described on their own pages.
 |---|---|---|---|
 | `heatmap_resolution` | absent | A5 resolution (0–30) of the flight heatmap. Setting it starts a run log. | [Operating](operating.md) |
 | `conflict_resolution` | absent | Default A5 resolution (8–18) for conflict prediction. The conflicts service also reads `cruise_ms`, `climb_ms` and `intruder_speed_ms`. | [Conflicts](conflicts.md) |
-| `manned_lateral_m` | 300 | Lateral separation drones and intruders must keep from a manned aircraft, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-right-of-way) |
-| `manned_vertical_m` | 150 | Vertical separation, above and below, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-right-of-way) |
+| `atc` | true | The drones model assesses conflicts itself and its drones and manned aircraft fly their advisories. `false` turns it off. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `atc_every_s` | 5 | Seconds between those assessments. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `advisory_hold_s` | 10 | Seconds an advisory is flown for, renewed while what it avoids is still coming. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `manned_lateral_m` | 300 | Lateral separation drones and intruders must keep from a manned aircraft, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
+| `manned_vertical_m` | 150 | Vertical separation, above and below, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
 | `weather` | `"off"` | `"off"`, `"recorded"` or `"live"`. | [Weather](weather.md) |
 | `weather_start_utc` | none | UTC time of tick 0 for recorded weather, e.g. `"2026-03-14T06:00:00Z"`. Required when `weather = "recorded"`. | [Weather](weather.md) |
 | `weather_hours` | 24 | Hours of weather to fetch, 1–384. | [Weather](weather.md) |

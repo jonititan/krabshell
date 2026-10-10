@@ -58,6 +58,10 @@ fn blob(profile: Profile) -> ScenarioBlob {
     config.model.insert("origin_lon".into(), Param::Float(LON));
     config.model.insert("origin_lat".into(), Param::Float(LAT));
     config.model.insert("seed".into(), Param::Int(11));
+    // The patrol and the intruder below cross each other's paths; advisories
+    // would have the patrol avoiding instead of patrolling. The tests of
+    // advisories turn them on (`encounter`).
+    config.model.insert("atc".into(), Param::Bool(false));
 
     let agent = |id: u64, kind: &str, lon: f64, lat: f64, state: serde_json::Value| SeedAgent {
         id: Some(id),
@@ -2156,4 +2160,229 @@ fn a_checkpoint_with_an_aircraft_in_flight_replays_exactly() {
     let b = run(&mut restored, 251, 1_000);
     assert_eq!(hash(&original), hash(&restored));
     assert_eq!(a, b);
+}
+
+/// An empty sky over the test area with these agents, advisories on or off.
+fn encounter(agents: Vec<SeedAgent>, atc: bool) -> Drones {
+    let mut blob = blob(Profile::Gold);
+    blob.agents = agents;
+    for key in ["persons", "vehicles"] {
+        blob.config.model.insert(key.into(), Param::Int(0));
+    }
+    blob.config.model.insert("atc".into(), Param::Bool(atc));
+    Drones::new(&blob).unwrap()
+}
+
+fn seed(id: AgentId, kind: &str, lon: f64, lat: f64, state: serde_json::Value) -> SeedAgent {
+    SeedAgent {
+        id: Some(id),
+        kind: kind.into(),
+        cell: None,
+        lon: Some(lon),
+        lat: Some(lat),
+        state,
+    }
+}
+
+/// `east_m` east of the test point, as degrees of longitude.
+fn east_of(east_m: f64) -> f64 {
+    LON + east_m / (111_320.0 * LAT.to_radians().cos())
+}
+
+/// How an encounter went.
+struct Encounter {
+    /// The closest the two came, across in metres, and above or below,
+    /// weighing height twice as much as distance across.
+    across: f64,
+    dz: f64,
+    /// Every advisory the `atc` overlay showed.
+    advised: Vec<serde_json::Value>,
+    /// Either was seen flying an advisory.
+    avoided: bool,
+}
+
+impl Encounter {
+    fn gap(&self) -> f64 {
+        self.across.max(self.dz * 2.0)
+    }
+}
+
+/// Fly `ticks` and see how close `a` and `b` came.
+fn closest(model: &mut Drones, a: AgentId, b: AgentId, ticks: u64) -> Encounter {
+    let mut e = Encounter {
+        across: f64::INFINITY,
+        dz: 0.0,
+        advised: Vec::new(),
+        avoided: false,
+    };
+    for tick in 1..=ticks {
+        model.step(tick);
+        let (ra, rb) = (record(model, a), record(model, b));
+        let across = flight::ground_distance_m(&ra.saved.pose.point(), &rb.saved.pose.point());
+        let dz = (ra.saved.pose.alt_m() - rb.saved.pose.alt_m()).abs();
+        if across.max(dz * 2.0) < e.gap() {
+            (e.across, e.dz) = (across, dz);
+        }
+        e.avoided |= [ra, rb].iter().any(|r| r.saved.activity == "avoiding");
+        let atc = &model.overlays()["atc"];
+        if atc["tick"] == tick {
+            e.advised
+                .extend(atc["advisories"].as_array().cloned().unwrap_or_default());
+        }
+    }
+    e
+}
+
+#[test]
+fn drones_flying_at_each_other_are_advised_and_fly_their_advisories() {
+    // 1.2 km apart at 40 m, flying at each other at 10 m/s.
+    let at = |east: f64, to: f64, id: AgentId, call: &str| {
+        let (x, y) = (flight::to_e7(LAT), flight::to_e7(east_of(to)));
+        seed(
+            id,
+            "drone",
+            east_of(east),
+            LAT,
+            serde_json::json!({
+                "sysid": id, "callsign": call, "autostart": true, "mission": [
+                    { "seq": 0, "frame": 3, "command": 22, "z": 40.0 },
+                    { "seq": 1, "frame": 3, "command": 16, "x": x, "y": y, "z": 40.0 },
+                ]
+            }),
+        )
+    };
+    let agents = || vec![at(0.0, 1_200.0, 1, "WEST"), at(1_200.0, 0.0, 2, "EAST")];
+
+    let free = closest(&mut encounter(agents(), false), 1, 2, 1_400);
+    assert!(free.advised.is_empty());
+    assert!(
+        free.across < 5.0 && free.dz < 1.0,
+        "they meet: {:.0} m, {:.0} m",
+        free.across,
+        free.dz
+    );
+
+    let obeying = closest(&mut encounter(agents(), true), 1, 2, 1_400);
+    assert!(!obeying.advised.is_empty(), "no advisory was given");
+    assert!(obeying.avoided, "no drone flew its advisory");
+    assert!(
+        obeying.gap() > free.gap() + 20.0,
+        "obeying: {:.0} m across, {:.0} m apart; free: {:.0} m, {:.0} m",
+        obeying.across,
+        obeying.dz,
+        free.across,
+        free.dz
+    );
+}
+
+/// A drone holding at `hold_m` above the test point, and an aircraft passing
+/// over it level at `jet_m`, 70 m/s, from 6 km east.
+fn under_a_jet(hold_m: f64, jet_m: f64) -> Vec<SeedAgent> {
+    vec![
+        seed(
+            1,
+            "drone",
+            LON,
+            LAT,
+            serde_json::json!({
+                "sysid": 1, "callsign": "HOLD", "autostart": true, "mission": [
+                    { "seq": 0, "frame": 3, "command": 22, "z": hold_m },
+                    { "seq": 1, "frame": 3, "command": 17, "x": 0, "y": 0, "z": hold_m },
+                ]
+            }),
+        ),
+        seed(
+            2,
+            "aircraft",
+            0.0,
+            0.0,
+            serde_json::json!({
+                "callsign": "JET", "start_s": 40, "route": [
+                    { "lon": east_of(6_000.0), "lat": LAT, "alt_m": jet_m, "speed_ms": 70 },
+                    { "lon": east_of(-6_000.0), "lat": LAT, "alt_m": jet_m },
+                ]
+            }),
+        ),
+    ]
+}
+
+fn in_volume(e: &Encounter) -> bool {
+    e.across <= 300.0 && e.dz <= 150.0
+}
+
+fn advised_against<'a>(e: &'a Encounter, call: &str) -> Vec<&'a serde_json::Value> {
+    e.advised
+        .iter()
+        .filter(|l| {
+            l["against"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|c| c == call))
+        })
+        .collect()
+}
+
+#[test]
+fn a_drone_in_a_manned_aircrafts_way_is_asked_first_and_gets_out_of_it() {
+    // 100 m below the jet's track: descending 60 m clears ±150 m, which the
+    // drone can do in the minute it has.
+    let free = closest(
+        &mut encounter(under_a_jet(100.0, 200.0), false),
+        1,
+        2,
+        1_800,
+    );
+    assert!(
+        in_volume(&free),
+        "unadvised: {:.0} m across, {:.0} m apart",
+        free.across,
+        free.dz
+    );
+
+    let obeying = closest(&mut encounter(under_a_jet(100.0, 200.0), true), 1, 2, 1_800);
+    let lines = advised_against(&obeying, "JET");
+    assert!(
+        !lines.is_empty(),
+        "the drone was never advised: {:?}",
+        obeying.advised
+    );
+    assert!(
+        lines.iter().all(|l| l["callsign"] == "HOLD"),
+        "only the drone: {:?}",
+        obeying.advised
+    );
+    assert!(
+        advised_against(&obeying, "HOLD").is_empty(),
+        "the jet was advised although the drone could get out of the way: {:?}",
+        obeying.advised
+    );
+    assert!(obeying.avoided);
+    assert!(
+        !in_volume(&obeying),
+        "obeying: {:.0} m across, {:.0} m apart",
+        obeying.across,
+        obeying.dz
+    );
+}
+
+#[test]
+fn a_manned_aircraft_is_advised_when_the_drone_cannot_get_out_of_its_way() {
+    // 50 m below the jet and only 90 m up: the drone can neither descend nor
+    // climb clear of ±150 m in time, so the jet climbs.
+    let obeying = closest(&mut encounter(under_a_jet(90.0, 140.0), true), 1, 2, 1_800);
+    let jet = advised_against(&obeying, "HOLD");
+    assert!(
+        !jet.is_empty(),
+        "the jet was never advised: {:?}",
+        obeying.advised
+    );
+    assert!(jet.iter().all(|l| l["callsign"] == "JET"));
+    let free = closest(&mut encounter(under_a_jet(90.0, 140.0), false), 1, 2, 1_800);
+    assert!(
+        obeying.gap() > free.gap() + 50.0,
+        "obeying: {:.0} m across, {:.0} m apart; free: {:.0} m, {:.0} m",
+        obeying.across,
+        obeying.dz,
+        free.across,
+        free.dz
+    );
 }

@@ -59,9 +59,23 @@ pub struct AircraftState {
     /// separation minima. See [`Protection`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protection: Option<Protection>,
-    /// It is never advised: everyone else gives way to it.
+    /// When it is asked to manoeuvre: see [`GiveWay`].
     #[serde(default)]
-    pub right_of_way: bool,
+    pub give_way: GiveWay,
+}
+
+/// Who is asked to manoeuvre out of a conflict, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GiveWay {
+    /// Advised first: a drone.
+    #[default]
+    First,
+    /// Advised only once nothing in [`GiveWay::First`] can help any more: a
+    /// manned aircraft, which drones get out of the way of.
+    Last,
+    /// Never advised, as it would not follow one: an uncontrolled intruder.
+    Never,
 }
 
 /// Separation others must keep from an aircraft: no closer than
@@ -689,7 +703,7 @@ mod tests {
             mass_kg: None,
             performance: "quad".into(),
             protection: None,
-            right_of_way: false,
+            give_way: GiveWay::First,
         }
     }
 

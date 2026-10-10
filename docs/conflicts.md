@@ -5,7 +5,9 @@ minute, finds the A5 cells where two or more of them could be together, and
 works out what each should do to keep apart. The prediction and the
 advisories come from the `sim-conflict` crate. The dashboard's
 **Conflicts** screen and `GET /api/v1/conflicts` run it on the live world.
-The advisories are shown, not flown: no drone changes course because of them.
+The drones model also runs it inside the simulation, every few simulated
+seconds, and its drones and manned aircraft fly what they are advised: see
+[Advisories are flown](#advisories-are-flown).
 
 This is a planning aid on a grid, not a certified collision avoidance system.
 Its probabilities are only as good as the noise model and the performance
@@ -135,7 +137,7 @@ flying.
 krabshell's drones and intruders are all multirotors. Its manned aircraft
 (the drones model's `aircraft` kind) are assessed as the generic narrow-body
 jet, on the drones preset's cells, layers and horizon, with their own
-protected volume and the right of way (see above). Fixed-wing
+protected volume, advised only when no drone can resolve a conflict (see above). Fixed-wing
 aircraft are also used by the `airliners` preset, the tests and the example. No BADA or OpenAP
 aircraft data is included: BADA's is licensed by EUROCONTROL and OpenAP's is
 LGPL. `FixedWing`'s fields are named as OpenAP names them, so either source
@@ -228,7 +230,7 @@ shown). The first conflict is 40 s ahead.*
 the near ones: a conflict 30 seconds ahead counts half as much as one now,
 since it leaves more time to act.
 
-### Manned aircraft: protected volume and right of way
+### Manned aircraft: protected volume and giving way
 
 A manned aircraft carries a protected volume, its separation minima: by
 default 300 m across and 150 m above and below, set with the pack's
@@ -244,10 +246,13 @@ This is kept apart from drone-to-drone conflicts (a second plane of keys in
 `sim-conflict`), so two drones inside an airliner's volume are each in
 conflict with the airliner, not, on that account, with each other.
 
-A manned aircraft also has the right of way: it is never advised. Drones and
-intruders give way to it; a conflict nothing else can resolve is left
-unresolved. Two manned aircraft in each other's volumes are always left
-unresolved, as their separation is ATC's.
+Aircraft give way in order. Drones are advised first. A manned aircraft is
+advised only once no drone manoeuvre can resolve the conflict any further:
+the search looks among the drones, and when nothing there helps, among the
+manned aircraft as well. An intruder is never advised, since it would not
+follow one; a conflict between a manned aircraft and an intruder is resolved
+by the manned aircraft. In `sim-conflict` this is each aircraft's `give_way`:
+`first`, `last` or `never`.
 
 ## Advisories
 
@@ -305,6 +310,41 @@ or because the limit was reached.
 ground station or over MAVLink or CoT. An operator who wants a drone to act on
 one has to command it.
 
+## Advisories are flown
+
+The drones model assesses conflicts itself, inside the step, every
+`atc_every_s` simulated seconds (5), with the same fleet, cells, protected
+volume and giving-way order as the Conflicts screen, at the pack's
+`conflict_resolution` (or the world's resolution). Each aircraft advised flies
+its manoeuvre for `advisory_hold_s` (10 s), overriding its autopilot or route:
+
+- **Climb or descend** at the advised rate, carrying on the way it was going
+  (or holding position if it was hovering). A drone never descends below 20 m
+  above the ground.
+- **Level off**: hold its altitude.
+- **Turn** to the advised heading, at its usual speed.
+- **Speed up or slow down** to the advised airspeed.
+
+An advisory is held, renewed at each assessment, until the aircraft it is
+avoiding has passed its closest point of approach, as airborne collision
+avoidance does: otherwise an aircraft already climbing or descending clear
+would be advised nothing new, run out, and turn straight back into the
+conflict. Then the autopilot carries on its mission from wherever the drone
+is, and a manned aircraft rejoins its route's profile at no more than
+15 m/s vertically.
+
+Drones taking off from or landing on a pad are left out of the assessment:
+the stations' slots keep those apart, and counting them would flood a busy
+hub with advisories. A drone flying an advisory shows `avoiding` as its
+activity; a manned aircraft shows the manoeuvre (`descend`, `level off`). The
+model publishes the last assessment as its `atc` overlay (the tick, the
+aircraft assessed, each advisory and who it keeps clear of, and pairs left in
+conflict), which the Conflicts screen shows as **Advisories being flown**.
+
+It all happens inside a step, from the committed world, so a gold run flies
+the same advisories every time, at any speed and on any number of cores, and
+rewind replays them exactly. A pack turns it off with `atc = false`.
+
 ## When it runs
 
 The assessment runs off the tick thread, on a blocking worker, and at most
@@ -318,6 +358,10 @@ Cost grows with the number of aircraft and with the number of aircraft in
 conflict. Each aircraft costs one prediction (200 particles, 60 substeps), and
 each aircraft in a conflict up to seven more, one per manoeuvre; a
 manoeuvre's prediction is flown once however many rounds consider it. The
+predictions are flown in parallel, across the machine's cores, and collected
+in order, so an assessment is the same however many cores it ran on. Inside
+the simulation an assessment is skipped when no two aircraft could come
+within reach of each other inside the horizon. The
 report gives the wall-clock time it took in `took_ms`, and the screen shows it
 in its summary. For scale, the two-drone head-on encounter in the example
 assesses in about a tenth of a second on a laptop:

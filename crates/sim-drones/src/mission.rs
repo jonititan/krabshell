@@ -260,6 +260,10 @@ pub struct Drone {
     /// Geofences it is inside now, by id, so a breach is reported once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fenced: Vec<u32>,
+    /// A conflict advisory it is flying, which overrides the autopilot
+    /// until it runs out. See [`crate::atc`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid: Option<crate::atc::Avoid>,
     /// On the ground at a launch and recovery station's charger (not its
     /// home pad). Whoever steps the drone sets it before every step, so it
     /// is never saved.
@@ -274,6 +278,9 @@ pub struct Drone {
     #[serde(skip)]
     pub launch_wind: Wind,
 }
+
+/// The lowest a conflict advisory takes a drone, above the ground, mm.
+const AVOID_FLOOR_MM: i32 = 20_000;
 
 /// A mission step's outcome, for the model to turn into a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +424,7 @@ impl Drone {
             battery_ppm: 1_000_000,
             failsafe: false,
             fenced: Vec::new(),
+            avoid: None,
             at_station: false,
             wind: Wind::CALM,
             launch_wind: Wind::CALM,
@@ -704,6 +712,20 @@ impl Drone {
         }
 
         let limits = self.limits(tuning, airborne);
+        // A conflict advisory comes before whatever the autopilot was doing;
+        // that carries on once it runs out. Never below the lowest a drone
+        // passes beneath a fence, so a descent cannot fly it into the ground.
+        if let Some(avoid) = self.avoid.as_mut() {
+            if !airborne {
+                self.avoid = None;
+            } else {
+                let floor = terrain.ground_mm(pose.lat_e7, pose.lon_e7) + AVOID_FLOOR_MM;
+                if crate::atc::fly(pose, avoid, limits, tuning.dt, tuning.dt_ms, floor) {
+                    self.avoid = None;
+                }
+                return false;
+            }
+        }
         match self.mode {
             Mode::Disarmed | Mode::Idle => flight::hover(pose, limits, tuning.dt),
             Mode::Takeoff { alt_mm } => {

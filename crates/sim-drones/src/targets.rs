@@ -163,11 +163,21 @@ pub struct Flight {
     /// Ticks from one start to the next; 0 flies the route once.
     #[serde(default)]
     pub repeat_ticks: u64,
+    /// A conflict advisory it is flying, which overrides the route until it
+    /// runs out. See [`crate::atc`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid: Option<crate::atc::Avoid>,
 }
 
+/// How fast a manned aircraft climbs or descends back to its route's profile
+/// after an advisory took it off it, m/s: about 3 000 ft a minute.
+const REJOIN_VS_MS: f64 = 15.0;
+
 impl Flight {
-    /// One tick. `wind` is toward the east and north, m/s, where it is.
-    pub fn step(&mut self, pose: &mut Pose, tick: u64, dt: f64, wind: (f64, f64)) {
+    /// One tick. `wind` is toward the east and north, m/s, where it is;
+    /// `ground_mm` the ground under it, which an advisory never takes it
+    /// below.
+    pub fn step(&mut self, pose: &mut Pose, tick: u64, dt: f64, wind: (f64, f64), ground_mm: i32) {
         if !self.active {
             if tick < self.next_start || self.fixes.len() < 2 {
                 flight::hold(pose);
@@ -175,6 +185,7 @@ impl Flight {
             }
             self.active = true;
             self.leg = 1;
+            self.avoid = None;
             // Starts keep to the timetable, however long a flight took.
             self.next_start = match self.repeat_ticks {
                 0 => u64::MAX,
@@ -210,9 +221,22 @@ impl Flight {
             wind_east_ms: wind.0,
             wind_north_ms: wind.1,
         };
+        // An advisory comes before the route; the route picks up from
+        // wherever it leaves the aircraft.
+        if let Some(avoid) = self.avoid.as_mut() {
+            let dt_ms = libm::round(dt * 1_000.0) as u32;
+            if crate::atc::fly(pose, avoid, limits, dt, dt_ms, ground_mm) {
+                self.avoid = None;
+            }
+            return;
+        }
         // Horizontal only; the altitude follows the leg's gradient below.
         let left = flight::step_toward(pose, &to.at.with_alt_mm(pose.alt_mm), limits, dt);
-        let alt_mm = libm::round(lerp(from.at.alt_mm, to.at.alt_mm, along(left.ground_m))) as i32;
+        // On the profile it stays on it; off it (after an advisory) it flies
+        // back to it, no faster than REJOIN_VS_MS.
+        let profile = libm::round(lerp(from.at.alt_mm, to.at.alt_mm, along(left.ground_m))) as i32;
+        let most = flight::to_mm(REJOIN_VS_MS * dt);
+        let alt_mm = pose.alt_mm + (profile - pose.alt_mm).clamp(-most, most);
         pose.vs_cms = libm::round(f64::from(alt_mm - pose.alt_mm) * 0.1 / dt) as i32;
         pose.alt_mm = alt_mm;
 
@@ -281,6 +305,7 @@ mod tests {
             active: false,
             next_start: start_tick,
             repeat_ticks,
+            avoid: None,
         };
         (flight, threshold)
     }
@@ -290,17 +315,17 @@ mod tests {
         let (mut flight, threshold) = approach(50, 0);
         let mut pose = Pose::default();
         for tick in 0..50 {
-            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
             assert!(!flight.active, "started early at tick {tick}");
         }
-        flight.step(&mut pose, 50, 0.1, (0.0, 0.0));
+        flight.step(&mut pose, 50, 0.1, (0.0, 0.0), 0);
         assert!(flight.active);
         assert_eq!(pose.point(), flight.fixes[0].at);
 
         // Altitude stays on the line from 600 m to 50 m over the 10 km.
         let mut tick = 51;
         while flight.active {
-            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
             if flight.active {
                 let left = flight::ground_distance_m(&pose.point(), &threshold);
                 let on_path = 50.0 + 550.0 * left / 10_000.0;
@@ -328,7 +353,7 @@ mod tests {
         let mut starts = Vec::new();
         for tick in 0..9_500 {
             let was = flight.active;
-            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
             if flight.active && !was {
                 starts.push(tick);
             }
@@ -342,7 +367,7 @@ mod tests {
         let mut pose = Pose::default();
         // Flying west into a 20 m/s westerly (blowing toward the east).
         for tick in 0..200 {
-            flight.step(&mut pose, tick, 0.1, (20.0, 0.0));
+            flight.step(&mut pose, tick, 0.1, (20.0, 0.0), 0);
         }
         let air = f64::from(pose.air_cms.expect("airspeed in wind")) * 0.01;
         let ground = f64::from(pose.spd_cms) * 0.01;
@@ -351,6 +376,56 @@ mod tests {
             "air {air}, ground {ground}"
         );
         assert!((70.0..=80.0).contains(&air), "{air}");
+    }
+
+    #[test]
+    fn an_aircraft_flies_its_advisory_then_rejoins_its_profile_smoothly() {
+        let (mut flight, threshold) = approach(0, 0);
+        let mut pose = Pose::default();
+        for tick in 0..100 {
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
+        }
+        let on_path = |pose: &Pose| {
+            let left = flight::ground_distance_m(&pose.point(), &threshold);
+            50.0 + 550.0 * left / 10_000.0
+        };
+        // Climb at 7.6 m/s for 10 s instead of descending.
+        flight.avoid = Some(crate::atc::Avoid::new(
+            sim_conflict::Manoeuvre::Climb,
+            &sim_conflict::Targets {
+                vs_ms: Some(7.62),
+                ..sim_conflict::Targets::default()
+            },
+            10_000,
+            vec![1],
+        ));
+        let before = pose.alt_m();
+        for tick in 100..200 {
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
+        }
+        assert!(flight.avoid.is_none());
+        assert!(
+            (pose.alt_m() - (before + 76.2)).abs() < 0.5,
+            "{} from {before}",
+            pose.alt_m()
+        );
+        // Back down to the glide path at no more than 15 m/s, and on it after.
+        let mut tick = 200;
+        while pose.alt_m() - on_path(&pose) > 0.05 {
+            let was = pose.alt_mm;
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0), 0);
+            assert!(
+                was - pose.alt_mm <= 1_501,
+                "{} mm in a tick",
+                was - pose.alt_mm
+            );
+            tick += 1;
+            assert!(tick < 400, "never rejoined");
+        }
+        for t in tick..tick + 50 {
+            flight.step(&mut pose, t, 0.1, (0.0, 0.0), 0);
+            assert!((pose.alt_m() - on_path(&pose)).abs() < 0.05);
+        }
     }
 
     #[test]

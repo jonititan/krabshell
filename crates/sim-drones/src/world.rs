@@ -182,6 +182,33 @@ pub fn schedule() -> Schedule {
 /// airliner on final approach.
 const DEFAULT_AIRCRAFT_SPEED_MS: f64 = 70.0;
 
+/// What the last conflict assessment advised: published as the `atc`
+/// overlay, so the dashboard shows what the aircraft were told.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct AtcLatest {
+    /// The tick it was made at; 0 before the first.
+    tick: u64,
+    /// Aircraft in the air that were assessed.
+    aircraft: usize,
+    advisories: Vec<AtcLine>,
+    /// Pairs still in conflict once every advisory is flown, by callsign.
+    unresolved: Vec<[String; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct AtcLine {
+    id: AgentId,
+    callsign: String,
+    action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vs_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    heading_deg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    speed_ms: Option<f64>,
+    against: Vec<String>,
+}
+
 /// One point of a seed aircraft's `route`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -500,6 +527,9 @@ pub struct World {
 
     pub(crate) grid: SparseA5Grid<AgentId>,
     pub(crate) settings: Settings,
+    /// The pack's params, for what reads them as it goes (the conflict
+    /// assessment's fleet and minima).
+    params: BTreeMap<String, sim_core::config::Param>,
     pub(crate) terrain: Terrain,
     pub(crate) book: AddressBook,
     pub(crate) dispatch: Dispatch,
@@ -539,6 +569,11 @@ pub struct World {
     next_sysid: u16,
     /// Courier duties waiting for the spare that takes each over.
     pub(crate) call_ups: BTreeMap<AgentId, Courier>,
+    /// Conflict advisories from this tick's assessment, each taken by its
+    /// aircraft when it steps. Empty again by the end of every tick.
+    pub(crate) advice: BTreeMap<AgentId, crate::atc::Avoid>,
+    /// What the last conflict assessment advised, for the dashboard.
+    atc_latest: AtcLatest,
     /// New drones placed this step, to join the schedule on the next.
     recruits: Vec<Member>,
 
@@ -618,6 +653,7 @@ impl World {
             grid: new_grid(resolution, root),
             dispatch: Dispatch::new(book.depots.len()),
             settings,
+            params: params.clone(),
             terrain,
             book,
             seed,
@@ -641,6 +677,8 @@ impl World {
             spares: Vec::new(),
             next_sysid: 1,
             call_ups: BTreeMap::new(),
+            advice: BTreeMap::new(),
+            atc_latest: AtcLatest::default(),
             recruits: Vec::new(),
             airspace: Airspace::default(),
             fence_mail: Vec::new(),
@@ -971,6 +1009,7 @@ impl World {
                         active: false,
                         next_start: ticks("start_s")?.unwrap_or(0),
                         repeat_ticks,
+                        avoid: None,
                     },
                 })
             }
@@ -1497,6 +1536,8 @@ impl World {
         self.spares = self.roster_spares.clone();
         self.next_sysid = self.roster_next_sysid;
         self.call_ups.clear();
+        self.advice.clear();
+        self.atc_latest = AtcLatest::default();
         self.recruits.clear();
         self.airspace.clear();
         self.fence_mail.clear();
@@ -2433,6 +2474,151 @@ impl World {
     /// Open and close the geofences due this tick: those whose time is up,
     /// and those asked for by intent. First thing in a step, so every drone
     /// sees the same airspace.
+    /// Assess conflicts, when due, and leave each advisory for its aircraft
+    /// to take as it steps this tick. See [`crate::atc`].
+    pub(crate) fn run_atc(&mut self) {
+        let atc = self.settings.atc;
+        if !atc.on || !self.tick.is_multiple_of(atc.every_ticks) {
+            return;
+        }
+        let protection = crate::atc::manned_protection(&self.params);
+        let mut states = Vec::new();
+        let mut callsigns = BTreeMap::new();
+        for r in self.board.iter() {
+            let kind = r.kind.name();
+            let flying = match r.kind {
+                Kind::Drone => r.saved.drone.as_ref().is_some_and(|d| {
+                    // On the ground, or taking off from or landing on a pad,
+                    // where the stations' slots keep drones apart.
+                    !matches!(
+                        d.mode,
+                        Mode::Disarmed | Mode::Idle | Mode::Takeoff { .. } | Mode::Land
+                    ) && !d.grounded(&r.saved.pose, &self.terrain)
+                }),
+                Kind::Intruder => true,
+                Kind::Aircraft => r.saved.flight.as_ref().is_some_and(|f| f.active),
+                _ => false,
+            };
+            if flying {
+                states.push(crate::atc::state(r.id, kind, &r.saved.pose, protection));
+                callsigns.insert(r.id, r.saved.callsign.clone());
+            }
+        }
+        let resolution = crate::atc::pack_resolution(&self.params).unwrap_or(self.resolution);
+        let cfg = crate::atc::config(resolution);
+        let mut latest = AtcLatest {
+            tick: self.tick,
+            aircraft: states.len(),
+            ..AtcLatest::default()
+        };
+        if !could_meet(&states, &cfg, protection.lateral_m) {
+            self.atc_latest = latest;
+            return;
+        }
+        let fleet = crate::atc::fleet(&self.params);
+        let utc = self.sim_utc();
+        let field_wind;
+        let wind: &(dyn sim_conflict::WindSource + Sync) = match (self.weather.as_deref(), utc) {
+            (Some(field), Some(utc_now)) => {
+                field_wind = sim_conflict::FieldWind {
+                    field,
+                    utc_now,
+                    cell_resolution: self.resolution,
+                };
+                &field_wind
+            }
+            _ => &sim_conflict::Calm,
+        };
+        let Ok(assessment) = sim_conflict::assess(&states, &fleet, wind, &cfg) else {
+            self.atc_latest = latest;
+            return;
+        };
+        let name = |id: &u64| {
+            callsigns
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("#{id}"))
+        };
+        for a in &assessment.advisories {
+            if a.manoeuvre == sim_conflict::Manoeuvre::Maintain {
+                continue;
+            }
+            let avoid =
+                crate::atc::Avoid::new(a.manoeuvre, &a.targets, atc.hold_ms, a.against.clone());
+            latest.advisories.push(AtcLine {
+                id: a.aircraft,
+                callsign: name(&a.aircraft),
+                action: avoid.action.clone(),
+                vs_ms: a.targets.vs_ms,
+                heading_deg: a.targets.heading_deg,
+                speed_ms: a.targets.tas_ms,
+                against: a.against.iter().map(name).collect(),
+            });
+            self.advice.insert(a.aircraft, avoid);
+        }
+        self.hold_advisories(&cfg, protection.lateral_m, &name, &mut latest);
+        let mut pairs: Vec<(u64, u64)> =
+            assessment.residual.iter().flat_map(|c| c.pairs()).collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        latest.unresolved = pairs.iter().map(|(a, b)| [name(a), name(b)]).collect();
+        self.atc_latest = latest;
+    }
+
+    /// Keep an advisory going while what it avoids is still coming: the
+    /// assessment, seeing an aircraft already climbing or descending clear,
+    /// gives it nothing new, and left to run out it would turn straight back
+    /// into the conflict. As airborne collision avoidance does, it is flown
+    /// until the two have passed their closest point. One the assessment
+    /// advised afresh this tick is left to that.
+    fn hold_advisories(
+        &mut self,
+        cfg: &sim_conflict::Config,
+        lateral_m: f64,
+        name: &dyn Fn(&u64) -> String,
+        latest: &mut AtcLatest,
+    ) {
+        let horizon_s = cfg.step_s * cfg.steps as f64;
+        let near = lateral_m + 2.0 * sim_core::cell::nominal_cell_edge_meters(cfg.resolution);
+        let hold_ms = self.settings.atc.hold_ms;
+        let mut held = Vec::new();
+        for r in self.board.iter() {
+            let avoid = match (&r.saved.drone, &r.saved.flight) {
+                (Some(d), _) => d.avoid.as_ref(),
+                (_, Some(f)) => f.avoid.as_ref(),
+                _ => None,
+            };
+            let Some(avoid) = avoid.filter(|_| !self.advice.contains_key(&r.id)) else {
+                continue;
+            };
+            let coming = avoid.against.iter().any(|other| {
+                self.record(*other)
+                    .is_some_and(|o| closing(&r.saved.pose, &o.saved.pose, horizon_s, near))
+            });
+            if coming {
+                held.push((
+                    r.id,
+                    crate::atc::Avoid {
+                        left_ms: hold_ms,
+                        ..avoid.clone()
+                    },
+                ));
+            }
+        }
+        for (id, avoid) in held {
+            latest.advisories.push(AtcLine {
+                id,
+                callsign: name(&id),
+                action: avoid.action.clone(),
+                vs_ms: avoid.vs_cms.map(|v| f64::from(v) * 0.01),
+                heading_deg: avoid.heading_cdeg.map(|h| f64::from(h) * 0.01),
+                speed_ms: avoid.speed_cms.map(|v| f64::from(v) * 0.01),
+                against: avoid.against.iter().map(name).collect(),
+            });
+            self.advice.insert(id, avoid);
+        }
+    }
+
     pub(crate) fn update_airspace(&mut self) {
         let tick = self.tick;
         for fence in self.airspace.expire(tick) {
@@ -2602,6 +2788,7 @@ impl World {
             }).collect::<Vec<_>>(),
             "rois": self.regions.list,
             "range": self.range,
+            "atc": self.atc_latest,
             "weather": self.weather.as_ref().map(|w| serde_json::json!({
                 "rev": self.weather_rev.to_string(),
                 "mode": w.mode,
@@ -2876,6 +3063,7 @@ impl World {
             "stations": self.stations,
             "regions": self.regions,
             "weather": self.weather.as_deref(),
+            "atc": self.atc_latest,
         })
     }
 
@@ -2921,6 +3109,9 @@ impl World {
         }
         if let Some(regions) = fields.get("regions") {
             self.regions = serde_json::from_value(regions.clone())?;
+        }
+        if let Some(atc) = fields.get("atc") {
+            self.atc_latest = serde_json::from_value(atc.clone())?;
         }
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
@@ -3002,6 +3193,58 @@ impl World {
         self.populate(schedule, members);
         Ok(())
     }
+}
+
+/// Whether two aircraft are still closing on each other: their closest
+/// point of approach across the ground, flying on as they are, is ahead
+/// within `horizon_s`, and within `near` metres.
+fn closing(a: &Pose, b: &Pose, horizon_s: f64, near: f64) -> bool {
+    let velocity = |p: &Pose| {
+        let rad = (f64::from(p.hdg_cdeg) * 0.01).to_radians();
+        let speed = f64::from(p.spd_cms) * 0.01;
+        (libm::sin(rad) * speed, libm::cos(rad) * speed)
+    };
+    let (east, north) = flight::offset_m(a.lat_e7, a.lon_e7, b.lat_e7, b.lon_e7);
+    let (va, vb) = (velocity(a), velocity(b));
+    let (ve, vn) = (vb.0 - va.0, vb.1 - va.1);
+    let closing_sq = ve * ve + vn * vn;
+    if closing_sq < 1e-6 {
+        return false;
+    }
+    let t = -(east * ve + north * vn) / closing_sq;
+    if !(t > 0.0 && t <= horizon_s) {
+        return false;
+    }
+    let (ce, cn) = (east + ve * t, north + vn * t);
+    libm::sqrt(ce * ce + cn * cn) <= near
+}
+
+/// Whether any two aircraft could come within reach of each other inside
+/// the assessment's horizon: flying straight at each other with a strong
+/// wind behind, with a cell and a protected volume either side. Assessing
+/// costs milliseconds; most ticks in a quiet sky need none.
+fn could_meet(
+    states: &[sim_conflict::AircraftState],
+    cfg: &sim_conflict::Config,
+    lateral_m: f64,
+) -> bool {
+    let horizon_s = cfg.step_s * cfg.steps as f64;
+    let edge = sim_core::cell::nominal_cell_edge_meters(cfg.resolution);
+    let reach = |a: &sim_conflict::AircraftState, b: &sim_conflict::AircraftState| {
+        horizon_s * (a.tas_ms + b.tas_ms + 2.0 * 30.0)
+            + edge * (2.0 * cfg.buffer_rings as f64 + 2.0)
+            + lateral_m
+    };
+    for (i, a) in states.iter().enumerate() {
+        for b in &states[i + 1..] {
+            let north = (b.lat - a.lat).to_radians() * 6_371_000.0;
+            let east = (b.lon - a.lon).to_radians() * 6_371_000.0 * libm::cos(a.lat.to_radians());
+            if libm::sqrt(north * north + east * east) <= reach(a, b) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// The agents a world committed at the end of a step, detached from it.

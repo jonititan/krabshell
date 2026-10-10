@@ -20,7 +20,7 @@ fn state(id: u64, lon: f64, alt_m: f64, tas: f64, hdg: f64, perf: &str) -> Aircr
         mass_kg: None,
         performance: perf.into(),
         protection: None,
-        right_of_way: false,
+        give_way: sim_conflict::GiveWay::First,
     }
 }
 

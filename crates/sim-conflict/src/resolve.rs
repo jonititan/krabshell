@@ -12,16 +12,22 @@
 //! complementary (one climbs, the other descends or holds) without a
 //! separate coordination rule.
 //!
-//! An aircraft with the right of way is never advised: its conflicts are
-//! resolved by everyone else, or left over if no one else can.
+//! Aircraft give way in order ([`GiveWay`]): the search looks among those
+//! advised first (drones), and only once none of them can help any more
+//! among those advised last (manned aircraft) as well. An aircraft that
+//! never gives way (an uncontrolled intruder) is never advised; a conflict
+//! nobody else can resolve is left over.
 
 use std::collections::{BTreeMap, HashMap};
+
+use rayon::prelude::*;
 
 use serde::Serialize;
 
 use crate::conflict::{can_meet, detect, encounters, risk, risk_for, urgency, Conflict, Encounter};
 use crate::predict::{
-    targets, AircraftState, Key, Manoeuvre, Plane, Prediction, Predictor, Targets, WindSource,
+    targets, AircraftState, GiveWay, Key, Manoeuvre, Plane, Prediction, Predictor, Targets,
+    WindSource,
 };
 use crate::{Config, Error, Fleet};
 
@@ -190,7 +196,7 @@ impl<'c> Board<'c> {
 pub fn assess(
     states: &[AircraftState],
     fleet: &Fleet,
-    wind: &dyn WindSource,
+    wind: &(dyn WindSource + Sync),
     cfg: &Config,
 ) -> Result<Assessment, Error> {
     cfg.check()?;
@@ -205,11 +211,21 @@ pub fn assess(
         }
     }
     let perf = |s: &AircraftState| &fleet[&s.performance];
-    let mut predictor = Predictor::new(cfg, wind);
-    let mut current: BTreeMap<u64, Prediction> = states
-        .iter()
-        .map(|s| (s.id, predictor.predict(s, perf(s), Manoeuvre::Maintain)))
-        .collect();
+    // Each prediction stands alone, so they are flown in parallel, each
+    // thread with its own predictor (and caches); collected in order, they
+    // come out the same as flown one after another.
+    let fly = |jobs: &[(&AircraftState, Manoeuvre)]| -> Vec<Prediction> {
+        jobs.par_iter()
+            .map_init(
+                || Predictor::new(cfg, wind),
+                |p, (s, m)| p.predict(s, perf(s), *m),
+            )
+            .collect()
+    };
+    let maintain: Vec<(&AircraftState, Manoeuvre)> =
+        states.iter().map(|s| (s, Manoeuvre::Maintain)).collect();
+    let mut current: BTreeMap<u64, Prediction> =
+        states.iter().map(|s| s.id).zip(fly(&maintain)).collect();
     let all = |m: &BTreeMap<u64, Prediction>| -> Vec<Conflict> {
         let refs: Vec<&Prediction> = m.values().collect();
         detect(&refs, cfg)
@@ -226,37 +242,61 @@ pub fn assess(
     let mut tried: HashMap<(u64, usize), Prediction> = HashMap::new();
     let most = states.len().min(cfg.max_advisories);
 
+    // Who may be advised: those who give way first, then those who give way
+    // last as well.
+    let mut asking = GiveWay::First;
     while advisories.len() < most {
         let base = board.risk();
         if base <= 0.0 {
             break;
         }
+        // Everyone who may be advised this round, and every manoeuvre each
+        // can fly, in order.
+        let candidates: Vec<(&AircraftState, usize, Manoeuvre)> = states
+            .iter()
+            .filter(|s| {
+                s.give_way <= asking
+                    && !advisories.iter().any(|a| a.aircraft == s.id)
+                    && board.risk_for(&current[&s.id]) > 0.0
+            })
+            .flat_map(|s| {
+                Manoeuvre::CANDIDATES
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, m)| targets(s, perf(s), **m, cfg).is_some())
+                    .map(move |(i, m)| (s, i, *m))
+            })
+            .collect();
+        let new: Vec<(&AircraftState, Manoeuvre)> = candidates
+            .iter()
+            .filter(|(s, i, _)| !tried.contains_key(&(s.id, *i)))
+            .map(|(s, _, m)| (*s, *m))
+            .collect();
+        let flown = fly(&new);
+        for ((s, m), p) in new.iter().zip(flown) {
+            let i = Manoeuvre::CANDIDATES
+                .iter()
+                .position(|c| c == m)
+                .expect("a candidate");
+            tried.insert((s.id, i), p);
+        }
         let mut best: Option<(f64, &AircraftState, usize)> = None;
-        for s in states {
-            if s.right_of_way
-                || advisories.iter().any(|a| a.aircraft == s.id)
-                || board.risk_for(&current[&s.id]) <= 0.0
-            {
+        for (s, i, m) in &candidates {
+            let trial = &tried[&(s.id, *i)];
+            let score = base + board.delta(&current[&s.id], trial) + m.cost() * base;
+            if best.as_ref().is_none_or(|b| score < b.0) {
+                best = Some((score, s, *i));
+            }
+        }
+        // Only an advisory that helps beyond what it costs. When none does,
+        // ask those who give way last too, before giving up.
+        let Some((_, s, i)) = best.filter(|(score, _, _)| *score < base * 0.98) else {
+            if asking == GiveWay::First {
+                asking = GiveWay::Last;
                 continue;
             }
-            for (i, m) in Manoeuvre::CANDIDATES.iter().enumerate() {
-                if targets(s, perf(s), *m, cfg).is_none() {
-                    continue;
-                }
-                let trial = tried
-                    .entry((s.id, i))
-                    .or_insert_with(|| predictor.predict(s, perf(s), *m));
-                let score = base + board.delta(&current[&s.id], trial) + m.cost() * base;
-                if best.as_ref().is_none_or(|b| score < b.0) {
-                    best = Some((score, s, i));
-                }
-            }
-        }
-        let Some((score, s, i)) = best else { break };
-        // Only an advisory that helps beyond what it costs.
-        if score >= base * 0.98 {
             break;
-        }
+        };
         let trial = tried.remove(&(s.id, i)).expect("tried above");
         let mine: Vec<&Conflict> = conflicts
             .iter()
