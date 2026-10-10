@@ -49,7 +49,7 @@ pub struct Sighting {
 
 impl Sensor {
     pub fn scans_on(&self, tick: u64) -> bool {
-        tick % self.every_ticks.max(1) == 0
+        tick.is_multiple_of(self.every_ticks.max(1))
     }
 
     /// Ground radius the camera covers from `alt_m`.

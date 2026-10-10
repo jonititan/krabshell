@@ -100,10 +100,8 @@ fn sim_unix(state: &AppState, field: &WindField) -> f64 {
     }
     let tick_s = view
         .config
-        .model
-        .get("tick_seconds")
-        .and_then(Param::as_f64)
-        .unwrap_or(0.1);
+        .tick_seconds()
+        .unwrap_or(sim_core::config::DEFAULT_TICK_SECONDS);
     field.utc_at(view.meta.tick as f64 * tick_s)
 }
 

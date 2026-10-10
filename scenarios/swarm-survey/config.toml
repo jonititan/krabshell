@@ -1,4 +1,7 @@
 [run]
+# Single-threaded. Nothing reads this yet (the `parallel` Cargo feature
+# decides), but it says what this pack expects.
+parallel = false
 publish_hz = 20.0
 max_pending_intents = 10000
 max_applied_per_tick = 1000

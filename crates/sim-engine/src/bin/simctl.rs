@@ -146,11 +146,8 @@ fn main() -> anyhow::Result<()> {
             }
             let tick_s = blob
                 .config
-                .model
-                .get("tick_seconds")
-                .and_then(sim_core::config::Param::as_f64)
-                .filter(|s| *s > 0.0)
-                .unwrap_or(0.1);
+                .tick_seconds()
+                .unwrap_or(sim_core::config::DEFAULT_TICK_SECONDS);
             let total = (hours * 3600.0 / tick_s).round().max(1.0) as u64;
             let every = (sample_s / tick_s).round().max(1.0) as u64;
             let out = out

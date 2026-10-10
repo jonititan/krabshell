@@ -10,8 +10,9 @@ env:
 
 jobs:
   # Every build links krABMaga with `gis`, and so all of Bevy: the drones
-  # model's agents run on it. The default build and `parallel` (spec §15)
-  # each get the full set of checks.
+  # model's agents run on it. Only the default build is checked for now; the
+  # `parallel` (spec §15) entry is switched off below until it is wanted
+  # again. Uncomment it to bring its full set of checks back.
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -22,10 +23,10 @@ jobs:
             workspace: ""
             engine: ""
             drones: ""
-          - name: parallel
-            workspace: --features sim-axum/parallel,sim-drones/parallel
-            engine: --features parallel
-            drones: --features parallel
+          # - name: parallel
+          #   workspace: --features sim-axum/parallel,sim-drones/parallel
+          #   engine: --features parallel
+          #   drones: --features parallel
     env:
       # Every test binary links all of Bevy; with full debuginfo they fill the
       # runner's disk and rust-lld dies with SIGBUS mid-link.

@@ -603,7 +603,11 @@ impl Gateway {
             Ok(IntentAck::Applied { .. }) => false,
             // STATUSTEXT holds 50 bytes, so say it short.
             Ok(IntentAck::Rejected(sim_core::RejectReason::Discarded { .. })) => {
-                lost.push((q.sysid, q.peer, format!("{} not applied: world reset", q.what)));
+                lost.push((
+                    q.sysid,
+                    q.peer,
+                    format!("{} not applied: world reset", q.what),
+                ));
                 false
             }
             Ok(IntentAck::Rejected(reason)) => {

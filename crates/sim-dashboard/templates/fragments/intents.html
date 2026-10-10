@@ -1,3 +1,10 @@
+{% match flash %}
+{% when Some with (flash) %}
+<div id="intent-flash" class="flash-slot" aria-live="polite" hx-swap-oob="true">
+  <div class="banner {{ flash.kind }}">{{ flash.message }}</div>
+</div>
+{% when None %}
+{% endmatch %}
 <div id="intent-activity" hx-get="/fragments/intents" hx-trigger="every 2s" hx-swap="outerHTML">
 {% if recent.is_empty() %}
   <p class="dim">Nothing submitted yet.</p>

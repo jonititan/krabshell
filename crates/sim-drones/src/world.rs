@@ -231,7 +231,7 @@ pub struct Saved {
     pub survey: Option<Survey>,
     /// What a drone is doing, for people: `delivering`, `surveying`,
     /// `returning`, `charging`, `flying`, `idle`. Derived from the rest each
-    /// step, so a restore ignores it.
+    /// step; a restore keeps it so the board hashes the same until then.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub activity: String,
     /// Holding off this station until one of its slots is free.
@@ -1233,7 +1233,10 @@ impl World {
             (Some(id), false) => format!("geofence #{id} ({fence_name})"),
             (None, _) => "a geofence".to_owned(),
         };
-        let reason = format!("the delivery address is inside {fence_text}{}", stage.since());
+        let reason = format!(
+            "the delivery address is inside {fence_text}{}",
+            stage.since()
+        );
         self.rejection_report(order, stage, fence_id.map(|id| (id, fence_name)), reason);
     }
 

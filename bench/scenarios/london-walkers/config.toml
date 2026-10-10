@@ -1,6 +1,9 @@
 # Run defaults for this pack. The manifest owns resolution, root and profile;
 # everything here is about how the loop runs, not what it simulates.
 [run]
+# Single-threaded. Nothing reads this yet (the `parallel` Cargo feature
+# decides), but it says what this pack expects.
+parallel = false
 # No target_tps: run at maximum speed until an operator says otherwise.
 publish_hz = 20.0
 intent_horizon = 8

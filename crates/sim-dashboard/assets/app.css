@@ -145,6 +145,17 @@ h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacin
 .banner.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .banner.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
 
+/* The outcome of the last dashboard action, kept outside the polled panel.
+   An ok message folds away after six seconds; others stay until replaced. */
+.flash-slot .banner.ok {
+  overflow: hidden;
+  max-height: 12em;
+  animation: flash-out 0.4s ease-in 6s forwards;
+}
+@keyframes flash-out {
+  to { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; border-width: 0; }
+}
+
 /* ------------------------------------------------------------- control */
 
 .control-head {

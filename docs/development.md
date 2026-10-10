@@ -117,7 +117,7 @@ Unit tests sit beside the code in most modules.
 
 ### CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull request, once on the default build and once with `parallel`, with `RUSTFLAGS=-D warnings`: formatting (default build only), clippy, the workspace tests, and three gold replays:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull request on the default build (the `parallel` job is commented out for now), with `RUSTFLAGS=-D warnings`: formatting (default build only), clippy, the workspace tests, and three gold replays:
 
 ```sh
 cargo run --release -p sim-engine --bin simctl -- replay london-patrol --ticks 600

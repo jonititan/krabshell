@@ -305,8 +305,10 @@ cell and its resolution. On the wire it is always a string of 16 lowercase hex
 digits, zero-padded, such as `"636119e9a0000000"`, never a JSON number:
 browsers would silently round ids above 2⁵³.
 
-On input the server also accepts a `0x` prefix. It accepts any string of hex
-digits, so a decimal id is read as hex; send hex.
+On input the server also accepts a `0x` prefix, and a decimal `u64`. Without
+a prefix, a string is hex when it is 16 characters long or contains a letter
+a–f, and decimal otherwise. So a decimal id of exactly 16 digits is read as
+hex; send hex.
 
 A world has two resolutions:
 

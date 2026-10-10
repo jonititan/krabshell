@@ -55,7 +55,8 @@ pub(crate) fn cms(metres_per_second: f64) -> i32 {
 }
 
 pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
-    let dt = param_f64(params, "tick_seconds", 0.1).clamp(0.001, 10.0);
+    let dt =
+        sim_core::config::tick_seconds(params).unwrap_or(sim_core::config::DEFAULT_TICK_SECONDS);
     let ticks = |seconds: f64| (libm::round(seconds / dt) as u64).max(1);
     let hfov = param_f64(params, "hfov_deg", 70.0).clamp(1.0, 170.0);
     Settings {

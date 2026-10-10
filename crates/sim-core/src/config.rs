@@ -74,6 +74,24 @@ impl Param {
 /// Free-form parameters handed to the model on reset. `sim-core` never reads them.
 pub type ModelParams = BTreeMap<String, Param>;
 
+/// Seconds of simulated time per tick for a model that needs one when the
+/// scenario's `tick_seconds` is absent.
+pub const DEFAULT_TICK_SECONDS: f64 = 0.1;
+/// Shortest and longest `tick_seconds` that [`Config::validate`] accepts.
+pub const TICK_SECONDS_MIN: f64 = 0.001;
+pub const TICK_SECONDS_MAX: f64 = 10.0;
+
+/// The scenario's `tick_seconds`, or `None` when it sets none. Every reader
+/// goes through here so the API, the dashboard and the model agree. A value
+/// that slipped past validation is clamped to the accepted range.
+pub fn tick_seconds(model: &ModelParams) -> Option<f64> {
+    model
+        .get("tick_seconds")
+        .and_then(Param::as_f64)
+        .filter(|s| s.is_finite())
+        .map(|s| s.clamp(TICK_SECONDS_MIN, TICK_SECONDS_MAX))
+}
+
 /// Everything about how the loop runs, as opposed to what it simulates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -201,6 +219,19 @@ impl Config {
             ));
         }
 
+        if let Some(value) = self.model.get("tick_seconds") {
+            let ok = value
+                .as_f64()
+                .is_some_and(|s| (TICK_SECONDS_MIN..=TICK_SECONDS_MAX).contains(&s));
+            if !ok {
+                return Err(out_of_range(
+                    "model.tick_seconds",
+                    "a number in 0.001..=10",
+                    format!("{value:?}"),
+                ));
+            }
+        }
+
         let grid = &self.grid;
         check_is_resolution("grid.resolution", grid.resolution)?;
         check_is_resolution("grid.view_resolution", grid.view_resolution)?;
@@ -245,6 +276,11 @@ impl Config {
             fields.push("model");
         }
         fields
+    }
+
+    /// The scenario's `tick_seconds`; see [`tick_seconds`].
+    pub fn tick_seconds(&self) -> Option<f64> {
+        tick_seconds(&self.model)
     }
 
     /// Interval between publishes, honouring `publish_hz`.
@@ -342,6 +378,38 @@ const _: () = assert!(MAX_RESOLUTION > 0);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_seconds_must_be_a_number_in_range() {
+        let with = |value: Param| {
+            let mut config = Config::default();
+            config.model.insert("tick_seconds".into(), value);
+            config
+        };
+        assert!(Config::default().validate().is_ok());
+        assert_eq!(Config::default().tick_seconds(), None);
+        assert!(with(Param::Float(0.1)).validate().is_ok());
+        assert_eq!(with(Param::Float(0.1)).tick_seconds(), Some(0.1));
+        assert!(with(Param::Int(10)).validate().is_ok());
+        for bad in [
+            Param::Float(0.0),
+            Param::Float(-1.0),
+            Param::Float(f64::NAN),
+            Param::Float(10.5),
+            Param::Text("0.1".into()),
+        ] {
+            assert!(with(bad.clone()).validate().is_err(), "{bad:?} accepted");
+        }
+        // Unvalidated values are clamped, the way the model always did.
+        assert_eq!(
+            with(Param::Float(-1.0)).tick_seconds(),
+            Some(TICK_SECONDS_MIN)
+        );
+        assert_eq!(
+            with(Param::Float(60.0)).tick_seconds(),
+            Some(TICK_SECONDS_MAX)
+        );
+    }
 
     #[test]
     fn defaults_are_valid_and_mean_maximum_speed() {
