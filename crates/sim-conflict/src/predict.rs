@@ -324,6 +324,31 @@ impl<'a> Predictor<'a> {
         perf: &Performance,
         manoeuvre: Manoeuvre,
     ) -> Prediction {
+        self.run(state, perf, manoeuvre, None)
+    }
+
+    /// [`predict`](Self::predict), also handing back every particle at
+    /// every step as `[lat, lon, alt_m]`: the cloud the probabilities were
+    /// counted from, for plots and debugging. The prediction is the same as
+    /// `predict`'s, bit for bit.
+    pub fn trace(
+        &mut self,
+        state: &AircraftState,
+        perf: &Performance,
+        manoeuvre: Manoeuvre,
+    ) -> (Prediction, Vec<Vec<[f64; 3]>>) {
+        let mut clouds = Vec::with_capacity(self.cfg.steps);
+        let prediction = self.run(state, perf, manoeuvre, Some(&mut clouds));
+        (prediction, clouds)
+    }
+
+    fn run(
+        &mut self,
+        state: &AircraftState,
+        perf: &Performance,
+        manoeuvre: Manoeuvre,
+        mut clouds: Option<&mut Vec<Vec<[f64; 3]>>>,
+    ) -> Prediction {
         let cfg = self.cfg;
         let targets = targets(state, perf, manoeuvre, cfg).unwrap_or_default();
         let mass = state.mass_kg.unwrap_or_else(|| perf.default_mass_kg());
@@ -480,6 +505,9 @@ impl<'a> Predictor<'a> {
                 t += h;
             }
             self.record(&particles, t, &mut out);
+            if let Some(clouds) = clouds.as_deref_mut() {
+                clouds.push(particles.iter().map(|p| [p.lat, p.lon, p.alt]).collect());
+            }
         }
         out
     }
@@ -578,6 +606,23 @@ mod tests {
         let rise = climb.mean.last().unwrap()[2] - level.mean.last().unwrap()[2];
         // 3 m/s for most of a minute, less the delay and the push-over.
         assert!((140.0..180.0).contains(&rise), "{rise}");
+    }
+
+    #[test]
+    fn a_trace_is_the_same_prediction_with_its_particles() {
+        let cfg = Config::drones();
+        let perf = Performance::generic_quadcopter();
+        let mut p = Predictor::new(&cfg, &Calm);
+        let s = quad(5, 54.9, 23.9, 45.0);
+        let plain = p.predict(&s, &perf, Manoeuvre::Climb);
+        let (traced, clouds) = p.trace(&s, &perf, Manoeuvre::Climb);
+        assert_eq!(plain, traced);
+        assert_eq!(clouds.len(), cfg.steps);
+        assert!(clouds.iter().all(|c| c.len() == cfg.particles));
+        // The mean is the particles' mean.
+        let last = clouds.last().unwrap();
+        let alt = last.iter().map(|q| q[2]).sum::<f64>() / last.len() as f64;
+        assert!((alt - traced.mean.last().unwrap()[2]).abs() < 1e-6);
     }
 
     #[test]

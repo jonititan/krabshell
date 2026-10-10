@@ -47,6 +47,7 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/docs", get(guide_index))
         .route("/docs/api", get(docs_page))
         .route("/docs/{slug}", get(guide_page))
+        .route("/docs/figures/{name}", get(guide_figure))
         .route("/assets/app.css", get(|| asset(APP_CSS, "text/css")))
         .route("/assets/map.js", get(|| asset(MAP_JS, "text/javascript")))
         .route(
@@ -978,6 +979,20 @@ async fn guide_page(Path(slug): Path<String>) -> Response {
     match docs.page(&slug) {
         Some(page) => render_guide(docs, page),
         None => (StatusCode::NOT_FOUND, "no such page in the docs").into_response(),
+    }
+}
+
+async fn guide_figure(Path(name): Path<String>) -> Response {
+    match crate::docs::figure(&name) {
+        Some(svg) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                (header::CACHE_CONTROL, "public, max-age=60"),
+            ],
+            svg,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such figure in the docs").into_response(),
     }
 }
 

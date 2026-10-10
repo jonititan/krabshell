@@ -35,6 +35,15 @@ macro_rules! guide {
     };
 }
 
+macro_rules! figure {
+    ($name:literal) => {
+        (
+            $name,
+            include_str!(concat!("../../../docs/figures/", $name)),
+        )
+    };
+}
+
 /// The guides, in sidebar order. The first is the `/docs` landing page.
 const SOURCES: &[Source] = &[
     guide!("overview", "Start here", "docs/overview.md"),
@@ -56,6 +65,26 @@ const SOURCES: &[Source] = &[
     guide!("baseline", "Internals", "docs/baseline.md"),
     guide!("spec", "Internals", "krabshell_spec.md"),
 ];
+
+/// Images the guides show, served at `/docs/figures/{name}`. SVG only, so
+/// they follow the reader's light or dark preference.
+pub const FIGURES: &[(&str, &str)] = &[
+    figure!("conflict-pipeline.svg"),
+    figure!("conflict-cloud.svg"),
+    figure!("conflict-cells.svg"),
+    figure!("conflict-layers.svg"),
+    figure!("conflict-detection.svg"),
+    figure!("conflict-search.svg"),
+    figure!("conflict-resolution.svg"),
+    figure!("conflict-energy.svg"),
+];
+
+pub fn figure(name: &str) -> Option<&'static str> {
+    FIGURES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, svg)| *svg)
+}
 
 /// A heading on a page, for its contents list.
 pub struct Heading {
@@ -150,6 +179,15 @@ fn render(source: &Source, by_path: &HashMap<&str, &str>) -> Page {
                 }
                 i = j;
             }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                let url = image(source.path, dest_url);
+                if let Some(url) = url {
+                    if let Event::Start(Tag::Image { dest_url, .. }) = &mut events[i] {
+                        *dest_url = CowStr::from(url);
+                    }
+                }
+                i += 1;
+            }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 let url = rewrite(source.path, dest_url, by_path);
                 if let Some(url) = url {
@@ -223,6 +261,17 @@ fn rewrite(from: &str, dest: &str, by_path: &HashMap<&str, &str>) -> Option<Stri
     })
 }
 
+/// Where a relative image in the page at `from` is served: one of
+/// [`FIGURES`]. `None` leaves anything else alone.
+fn image(from: &str, dest: &str) -> Option<String> {
+    if dest.contains("://") || dest.starts_with('/') {
+        return None;
+    }
+    let resolved = resolve(from, dest);
+    let name = resolved.strip_prefix("docs/figures/")?;
+    figure(name).map(|_| format!("/docs/figures/{name}"))
+}
+
 /// `path` relative to the directory of the file `from`, both from the
 /// repository root, with `.` and `..` worked out.
 fn resolve(from: &str, path: &str) -> String {
@@ -294,7 +343,7 @@ mod tests {
                 } else {
                     continue;
                 };
-                if target == "api" {
+                if target == "api" || target.starts_with("figures/") {
                     continue;
                 }
                 let Some(dest) = docs.page(target) else {
@@ -310,5 +359,30 @@ mod tests {
             }
         }
         assert!(broken.is_empty(), "broken links:\n{}", broken.join("\n"));
+    }
+
+    /// Every image a guide shows is one of the figures served, and every
+    /// figure is shown somewhere.
+    #[test]
+    fn every_image_is_served_and_every_figure_shown() {
+        let docs = &*DOCS;
+        let mut shown = std::collections::BTreeSet::new();
+        for page in &docs.pages {
+            for (at, _) in page.html.match_indices("<img src=\"") {
+                let rest = &page.html[at + 10..];
+                let src = &rest[..rest.find('"').unwrap()];
+                let name = src.strip_prefix("/docs/figures/");
+                assert!(
+                    name.is_some_and(|n| figure(n).is_some()),
+                    "{}: image {src} is not served",
+                    page.slug
+                );
+                shown.insert(name.unwrap().to_owned());
+            }
+        }
+        for (name, svg) in FIGURES {
+            assert!(shown.contains(*name), "{name} is shown on no page");
+            assert!(svg.starts_with("<svg"), "{name} is not an SVG");
+        }
     }
 }

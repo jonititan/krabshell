@@ -11,6 +11,14 @@ This is a planning aid on a grid, not a certified collision avoidance system.
 Its probabilities are only as good as the noise model and the performance
 figures it is given.
 
+![The three stages: aircraft states are predicted, the predictions are checked cell by cell for conflicts, and conflicts are resolved by predicting candidate manoeuvres again](figures/conflict-pipeline.svg)
+
+*Figure 1. How an assessment runs. Resolving goes back to prediction: each
+candidate manoeuvre is judged by predicting the aircraft again flying it.*
+
+The figures on this page are drawn from the crate itself, by the `figures`
+example; see [Regenerating the figures](#regenerating-the-figures).
+
 ## What is assessed
 
 The assessment takes every aircraft in the air at the current tick:
@@ -79,6 +87,20 @@ above and below it. The probability that the aircraft is in a cell and layer
 is the share of particles whose zone covers it. One aircraft therefore puts at
 most 1 into any cell.
 
+![Four clusters of particles along a gently curving track, small at 5 seconds and spreading to a few hundred metres across by 60 seconds](figures/conflict-cloud.svg)
+
+*Figure 2. One drone at 10 m/s in a gentle right turn, its 200 particles at
+5, 20, 40 and 60 s ahead. Small errors in heading, speed and wind grow into a
+cloud a few hundred metres across by the end of the minute.*
+
+![The same cloud 30 seconds ahead over A5 cells: at resolution 15 six cells hold 0.8 or more and three are near certain; at resolution 17 the probability spreads over 22 smaller cells, none above 0.88](figures/conflict-cells.svg)
+
+*Figure 3. That cloud 30 s ahead, counted into cells. Each particle covers
+its cell and one ring round it, so at resolution 15, where the cloud is small
+beside a cell, six cells hold 0.8 or more and three are all but certain. At
+resolution 17 the zone is smaller than the cloud and the probability spreads
+over 22 cells, none above 0.88.*
+
 Particles are drawn from a generator seeded by a fixed seed and the
 aircraft's id alone. The same aircraft gets the same cloud under every
 manoeuvre tried for it, so manoeuvres are compared without sampling noise,
@@ -111,6 +133,12 @@ aircraft data is included: BADA's is licensed by EUROCONTROL and OpenAP's is
 LGPL. `FixedWing`'s fields are named as OpenAP names them, so either source
 can fill them. The generic narrow-body jet and quadcopter are illustrative.
 
+![Left: the generic quadcopter's best climb falls from 3 m/s in the hover to 1.5 m/s at 18 m/s while its descent limit stays at 2.5 m/s. Right: the generic jet's best climb falls with altitude, with steps at the CAS to Mach crossover and the tropopause](figures/conflict-energy.svg)
+
+*Figure 4. What the two generic models allow. The jet's curves step where its
+speed schedule changes from constant CAS to constant Mach and again at the
+tropopause, where BADA's energy share factor changes.*
+
 ## Cells and layers
 
 A "cell" in the assessment is an A5 cell and an altitude layer.
@@ -128,6 +156,12 @@ boundary. Below FL290 each layer is its level ±500 ft (FL100's is 9 500 to
 above (FL330's is 32 500 to 34 500 ft), since centring FL290's would overlap
 FL280's. Aircraft at properly separated levels are therefore in different
 layers.
+
+![Left: airspace layers from 24 500 to 36 500 feet, 1 000 feet deep with each flight level in the middle up to FL280, then 2 000 feet deep from 28 500 feet with FL290, FL310, FL330 and FL350 near the bottom of theirs. Right: 30 metre drone layers, with a drone at 60 metres whose buffer spans layers 1 and 2](figures/conflict-layers.svg)
+
+*Figure 5. Altitude layers. Flight levels never sit on a boundary, so aircraft
+at properly separated levels are in different layers. A drone exactly on a
+30 m boundary covers the layers both sides of it.*
 
 **Cell resolution.** The A5 resolution of the cells is chosen in this order:
 
@@ -175,6 +209,13 @@ something into it and the summed probability reaches the threshold. The
 threshold is 1: one aircraft's worth. It cannot be lower, or an aircraft
 would be in conflict with itself.
 
+![Two drones flying at each other, three panels at 20, 40 and 60 seconds ahead. At 20 seconds their cells are apart; at 40 seconds one cell between them sums to 1.31 and is in conflict; at 60 seconds six cells are](figures/conflict-detection.svg)
+
+*Figure 6. Two drones 1.2 km apart flying at each other at 60 m and 10 m/s,
+the encounter in the `head_on` example. Each cell is shaded by the
+probability both put in it, summed (the most likely layer of each cell is
+shown). The first conflict is 40 s ahead.*
+
 **Risk** sums, over every conflict, its summed probability weighted toward
 the near ones: a conflict 30 seconds ahead counts half as much as one now,
 since it leaves more time to act.
@@ -198,6 +239,19 @@ Advisories are chosen greedily, using the prediction itself as the judge.
 Because the second aircraft is advised knowing the first's advisory, the two
 come out complementary (one climbs, the other descends or holds) without a
 separate coordination rule.
+
+![Bar charts of every manoeuvre's score for both drones: climb and descend leave no risk and score 1.1, turns score 3 to 8, slowing down 12 to 13 and speeding up over 30; only scores below 21.6 are advised](figures/conflict-search.svg)
+
+*Figure 7. The first round of the search for the encounter in figure 6. A
+score is the risk left plus the manoeuvre's cost. Climbing and descending
+both clear the conflict for either drone; UAV 1's climb is tried first and
+wins the tie. Speeding up brings the meeting forward and makes things worse.*
+
+![Height against time: UAV 1 climbs from 60 to about 208 metres over the minute, rising out of the shared layers well before the conflict at 40 seconds; UAV 2 stays at 60 metres](figures/conflict-resolution.svg)
+
+*Figure 8. The result. After UAV 1's climb nothing is left in conflict, so
+the search stops there and UAV 2 is given no advisory: risk 22.1 before,
+0 after. Bands are the 5th to 95th percentile of the particles' heights.*
 
 | Manoeuvre | Cost | What it asks for (drones) | Not offered when |
 |---|---|---|---|
@@ -357,3 +411,21 @@ presets:
 krabshell uses `drones()` with only the resolution changed. Source:
 [`crates/sim-conflict/src`](../crates/sim-conflict/src), krabshell's use of it:
 [`crates/sim-axum/src/conflicts.rs`](../crates/sim-axum/src/conflicts.rs).
+
+### Regenerating the figures
+
+The figures on this page are SVGs drawn from the crate's own output, so they
+show what it does rather than a sketch of it. `Predictor::trace` predicts like
+`Predictor::predict` and also hands back every particle at every step. The
+`figures` example runs it on the scenarios above and prints the data as JSON;
+[`tools/conflict_figures.py`](../tools/conflict_figures.py) draws them (Python's
+standard library only):
+
+```sh
+cargo run --release -p sim-conflict --example figures > target/conflict-figures.json
+python3 tools/conflict_figures.py target/conflict-figures.json docs/figures
+```
+
+Run them again after changing the predictor, the presets or the generic
+performance models. The server compiles the figures in, so rebuild it to
+serve the new ones.

@@ -584,7 +584,7 @@ form.inline { display: inline-flex; margin: 0; }
 .guide-toc li.l3 { padding-left: 12px; font-size: 13px; }
 .guide { padding: 20px 28px; line-height: 1.55; min-width: 0; }
 .guide h1 { margin-top: 0; }
-.guide h2 { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
+.guide h2 { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 20px; text-transform: none; letter-spacing: normal; color: var(--ink); }
 .guide h3 { margin-top: 20px; }
 .guide h2, .guide h3, .guide h4 { scroll-margin-top: 12px; }
 .guide p, .guide li { max-width: 80ch; }
@@ -604,3 +604,7 @@ form.inline { display: inline-flex; margin: 0; }
   .guide-nav { position: static; max-height: none; }
   .guide { padding: 14px 16px; }
 }
+/* A figure is an image alone in its paragraph; its caption is the italic
+   paragraph after it. */
+.guide img { display: block; max-width: 100%; height: auto; margin: 16px 0 4px; }
+.guide p:has(> img) + p > em:only-child { display: block; color: var(--dim); font-size: 14px; max-width: 80ch; }
