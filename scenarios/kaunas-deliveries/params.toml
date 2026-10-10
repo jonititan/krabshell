@@ -88,3 +88,8 @@ vehicle_speed_ms = 8.0
 # every geofence, breach and reroute.
 # `simctl fly kaunas-deliveries --hours 8` makes one offline.
 heatmap_resolution = 15
+
+
+weather = "recorded"
+weather_start_utc = "2026-03-14T09:00:00Z"
+weather_hours = 6

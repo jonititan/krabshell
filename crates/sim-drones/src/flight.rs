@@ -29,6 +29,15 @@ pub struct Pose {
     /// Vertical speed, cm/s, positive up.
     #[serde(default)]
     pub vs_cms: i32,
+    /// Horizontal airspeed, cm/s, when it flew in wind. Absent in still
+    /// air, where airspeed is ground speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_cms: Option<i32>,
+    /// Where the nose points, centidegrees, when it flew in wind: crabbed
+    /// off the track to hold it, or into the wind to hover. Absent in still
+    /// air, where it points along the track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw_cdeg: Option<i32>,
 }
 
 impl Pose {
@@ -61,9 +70,21 @@ impl Pose {
         }
     }
 
+    /// Horizontal airspeed, m/s.
+    pub fn airspeed_ms(&self) -> f64 {
+        f64::from(self.air_cms.unwrap_or(self.spd_cms)) * 0.01
+    }
+
+    /// Where the nose points, centidegrees.
+    pub fn yaw(&self) -> i32 {
+        self.yaw_cdeg.unwrap_or(self.hdg_cdeg)
+    }
+
     fn stop(&mut self) {
         self.spd_cms = 0;
         self.vs_cms = 0;
+        self.air_cms = None;
+        self.yaw_cdeg = None;
     }
 }
 
@@ -132,11 +153,48 @@ pub fn displace(lat_e7: i32, lon_e7: i32, east_m: f64, north_m: f64) -> (i32, i3
     )
 }
 
-/// How fast something may move.
+/// How fast something may move, and the air it moves through.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
+    /// Horizontal airspeed it flies at; in still air, its ground speed.
     pub speed_ms: f64,
     pub climb_ms: f64,
+    /// The wind, toward the east and north, m/s. Zero for anything on the
+    /// ground.
+    pub wind_east_ms: f64,
+    pub wind_north_ms: f64,
+}
+
+impl Limits {
+    /// Limits in still air.
+    pub const fn still(speed_ms: f64, climb_ms: f64) -> Limits {
+        Limits {
+            speed_ms,
+            climb_ms,
+            wind_east_ms: 0.0,
+            wind_north_ms: 0.0,
+        }
+    }
+
+    fn calm(&self) -> bool {
+        self.wind_east_ms == 0.0 && self.wind_north_ms == 0.0
+    }
+}
+
+/// The fastest ground speed along a unit direction `(de, dn)` an aircraft
+/// flying at `airspeed` can make in wind `(we, wn)`, holding its track: it
+/// crabs into the crosswind and the rest of its airspeed goes along. `None`
+/// if the crosswind alone is more than it can fly, or the headwind leaves
+/// it no headway.
+pub fn ground_speed_along(de: f64, dn: f64, we: f64, wn: f64, airspeed: f64) -> Option<f64> {
+    let along = we * de + wn * dn;
+    let cross_sq = (we * we + wn * wn - along * along).max(0.0);
+    let spare = airspeed * airspeed - cross_sq;
+    if spare < 0.0 {
+        return None;
+    }
+    let speed = along + libm::sqrt(spare);
+    (speed > 1e-6).then_some(speed)
 }
 
 /// What a step left to do.
@@ -155,14 +213,20 @@ impl Remaining {
 /// Fly straight toward `target` for `dt` seconds.
 ///
 /// Horizontal and vertical motion are independent, as a multirotor's are:
-/// it turns to face the target at once and never overshoots.
+/// it turns at once and never overshoots. In still air it faces the target
+/// and flies at `limits.speed_ms`. In wind it holds the straight track by
+/// crabbing into the crosswind, so its ground speed is what the wind leaves
+/// it; a wind stronger than it can fly blows it back, nose into the wind.
 pub fn step_toward(pose: &mut Pose, target: &Point, limits: Limits, dt: f64) -> Remaining {
     let (east, north) = offset_m(pose.lat_e7, pose.lon_e7, target.lat_e7, target.lon_e7);
     let ground = libm::sqrt(east * east + north * north);
-    let reach = limits.speed_ms * dt;
 
-    if ground > 0.005 {
-        let travel = ground.min(reach);
+    if ground <= 0.005 {
+        pose.lat_e7 = target.lat_e7;
+        pose.lon_e7 = target.lon_e7;
+        hover_level(pose, limits, dt);
+    } else if limits.calm() {
+        let travel = ground.min(limits.speed_ms * dt);
         let (lat, lon) = displace(
             pose.lat_e7,
             pose.lon_e7,
@@ -173,10 +237,26 @@ pub fn step_toward(pose: &mut Pose, target: &Point, limits: Limits, dt: f64) -> 
         pose.lon_e7 = lon;
         pose.hdg_cdeg = heading_cdeg(east, north);
         pose.spd_cms = libm::round(travel / dt * 100.0) as i32;
+        pose.air_cms = None;
+        pose.yaw_cdeg = None;
     } else {
-        pose.lat_e7 = target.lat_e7;
-        pose.lon_e7 = target.lon_e7;
-        pose.spd_cms = 0;
+        let (de, dn) = (east / ground, north / ground);
+        let (we, wn) = (limits.wind_east_ms, limits.wind_north_ms);
+        match ground_speed_along(de, dn, we, wn, limits.speed_ms) {
+            Some(fastest) => {
+                // Slow down for the last stretch rather than overshoot.
+                let speed = fastest.min(ground / dt);
+                let (lat, lon) =
+                    displace(pose.lat_e7, pose.lon_e7, de * speed * dt, dn * speed * dt);
+                pose.lat_e7 = lat;
+                pose.lon_e7 = lon;
+                pose.hdg_cdeg = heading_cdeg(east, north);
+                pose.spd_cms = libm::round(speed * 100.0) as i32;
+                // Air velocity is ground velocity less the wind.
+                set_air(pose, de * speed - we, dn * speed - wn);
+            }
+            None => blown(pose, limits, dt),
+        }
     }
 
     let dz = f64::from(target.alt_mm - pose.alt_mm) * 1e-3;
@@ -192,9 +272,55 @@ pub fn step_toward(pose: &mut Pose, target: &Point, limits: Limits, dt: f64) -> 
     }
 }
 
-/// Stay put, reporting zero motion.
+/// Stay put, reporting zero motion. For anything on the ground.
 pub fn hold(pose: &mut Pose) {
     pose.stop();
+}
+
+/// Hover where it is, in the air: in wind it flies into it to stay put, and
+/// in a wind stronger than it can fly it drifts downwind.
+pub fn hover(pose: &mut Pose, limits: Limits, dt: f64) {
+    hover_level(pose, limits, dt);
+    pose.vs_cms = 0;
+}
+
+fn hover_level(pose: &mut Pose, limits: Limits, dt: f64) {
+    if limits.calm() {
+        pose.stop();
+        return;
+    }
+    let (we, wn) = (limits.wind_east_ms, limits.wind_north_ms);
+    if we * we + wn * wn <= limits.speed_ms * limits.speed_ms {
+        pose.spd_cms = 0;
+        set_air(pose, -we, -wn);
+    } else {
+        blown(pose, limits, dt);
+    }
+}
+
+/// More wind than it can fly: full airspeed straight into it, and the rest
+/// carries it downwind.
+fn blown(pose: &mut Pose, limits: Limits, dt: f64) {
+    let (we, wn) = (limits.wind_east_ms, limits.wind_north_ms);
+    let wind = libm::sqrt(we * we + wn * wn);
+    let (ae, an) = (-we / wind * limits.speed_ms, -wn / wind * limits.speed_ms);
+    let (ge, gn) = (we + ae, wn + an);
+    let (lat, lon) = displace(pose.lat_e7, pose.lon_e7, ge * dt, gn * dt);
+    pose.lat_e7 = lat;
+    pose.lon_e7 = lon;
+    pose.hdg_cdeg = heading_cdeg(ge, gn);
+    pose.spd_cms = libm::round(libm::sqrt(ge * ge + gn * gn) * 100.0) as i32;
+    set_air(pose, ae, an);
+}
+
+fn set_air(pose: &mut Pose, east: f64, north: f64) {
+    let air = libm::sqrt(east * east + north * north);
+    pose.air_cms = Some(libm::round(air * 100.0) as i32);
+    pose.yaw_cdeg = Some(if air > 1e-6 {
+        heading_cdeg(east, north)
+    } else {
+        pose.hdg_cdeg
+    });
 }
 
 /// Compass heading of an east/north vector, in centidegrees.
@@ -208,10 +334,105 @@ pub fn heading_cdeg(east: f64, north: f64) -> i32 {
 mod tests {
     use super::*;
 
-    const LIMITS: Limits = Limits {
-        speed_ms: 10.0,
-        climb_ms: 3.0,
-    };
+    const LIMITS: Limits = Limits::still(10.0, 3.0);
+
+    fn windy(east: f64, north: f64) -> Limits {
+        Limits {
+            wind_east_ms: east,
+            wind_north_ms: north,
+            ..LIMITS
+        }
+    }
+
+    fn north_of(pose: &Pose, metres: f64) -> Point {
+        let (lat, lon) = displace(pose.lat_e7, pose.lon_e7, 0.0, metres);
+        Point {
+            lat_e7: lat,
+            lon_e7: lon,
+            alt_mm: pose.alt_mm,
+        }
+    }
+
+    fn ticks_to(pose: &mut Pose, target: &Point, limits: Limits) -> u32 {
+        let mut ticks = 0;
+        while !step_toward(pose, target, limits, 0.1).within(0.05, 0.05) {
+            ticks += 1;
+            assert!(ticks < 100_000, "never arrived");
+        }
+        ticks + 1
+    }
+
+    #[test]
+    fn a_headwind_slows_it_and_a_tailwind_speeds_it_up() {
+        let start = Pose::at(23.9, 54.9, 50.0);
+        let mut p = start;
+        let target = north_of(&p, 100.0);
+        // 10 m/s airspeed: 5 m/s over the ground into 5 m/s, 15 with it.
+        assert!((199..=201).contains(&ticks_to(&mut p, &target, windy(0.0, -5.0))));
+        let mut p = start;
+        assert!((66..=68).contains(&ticks_to(&mut p, &target, windy(0.0, 5.0))));
+        // Into the wind it flies at full airspeed.
+        let mut p = start;
+        step_toward(&mut p, &target, windy(0.0, -5.0), 0.1);
+        assert_eq!(p.air_cms, Some(1_000));
+        assert_eq!(p.spd_cms, 500);
+    }
+
+    #[test]
+    fn in_a_crosswind_it_crabs_and_holds_its_track() {
+        let mut p = Pose::at(23.9, 54.9, 50.0);
+        let target = north_of(&p, 100.0);
+        // 6 m/s from the west: it points 36.87° left of north and makes 8 m/s.
+        step_toward(&mut p, &target, windy(6.0, 0.0), 0.1);
+        assert_eq!(p.spd_cms, 800);
+        assert_eq!(p.hdg_cdeg, 0);
+        assert_eq!(p.yaw(), 36_000 - 3_687);
+        assert_eq!(p.air_cms, Some(1_000));
+        let ticks = ticks_to(&mut p, &target, windy(6.0, 0.0));
+        assert!((123..=126).contains(&ticks), "{ticks}");
+        assert_eq!(p.lon_e7, Pose::at(23.9, 54.9, 50.0).lon_e7);
+    }
+
+    #[test]
+    fn a_wind_stronger_than_it_flies_blows_it_back() {
+        let mut p = Pose::at(23.9, 54.9, 50.0);
+        let start = p.point();
+        let target = north_of(&p, 100.0);
+        for _ in 0..10 {
+            step_toward(&mut p, &target, windy(0.0, -15.0), 0.1);
+        }
+        // 5 m/s backwards for a second.
+        let back = ground_distance_m(&start, &p.point());
+        assert!((back - 5.0).abs() < 0.05, "{back}");
+        assert!(p.lat_e7 < start.lat_e7);
+        assert_eq!(p.yaw(), 0);
+    }
+
+    #[test]
+    fn hovering_in_wind_costs_airspeed_but_not_position() {
+        let mut p = Pose::at(23.9, 54.9, 50.0);
+        let start = p;
+        hover(&mut p, windy(3.0, 4.0), 0.1);
+        assert_eq!((p.lat_e7, p.lon_e7), (start.lat_e7, start.lon_e7));
+        assert_eq!(p.spd_cms, 0);
+        assert_eq!(p.air_cms, Some(500));
+        hover(&mut p, LIMITS, 0.1);
+        assert_eq!(p.air_cms, None);
+        assert_eq!(p.airspeed_ms(), 0.0);
+    }
+
+    #[test]
+    fn still_air_moves_exactly_as_before_wind_existed() {
+        let mut a = Pose::at(23.9, 54.9, 50.0);
+        let target = north_of(&a, 37.0).with_alt_mm(60_000);
+        let mut b = a;
+        for _ in 0..50 {
+            step_toward(&mut a, &target, LIMITS, 0.1);
+            step_toward(&mut b, &target, windy(0.0, 0.0), 0.1);
+        }
+        assert_eq!(a, b);
+        assert_eq!(a.air_cms, None);
+    }
 
     #[test]
     fn a_hundred_metres_north_takes_ten_seconds_at_ten_metres_a_second() {

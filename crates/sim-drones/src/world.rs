@@ -38,6 +38,7 @@ use sim_core::{
     AgentId, CellBag, GeoCell, Intent, IntentVerb, Profile, RejectReason, Report, ReportKind,
     ScenarioBlob, SeedAgent, WorldObject,
 };
+use sim_core::{Wind, WindField};
 
 use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
 use crate::airspace::{Airspace, Band, Fence, SavedAirspace, Shape};
@@ -98,6 +99,11 @@ pub mod codes {
     pub const ROI_ADD: u16 = 130;
     /// Remove a region of interest. Payload `{"id": n}`.
     pub const ROI_REMOVE: u16 = 131;
+    /// Replace the wind. Payload a whole [`sim_core::WindField`], at a
+    /// resolution no finer than the world's. The live weather feed sends
+    /// these as it refreshes; logged like any intent, so a gold replay flies
+    /// the same air.
+    pub const WEATHER_SET: u16 = 140;
 }
 
 /// Salts that keep each use of the seed independent.
@@ -461,6 +467,9 @@ pub struct World {
     /// the pack's `world/stations.json` and `world/regions.json`.
     roster_stations: Vec<Station>,
     roster_regions: Vec<Region>,
+    /// The wind a fresh run starts with, from the pack's fields (put there
+    /// by whoever loaded it: a weather fetch, or `world/weather.json`).
+    roster_weather: Option<Arc<WindField>>,
     pack_seed: u64,
 
     pub(crate) grid: SparseA5Grid<AgentId>,
@@ -528,7 +537,12 @@ pub struct World {
     /// How far couriers can deliver ([`World::delivery_range`]), and the
     /// station and airspace revisions it was worked out for.
     range: serde_json::Value,
-    range_key: Option<(u64, u64)>,
+    range_key: Option<(u64, u64, u64)>,
+    /// The wind now. Checkpointed, since live updates change it mid-run.
+    /// Change it only through [`World::set_weather`].
+    pub(crate) weather: Option<Arc<WindField>>,
+    /// Its [`WindField::rev`], worked out once per change.
+    weather_rev: u64,
 
     /// The behaviour tree every drone thinks with. Taken out while a drone
     /// ticks it, so the drone can reach the rest of the world.
@@ -573,6 +587,7 @@ impl World {
             roster_fences: Vec::new(),
             roster_stations: Vec::new(),
             roster_regions: Vec::new(),
+            roster_weather: None,
             pack_seed: seed,
             grid: new_grid(resolution, root),
             dispatch: Dispatch::new(book.depots.len()),
@@ -612,6 +627,8 @@ impl World {
             slot_claims: BTreeMap::new(),
             range: serde_json::Value::Null,
             range_key: None,
+            weather: None,
+            weather_rev: 0,
             brain: Some(Brain::from_fields(&blob.fields)?),
             caps: HashMap::new(),
             scan_radius_m,
@@ -628,6 +645,10 @@ impl World {
         world.roster_regions = world.pack_sites(&blob.fields, "regions", |w, v| {
             w.region_from(v, SCENARIO_SOURCE)
         })?;
+        world.roster_weather = match blob.fields.get("weather") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => Some(Arc::new(world.weather_from(v)?)),
+        };
         world.begin();
         Ok(world)
     }
@@ -1345,6 +1366,7 @@ impl World {
         self.stations = Stations::default();
         self.regions = Regions::default();
         self.site_mail.clear();
+        self.set_weather(self.roster_weather.clone());
         self.ops = self
             .roster_ops
             .iter()
@@ -1459,6 +1481,66 @@ impl World {
         &self.terrain
     }
 
+    // ------------------------------------------------------------ weather
+
+    /// Check a wind field for this world.
+    fn weather_from(&self, value: &serde_json::Value) -> anyhow::Result<WindField> {
+        let field = WindField::from_value(value)?;
+        if field.resolution > self.resolution {
+            anyhow::bail!(
+                "weather at resolution {} is finer than the world's {}",
+                field.resolution,
+                self.resolution
+            );
+        }
+        Ok(field)
+    }
+
+    /// The wind now, if there is any.
+    pub fn weather(&self) -> Option<&WindField> {
+        self.weather.as_deref()
+    }
+
+    /// The UTC time now in the simulation, Unix seconds, when there is
+    /// weather to give the clock a start.
+    pub fn sim_utc(&self) -> Option<f64> {
+        let w = self.weather.as_ref()?;
+        Some(w.utc_at(self.tick as f64 * self.settings.tuning.dt))
+    }
+
+    /// The wind in `cell` (or its ancestor at the weather resolution),
+    /// `agl_m` above the ground, now. Calm without weather, or outside it.
+    pub(crate) fn wind_at(&self, cell: GeoCell, agl_m: f64) -> Wind {
+        let (Some(w), Some(utc)) = (self.weather.as_ref(), self.sim_utc()) else {
+            return Wind::CALM;
+        };
+        w.wind_at(cell, agl_m, utc).unwrap_or(Wind::CALM)
+    }
+
+    /// The wind over a point, through the cell it is in.
+    pub(crate) fn wind_over(&self, point: &Point, agl_m: f64) -> Wind {
+        if self.weather.is_none() {
+            return Wind::CALM;
+        }
+        self.cell_of(point.lat_e7, point.lon_e7)
+            .map_or(Wind::CALM, |cell| self.wind_at(cell, agl_m))
+    }
+
+    /// Changes whenever the wind the planners see could: a new field, or
+    /// the next frame.
+    fn weather_epoch(&self) -> u64 {
+        let (Some(w), Some(utc)) = (self.weather.as_ref(), self.sim_utc()) else {
+            return 0;
+        };
+        let frame = ((utc - w.t0_unix as f64) / f64::from(w.step_s)).max(0.0) as u64;
+        self.weather_rev ^ frame.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+
+    fn set_weather(&mut self, weather: Option<Arc<WindField>>) {
+        self.weather_rev = weather.as_ref().map_or(0, |w| w.rev());
+        self.weather = weather;
+    }
+
     // ------------------------------------------------------------ intents
 
     /// Check an intent against the committed world and queue it for the
@@ -1468,6 +1550,13 @@ impl World {
             return Err(RejectReason::OutOfBounds);
         }
         match intent.verb {
+            IntentVerb::Custom(codes::WEATHER_SET) => {
+                let field = self
+                    .weather_from(&intent.payload)
+                    .map_err(|e| rejected(e.to_string()))?;
+                self.set_weather(Some(Arc::new(field)));
+                Ok(())
+            }
             IntentVerb::Custom(codes::GEOFENCE_OPEN) => self.open_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_CLOSE) => self.close_fence(intent),
             IntentVerb::Custom(codes::GEOFENCE_SET) => self.set_fences(intent),
@@ -2367,6 +2456,14 @@ impl World {
             }).collect::<Vec<_>>(),
             "rois": self.regions.list,
             "range": self.range,
+            "weather": self.weather.as_ref().map(|w| serde_json::json!({
+                "rev": self.weather_rev.to_string(),
+                "mode": w.mode,
+                "resolution": w.resolution,
+                "start_unix": w.start_unix,
+                "cells": w.cells.len(),
+                "utc": self.sim_utc(),
+            })),
         })
     }
 
@@ -2404,10 +2501,10 @@ impl World {
             .count()
     }
 
-    /// Work out again how far the couriers can deliver, if the stations or
-    /// the airspace (which stations can be used) have changed.
+    /// Work out again how far the couriers can deliver, if the stations, the
+    /// airspace (which stations can be used) or the wind have changed.
     pub(crate) fn refresh_range(&mut self) {
-        let key = (self.stations.rev, self.airspace.rev());
+        let key = (self.stations.rev, self.airspace.rev(), self.weather_epoch());
         if self.range_key == Some(key) {
             return;
         }
@@ -2444,7 +2541,8 @@ impl World {
                         (usize::from(c.depot) == depot).then_some((r.saved.drone.as_ref()?, c))
                     })
                     .map(|(d, c)| {
-                        let range = Range::new(&tuning, d.cruise_cms);
+                        let wind = self.wind_over(&d.home, f64::from(c.cruise_agl_m));
+                        let range = Range::new(&tuning, d.cruise_cms).with_wind(&wind);
                         let climb = f64::from(c.cruise_agl_m + ds.takeoff_m);
                         let work = f64::from(tuning.winch.hold_ms(
                             mission::WINCH_DELIVER,
@@ -2631,6 +2729,7 @@ impl World {
             "ops": self.ops.iter().collect::<Vec<_>>(),
             "stations": self.stations,
             "regions": self.regions,
+            "weather": self.weather.as_deref(),
         })
     }
 
@@ -2680,6 +2779,15 @@ impl World {
         if let Some(list) = fields.get("last_seen") {
             let pairs: Vec<[u64; 3]> = serde_json::from_value(list.clone())?;
             self.last_seen = pairs.into_iter().map(|[o, t, at]| ((o, t), at)).collect();
+        }
+        match fields.get("weather") {
+            // A checkpoint from before weather existed keeps the pack's.
+            None => {}
+            Some(serde_json::Value::Null) => self.set_weather(None),
+            Some(v) => {
+                let field = self.weather_from(v)?;
+                self.set_weather(Some(Arc::new(field)));
+            }
         }
         self.refresh_range();
         Ok(())

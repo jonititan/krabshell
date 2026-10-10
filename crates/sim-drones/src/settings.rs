@@ -65,10 +65,17 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
             climb_ms: param_f64(params, "climb_ms", 3.0).max(0.1),
             takeoff_alt_mm: flight::to_mm(param_f64(params, "takeoff_alt_m", 20.0)),
             rtl_alt_mm: flight::to_mm(param_f64(params, "rtl_alt_m", 30.0)),
-            // A 25-minute endurance by default. 0 flies forever.
+            // At cruise speed in still air: a 25-minute endurance by default.
+            // 0 flies forever.
             drain_ppm_tick: libm::round(
                 param_f64(params, "battery_drain_pct_s", 100.0 / 1500.0).max(0.0) * 10_000.0 * dt,
             ) as u32,
+            drain_ref_ms: param_f64(params, "cruise_ms", 10.0).max(0.1),
+            // Drain goes as the square of airspeed. A share drawn at zero
+            // airspeed (hovering in still air) is off by default.
+            hover_drain_share: param_f64(params, "hover_drain_pct", 0.0).clamp(0.0, 100.0) / 100.0,
+            max_wind_ms: param_f64(params, "max_wind_ms", 12.0).max(0.0),
+            max_gust_ms: param_f64(params, "max_gust_ms", 15.0).max(0.0),
             reserve_ppm: (param_f64(params, "battery_reserve_pct", 15.0).clamp(0.0, 100.0)
                 * 10_000.0) as u32,
             // No charger by default.

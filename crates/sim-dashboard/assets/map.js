@@ -50,6 +50,21 @@
   try {
     Object.assign(layers, JSON.parse(localStorage.getItem('krabshell.layers') || '{}'));
   } catch { /* no storage, or nonsense in it: everything on */ }
+  // A page may start some layers off for itself (`data-layers-off="grid"` on
+  // the canvas) without changing what the other pages remember.
+  const pageOff = (canvas.dataset.layersOff || '').split(',').filter(Boolean);
+  for (const key of pageOff) layers[key] = false;
+  function rememberLayers() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('krabshell.layers') || '{}');
+      const mine = { ...layers };
+      for (const key of pageOff) {
+        if (key in saved) mine[key] = saved[key];
+        else delete mine[key];
+      }
+      localStorage.setItem('krabshell.layers', JSON.stringify(mine));
+    } catch { /* not remembered, still applied */ }
+  }
 
   // Colours the ramp goes through, cold to hot.
   const RAMP = [
@@ -1439,9 +1454,10 @@
     input.checked = layers[input.dataset.layer] !== false;
     input.addEventListener('change', () => {
       layers[input.dataset.layer] = input.checked;
-      try {
-        localStorage.setItem('krabshell.layers', JSON.stringify(layers));
-      } catch { /* not remembered, still applied */ }
+      const own = pageOff.indexOf(input.dataset.layer);
+      // Switched by hand, it is this page's to remember like any other.
+      if (own >= 0) pageOff.splice(own, 1);
+      rememberLayers();
       if (legend) legend.hidden = !layers.grid;
       if (!layers.grid) hover = null;
       refreshEntities();

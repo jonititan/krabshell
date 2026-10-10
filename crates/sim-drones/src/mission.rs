@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::flight::{self, Limits, Point, Pose};
 use crate::terrain::Terrain;
+use sim_core::Wind;
 
 // MAV_CMD values this executor understands.
 pub const NAV_WAYPOINT: u16 = 16;
@@ -264,6 +265,14 @@ pub struct Drone {
     /// is never saved.
     #[serde(skip)]
     pub at_station: bool,
+    /// The wind where it is now, in its cell at its height. Set like
+    /// `at_station`, before every step, so never saved.
+    #[serde(skip)]
+    pub wind: Wind,
+    /// The wind in its cell at its takeoff height, which decides whether
+    /// it may launch. Set and kept likewise.
+    #[serde(skip)]
+    pub launch_wind: Wind,
 }
 
 /// A mission step's outcome, for the model to turn into a report.
@@ -288,8 +297,20 @@ pub struct Tuning {
     pub climb_ms: f64,
     pub takeoff_alt_mm: i32,
     pub rtl_alt_mm: i32,
-    /// Battery drain while airborne, ppm per tick. Zero means endless.
+    /// Battery drain at `drain_ref_ms` airspeed, ppm per tick. Zero means
+    /// endless. See [`Tuning::drain_at`].
     pub drain_ppm_tick: u32,
+    /// The airspeed `drain_ppm_tick` is the drain at, m/s: the pack's cruise
+    /// speed.
+    pub drain_ref_ms: f64,
+    /// The share of `drain_ppm_tick` drawn at zero airspeed. 0 makes the
+    /// drain purely proportional to the square of airspeed.
+    pub hover_drain_share: f64,
+    /// A drone on the ground will not take off into a wind above this at its
+    /// takeoff height, m/s. 0 for no limit.
+    pub max_wind_ms: f64,
+    /// Nor into gusts above this, m/s. 0 for no limit.
+    pub max_gust_ms: f64,
     /// Below this the drone returns home by itself.
     pub reserve_ppm: u32,
     /// Charge gained per tick on the home pad, ppm. Zero means no charger.
@@ -316,6 +337,31 @@ pub struct Winch {
     pub reel_ms: f64,
     /// Locking the reel once it is fully retracted, seconds.
     pub lock_s: f64,
+}
+
+impl Tuning {
+    /// Battery drain for one tick at `pose`'s airspeed, ppm: the reference
+    /// drain scaled by the square of airspeed (horizontal through the air,
+    /// and vertical), over a floor of `hover_drain_share` of it.
+    ///
+    /// `drain = drain_ppm_tick × (h + (1 − h) × v² / v_ref²)`
+    pub fn drain_at(&self, pose: &Pose) -> u32 {
+        if self.drain_ppm_tick == 0 {
+            return 0;
+        }
+        let h = pose.airspeed_ms();
+        let v = f64::from(pose.vs_cms) * 0.01;
+        let reference = self.drain_ref_ms.max(0.1);
+        let share = self.hover_drain_share.clamp(0.0, 1.0);
+        let scale = share + (1.0 - share) * (h * h + v * v) / (reference * reference);
+        libm::round(f64::from(self.drain_ppm_tick) * scale) as u32
+    }
+
+    /// Too much wind to launch into.
+    pub fn too_windy(&self, wind: &Wind) -> bool {
+        (self.max_wind_ms > 0.0 && wind.speed_ms() > self.max_wind_ms)
+            || (self.max_gust_ms > 0.0 && wind.gust_ms > self.max_gust_ms)
+    }
 }
 
 impl Winch {
@@ -372,6 +418,8 @@ impl Drone {
             failsafe: false,
             fenced: Vec::new(),
             at_station: false,
+            wind: Wind::CALM,
+            launch_wind: Wind::CALM,
         }
     }
 
@@ -416,10 +464,15 @@ impl Drone {
         tuning.launch_ppm.max(asked)
     }
 
-    fn limits(&self, tuning: &Tuning) -> Limits {
+    /// How it flies this tick: in the wind if airborne, still air on the
+    /// ground (a drone on its pad is not blown about).
+    fn limits(&self, tuning: &Tuning, airborne: bool) -> Limits {
+        let wind = if airborne { self.wind } else { Wind::CALM };
         Limits {
             speed_ms: f64::from(self.cruise_cms) * 0.01,
             climb_ms: tuning.climb_ms,
+            wind_east_ms: wind.east_ms,
+            wind_north_ms: wind.north_ms,
         }
     }
 
@@ -492,6 +545,13 @@ impl Drone {
                 }
                 if !airborne && self.battery_ppm < tuning.launch_ppm {
                     return Err("battery below the launch level".into());
+                }
+                if !airborne && tuning.too_windy(&self.launch_wind) {
+                    return Err(format!(
+                        "wind {:.1} m/s gusting {:.1} is above the launch limit",
+                        self.launch_wind.speed_ms(),
+                        self.launch_wind.gust_ms
+                    ));
                 }
                 let alt = if params[6].is_finite() && params[6] > 0.0 {
                     flight::to_mm(f64::from(params[6]))
@@ -613,8 +673,10 @@ impl Drone {
         terrain: &Terrain,
         events: &mut Vec<Event>,
     ) -> bool {
-        if !self.grounded(pose, terrain) {
-            self.battery_ppm = self.battery_ppm.saturating_sub(tuning.drain_ppm_tick);
+        let airborne = !self.grounded(pose, terrain);
+        if airborne {
+            // At the airspeed it flew last tick.
+            self.battery_ppm = self.battery_ppm.saturating_sub(tuning.drain_at(pose));
             if tuning.drain_ppm_tick > 0 && self.battery_ppm == 0 {
                 pose.alt_mm = self.surface_mm(pose, terrain);
                 flight::hold(pose);
@@ -638,9 +700,9 @@ impl Drone {
             self.failsafe = false;
         }
 
-        let limits = self.limits(tuning);
+        let limits = self.limits(tuning, airborne);
         match self.mode {
-            Mode::Disarmed | Mode::Idle => flight::hold(pose),
+            Mode::Disarmed | Mode::Idle => flight::hover(pose, limits, tuning.dt),
             Mode::Takeoff { alt_mm } => {
                 let target = pose.point().with_alt_mm(alt_mm);
                 let left = flight::step_toward(pose, &target, limits, tuning.dt);
@@ -648,7 +710,7 @@ impl Drone {
                     self.mode = Mode::Loiter;
                 }
             }
-            Mode::Loiter => flight::hold(pose),
+            Mode::Loiter => flight::hover(pose, limits, tuning.dt),
             Mode::Goto { to } => {
                 let left = flight::step_toward(pose, &to, limits, tuning.dt);
                 if left.within(0.5, 0.5) {
@@ -732,7 +794,7 @@ impl Drone {
                 } else {
                     Mode::Loiter
                 };
-                flight::hold(pose);
+                flight::hover(pose, limits, tuning.dt);
                 return;
             };
 
@@ -742,7 +804,7 @@ impl Drone {
                         && self.battery_ppm < self.launch_ppm(&item, pose, tuning)
                     {
                         // Charging on the pad until there is enough to launch.
-                        flight::hold(pose);
+                        flight::hover(pose, limits, tuning.dt);
                         return;
                     }
                     let target = pose
@@ -773,7 +835,7 @@ impl Drone {
                         };
                         self.wait_ms = (hold_s * 1000.0) as u32;
                     } else {
-                        flight::hold(pose);
+                        flight::hover(pose, limits, tuning.dt);
                     }
                     if item.command == NAV_LOITER_UNLIM {
                         return;
@@ -809,7 +871,7 @@ impl Drone {
                     return;
                 }
                 CONDITION_DELAY => {
-                    flight::hold(pose);
+                    flight::hover(pose, limits, tuning.dt);
                     if !self.arrived {
                         self.arrived = true;
                         self.wait_ms = (item.param1.max(0.0) * 1000.0) as u32;
@@ -820,7 +882,7 @@ impl Drone {
                     return;
                 }
                 DO_WINCH => {
-                    flight::hold(pose);
+                    flight::hover(pose, limits, tuning.dt);
                     if !self.arrived {
                         self.arrived = true;
                         self.wait_ms = tuning.winch.hold_ms(
@@ -863,7 +925,7 @@ impl Drone {
                 }
             }
         }
-        flight::hold(pose);
+        flight::hover(pose, limits, tuning.dt);
     }
 }
 
@@ -880,6 +942,12 @@ mod tests {
         takeoff_alt_mm: 20_000,
         rtl_alt_mm: 30_000,
         drain_ppm_tick: 10,
+        drain_ref_ms: 10.0,
+        // The flat drain these tests were written for; airspeed-squared
+        // drain and wind have tests of their own.
+        hover_drain_share: 1.0,
+        max_wind_ms: 12.0,
+        max_gust_ms: 15.0,
         reserve_ppm: 150_000,
         charge_ppm_tick: 0,
         launch_ppm: 0,
@@ -1354,5 +1422,85 @@ mod tests {
         let mut nav_in_mission_frame = local;
         nav_in_mission_frame.frame = 2;
         assert!(nav_in_mission_frame.check(0).is_err());
+    }
+
+    #[test]
+    fn drain_goes_with_the_square_of_airspeed() {
+        let tuning = Tuning {
+            drain_ppm_tick: 100,
+            hover_drain_share: 0.0,
+            ..TUNING
+        };
+        let at = |air_cms: i32, vs_cms: i32| {
+            let pose = Pose {
+                air_cms: Some(air_cms),
+                vs_cms,
+                ..Pose::default()
+            };
+            tuning.drain_at(&pose)
+        };
+        assert_eq!(at(1_000, 0), 100);
+        assert_eq!(at(500, 0), 25);
+        assert_eq!(at(2_000, 0), 400);
+        assert_eq!(at(0, 0), 0);
+        // Climbing counts: 6 and 8 make 10.
+        assert_eq!(at(600, 800), 100);
+        // A floor for hovering, when the pack asks for one.
+        let floor = Tuning {
+            hover_drain_share: 0.5,
+            ..tuning
+        };
+        assert_eq!(floor.drain_at(&Pose::default()), 50);
+        assert_eq!(
+            floor.drain_at(&Pose {
+                air_cms: Some(1_000),
+                ..Pose::default()
+            }),
+            100
+        );
+    }
+
+    #[test]
+    fn a_takeoff_into_too_much_wind_is_refused_but_one_in_the_air_is_not() {
+        let mut drone = Drone::new(1, Point::at(23.9, 54.9, 0.0), 1_000);
+        let pose = Pose::at(23.9, 54.9, 0.0);
+        let mut params = [0.0; 7];
+        params[0] = 1.0;
+        drone
+            .command(COMPONENT_ARM_DISARM, params, &pose, &TUNING, &FLAT)
+            .unwrap();
+        drone.launch_wind = Wind {
+            east_ms: 0.0,
+            north_ms: 9.0,
+            gust_ms: 16.0,
+        };
+        let err = drone
+            .command(NAV_TAKEOFF, [0.0; 7], &pose, &TUNING, &FLAT)
+            .unwrap_err();
+        assert!(err.contains("launch limit"), "{err}");
+        drone.launch_wind.gust_ms = 14.0;
+        drone
+            .command(NAV_TAKEOFF, [0.0; 7], &pose, &TUNING, &FLAT)
+            .unwrap();
+    }
+
+    #[test]
+    fn on_the_ground_it_is_not_blown_about_and_in_the_air_it_is() {
+        let home = Point::at(23.9, 54.9, 0.0);
+        let mut drone = Drone::new(1, home, 1_000);
+        drone.wind = Wind {
+            east_ms: 15.0,
+            north_ms: 0.0,
+            gust_ms: 0.0,
+        };
+        let mut pose = Pose::at(23.9, 54.9, 0.0);
+        let mut events = Vec::new();
+        drone.step(&mut pose, &TUNING, &FLAT, &mut events);
+        assert_eq!(pose.point(), home);
+        // Loitering at 30 m in more wind than it can fly, it drifts.
+        drone.mode = Mode::Loiter;
+        pose.alt_mm = 30_000;
+        drone.step(&mut pose, &TUNING, &FLAT, &mut events);
+        assert!(pose.lon_e7 > home.lon_e7);
     }
 }

@@ -25,6 +25,8 @@ The design is in [`krabshell_spec.md`](krabshell_spec.md). How the code
 implements it, and what was learned doing so, is in
 [`docs/architecture.md`](docs/architecture.md). Speed numbers are in
 [`docs/baseline.md`](docs/baseline.md).
+How to author and upload drone behaviour trees is in
+[`docs/drone-behaviours.md`](docs/drone-behaviours.md).
 
 ## Quick start
 
@@ -57,12 +59,14 @@ crates/
   sim-engine/     driver thread, Model seam, walkers, scenario store, checkpoints, simctl
   sim-mavlink/    MAVLink gateway: drones as UDP vehicles for ground stations
   sim-cot/        Cursor-on-Target emitter: tracks and sightings for TAK
+  sim-weather/    wind per A5 cell from Open-Meteo, recorded or live, cached on disk
+  sim-conflict/   conflict detection and resolution advisories on A5 cells
   sim-axum/       REST + WebSocket edge, auth, the krabshell binary
   sim-dashboard/  Askama templates and static assets (htmx, milsymbol, canvas map)
 scenarios/        drone packs: london-patrol (gold), kaunas-deliveries (gold),
                   swarm-survey (fast)
 bench/scenarios/  random-walker packs for benchmarks and the krABMaga replay
-docs/             architecture notes and baseline numbers
+docs/             architecture notes, behaviour-tree guide and baseline numbers
 ```
 
 ## Features
@@ -342,6 +346,142 @@ stations added and removed, regions designated, removed or added at a
 crash, and surveys done. A model that publishes neither leaves the page
 empty.
 
+### Weather
+
+The drones fly in wind, one series per A5 cell. A drone looks up its wind
+from the cell it is in, through that cell's ancestor at the *weather
+resolution* (12 by default, about 1.4 km, near the grid of the weather
+models), at its height above the ground. In wind:
+
+- **Flight.** It holds a straight track by crabbing into the crosswind; its
+  ground speed is what the wind leaves of its airspeed, slower into a
+  headwind and faster with one. A wind stronger than it can fly blows it
+  back, nose into the wind. Hovering costs airspeed but not position. People,
+  vehicles and scripted intruders are not affected.
+- **Battery.** Drain goes with the square of airspeed (through the air,
+  climb included), scaled so `battery_drain_pct_s` is the drain at
+  `cruise_ms`. Hovering in still air costs nothing unless `hover_drain_pct`
+  gives it a floor; hovering into a wind costs what flying at that speed
+  does. This applies with or without weather.
+- **Planning.** Couriers and surveys plan each leg for the wind in their cell
+  at cruise height: a headwind leg costs more than the same leg downwind, and
+  a trip that would not make it with the wind as it is goes by way of
+  stations instead. The delivery range shown on the map shrinks to what holds
+  in the worst direction.
+- **Launching.** Drones the simulation flies stay on the ground while the
+  wind at takeoff height is over `max_wind_ms` (default 12) or gusts over
+  `max_gust_ms` (default 15); a ground station's takeoff command is refused
+  likewise. 0 is no limit.
+- **Telemetry.** MAVLink `VFR_HUD` reports airspeed and ground speed apart,
+  and the heading is where the nose points, not the track.
+
+A pack asks for weather in `params.toml`:
+
+```toml
+weather = "recorded"                        # "live", or "off" (the default)
+weather_start_utc = "2026-03-14T09:00:00Z"  # recorded: the UTC time of tick 0
+weather_hours = 24                          # how much to fetch, 1 to 384
+weather_resolution = 12                     # A5 resolution of the weather cells
+weather_model = "best_match"                # an Open-Meteo model token
+# weather_bbox = [23.79, 54.83, 24.02, 55.0]  # min lon, min lat, max lon, max lat
+# weather_margin_km = 3                     # round the agents, without terrain or a box
+# weather_refresh_min = 60                  # live: how often to fetch again
+```
+
+- **`recorded`** fixes tick 0 at `weather_start_utc` and fetches the wind for
+  that window once, from Open-Meteo's forecast API (which holds about three
+  months back and 16 days ahead) or, for older starts, its historical
+  forecast archive. A recorded run is reproducible: the same scenario flies
+  in the same air every time, and if the weather cannot be fetched the load
+  is refused (`weather_unavailable`) rather than flown in still air.
+- **`live`** fixes tick 0 at the moment of loading and fetches the latest
+  forecast from the hour before. The server fetches again every
+  `weather_refresh_min` and hands the new field to the world as a
+  `WEATHER_SET` intent, which the gold intent log records, so a live run
+  replays too. If a fetch fails, the run flies in still air and tries again
+  every minute.
+
+Weather is fetched for every weather cell over the pack's terrain, or else
+round its agents, sites and addresses with `weather_margin_km`, or
+`weather_bbox`; at 10, 80, 120 and 180 m, with gusts at 10 m, hourly. Between
+hours the wind is linear in time, between heights linear in height, and below
+10 m it falls off toward the ground. Kaunas is 169 cells: two requests of
+up to 100 locations, which Open-Meteo counts as 169 calls.
+
+**Caching.** Fetched fields go to `var/weather-cache/` (`--weather-cache`),
+keyed by what was asked. Running a scenario again does not call Open-Meteo
+again; a window wholly in the past is kept for good, and one reaching into
+the future (a forecast) is fetched again once the hour has turned.
+
+**Checkpoints** carry the wind the world was flying in, so a restore flies in
+the same air. A pack can also ship its own field as `world/weather.json`
+(the `WindField` shape in `sim-core`) and need no fetch at all.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--weather-cache` | `var/weather-cache` | Where fetched weather is kept |
+| `--no-weather` | off | Never fetch: recorded packs refuse to load, live ones fly in still air |
+| `--open-meteo-key` | none | A commercial Open-Meteo key (`OPEN_METEO_API_KEY`) |
+| `--open-meteo-url`, `--open-meteo-historical-url` | Open-Meteo's | A self-hosted Open-Meteo |
+
+**Licence.** Open-Meteo's free API is for non-commercial use, at up to
+10 000 calls a day (each location counts). Commercial use needs a key. The
+data is CC BY 4.0: the Weather screen carries the credit, "Weather data by
+Open-Meteo.com".
+
+The dashboard's **Weather** screen shows the status, a map of the wind by
+cell at any height and hour, and answers what the wind is at a point or a
+cell: now at each height, and through the window.
+
+### Conflict advisories
+
+`sim-conflict` predicts where aircraft could be and advises how to keep them
+apart. The dashboard's **Conflicts** screen and `GET /api/v1/conflicts` run
+it on the drones and intruders in the air (drones on the ground or charging
+are left out), with the run's wind, for the minute ahead: a heatmap of each
+A5 cell at its worst moment (by the chance of two or more aircraft there
+together, or the summed probability), the requests for conflict resolution,
+and the ten cells most aircraft are expected in, with the aircraft
+contributing to each. It is worked out at most once a tick, off the tick
+thread, and only while someone is looking. The advisories are shown, not
+flown.
+
+For each aircraft state (position, altitude, true airspeed, heading,
+vertical speed, turn rate, mass and a performance model), it flies a seeded
+cloud of particles forward under an energy model. Fixed-wing aircraft use
+BADA 3's Total Energy Model with energy share factors for constant-CAS and
+constant-Mach climbs; multirotors use an excess-power envelope. The model is
+scaled to the climb or descent the aircraft is seen flying. At each step
+(5 s for a minute for drones, 15 s for five minutes for airliners) every
+particle lands in an A5 cell and an altitude layer, with a protected zone of
+one ring of neighbouring cells. The share of particles covering a cell is the
+probability the aircraft is there.
+
+Each cell's probabilities are summed over all aircraft at each step. Where
+two or more aircraft reach the threshold (1 by default, the expected number
+of aircraft), the cell is in conflict. Advisories come from trying climb,
+descend, level off, turn and speed changes for the aircraft involved,
+predicting again, and advising whatever removes the most risk; vertical
+manoeuvres are preferred. A second aircraft is advised knowing the first's
+advisory, so the two come out complementary.
+
+Altitude layers are the airspace's: 1 000 ft deep below FL290 and 2 000 ft
+from FL290 up, placed so no flight level sits on a boundary. Below FL290 each
+layer is its level ±500 ft (FL100's is 9 500 to 10 500 ft); from FL290 each
+runs from 500 ft below its level to 1 500 ft above (FL330's is 32 500 to
+34 500 ft), since centring FL290's would overlap FL280's. Aircraft at
+properly separated levels are therefore in different layers. The drone
+preset uses 30 m layers instead.
+
+No BADA or OpenAP aircraft data is included (BADA's is licensed by
+EUROCONTROL; OpenAP's is LGPL). `FixedWing`'s fields are named as OpenAP
+names them, to be filled from either source; the generic jet and quadcopter
+are illustrative.
+
+```sh
+cargo run --release -p sim-conflict --example head_on
+```
+
 ### Map symbols
 
 The maps draw NATO joint military symbology (drones and intruders as the
@@ -552,6 +692,11 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | DELETE | `/stations/{id}` | Remove a station, whoever added it. 404 if the model does not list it. |
 | GET POST | `/rois` | Regions of interest as the model publishes them, with recent region and survey reports; designate one (`{"lat", "lon", "radius_m", "name"}`, degrees, 10 to 5000 m). |
 | DELETE | `/rois/{id}` | Remove a region of interest, a crash site's included. 404 if the model does not list it. |
+| GET | `/conflicts?outlines=` | Where the aircraft in the air could meet in the next minute: cells two or more could share (worst first, with summed probability, chance of two or more and contributors), resolution advisories, and conflicts left unresolved. |
+| GET | `/weather` | The run's wind: mode, source, tick 0 and the simulation's UTC time, window, cells, last fetch and cache use, launch limits. |
+| POST | `/weather/refresh` | Live weather only: fetch again now and hand it to the world. |
+| GET | `/weather/cells?alt_m=&utc=` | The wind in every weather cell at a height and time, with outlines. |
+| GET | `/weather/cells/{cell}?alt_m=&utc=` | The wind a cell takes (any resolution at least as fine as the weather's): now at the height asked and at each fetched height, and through the window. |
 | GET | `/ws` | Live protocol: subscribe, AOI, intents, deltas. |
 
 Errors are `application/problem+json` with a stable `code`.
@@ -596,9 +741,13 @@ A `drones` pack seeds `world/agents.json` with entities of five kinds, each by
 | `poi` | `name` |
 
 `params.toml` sets `tick_seconds`, flight (`cruise_ms`, `climb_ms`,
-`takeoff_alt_m`, `rtl_alt_m`), the battery (`battery_drain_pct_s`,
-`battery_reserve_pct`, `charge_pct_s` on the home pad, `launch_battery_pct`
-below which a takeoff from the ground waits or is refused), the winch
+`takeoff_alt_m`, `rtl_alt_m`), the battery (`battery_drain_pct_s`, the drain
+at `cruise_ms` airspeed; `hover_drain_pct`, the share of it drawn at zero
+airspeed, default 0, so drain is purely proportional to the square of
+airspeed; `battery_reserve_pct`, `charge_pct_s` on the home pad,
+`launch_battery_pct` below which a takeoff from the ground waits or is
+refused), the launch wind limits (`max_wind_ms`, `max_gust_ms`; see
+[Weather](#weather)), the winch
 (`winch_drop_ms`, `winch_slow_ms`, `winch_slow_m`, `winch_release_s`,
 `winch_reel_ms`, `winch_lock_s`), the camera (`hfov_deg`, `max_range_m`,
 `p_detect`, `sensor_period_s`, `report_interval_s`) and generated targets

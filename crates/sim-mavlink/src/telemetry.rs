@@ -58,7 +58,7 @@ pub fn heartbeat(drone: &DroneStatus, sim_healthy: bool) -> MavMessage {
     })
 }
 
-/// North/east velocity in cm/s from heading and ground speed.
+/// North/east velocity in cm/s from the track and ground speed.
 fn velocity(drone: &DroneStatus) -> (i16, i16) {
     let hdg = f64::from(drone.pose.hdg_cdeg) / 100.0;
     let speed = f64::from(drone.pose.spd_cms);
@@ -82,12 +82,13 @@ pub fn global_position(drone: &DroneStatus, time_boot_ms: u32) -> MavMessage {
         vx,
         vy,
         vz: (-drone.pose.vs_cms).clamp(-32_768, 32_767) as i16,
-        hdg: drone.pose.hdg_cdeg.clamp(0, 35_999) as u16,
+        // Where the nose points, which in wind is not the track.
+        hdg: drone.pose.yaw().clamp(0, 35_999) as u16,
     })
 }
 
 pub fn attitude(drone: &DroneStatus, time_boot_ms: u32) -> MavMessage {
-    let mut yaw = (f64::from(drone.pose.hdg_cdeg) / 100.0).to_radians();
+    let mut yaw = (f64::from(drone.pose.yaw()) / 100.0).to_radians();
     if yaw > std::f64::consts::PI {
         yaw -= std::f64::consts::TAU;
     }
@@ -103,13 +104,12 @@ pub fn attitude(drone: &DroneStatus, time_boot_ms: u32) -> MavMessage {
 }
 
 pub fn vfr_hud(drone: &DroneStatus) -> MavMessage {
-    let speed = drone.pose.spd_cms as f32 / 100.0;
     MavMessage::VFR_HUD(VFR_HUD_DATA {
-        airspeed: speed,
-        groundspeed: speed,
+        airspeed: drone.pose.airspeed_ms() as f32,
+        groundspeed: drone.pose.spd_cms as f32 / 100.0,
         alt: drone.pose.alt_mm as f32 / 1000.0,
         climb: drone.pose.vs_cms as f32 / 100.0,
-        heading: (drone.pose.hdg_cdeg / 100) as i16,
+        heading: (drone.pose.yaw() / 100) as i16,
         throttle: if drone.pose.alt_mm - drone.home.alt_mm > 200 {
             50
         } else {
@@ -271,6 +271,7 @@ mod tests {
                 hdg_cdeg: 9_000,
                 spd_cms: 1_000,
                 vs_cms: 0,
+                ..Pose::default()
             },
             mode,
             home: Point::default(),
@@ -334,5 +335,26 @@ mod tests {
             panic!()
         };
         assert!(st.text.to_str().unwrap().len() <= 50);
+    }
+
+    #[test]
+    fn in_wind_the_hud_shows_airspeed_and_the_nose_not_the_track() {
+        let mut drone = drone(Mode::Auto);
+        drone.pose.air_cms = Some(1_000);
+        drone.pose.spd_cms = 800;
+        drone.pose.yaw_cdeg = Some(32_313);
+        drone.pose.hdg_cdeg = 0;
+        let MavMessage::VFR_HUD(hud) = vfr_hud(&drone) else {
+            panic!("not a VFR_HUD");
+        };
+        assert_eq!(
+            (hud.airspeed, hud.groundspeed, hud.heading),
+            (10.0, 8.0, 323)
+        );
+        let MavMessage::GLOBAL_POSITION_INT(gp) = global_position(&drone, 0) else {
+            panic!("not a GLOBAL_POSITION_INT");
+        };
+        // Velocity is along the track (north), heading is the nose.
+        assert_eq!((gp.vx, gp.vy, gp.hdg), (800, 0, 32_313));
     }
 }

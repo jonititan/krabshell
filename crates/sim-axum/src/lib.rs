@@ -5,11 +5,13 @@
 //! wedged browser cannot cost the simulation a tick.
 
 pub mod auth;
+pub mod conflicts;
 pub mod openapi;
 pub mod problem;
 pub mod ratelimit;
 pub mod routes;
 pub mod runlog;
+pub mod weather;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,6 +43,8 @@ pub struct AppState {
     /// Models this build can instantiate, for the scenario screen.
     pub model_kinds: Arc<Vec<String>>,
     pub limiter: Arc<ratelimit::ActorLimiter>,
+    pub weather: Arc<weather::WeatherService>,
+    pub conflicts: Arc<conflicts::ConflictService>,
 }
 
 impl AppState {
@@ -58,7 +62,14 @@ impl AppState {
                     .collect(),
             ),
             limiter: Arc::new(ratelimit::ActorLimiter::new()),
+            weather: Arc::new(weather::WeatherService::offline()),
+            conflicts: Arc::new(conflicts::ConflictService::default()),
         }
+    }
+
+    /// The same state, with a weather service that can fetch.
+    pub fn with_weather(self, weather: Arc<weather::WeatherService>) -> Self {
+        AppState { weather, ..self }
     }
 }
 
@@ -120,6 +131,11 @@ pub fn router(state: AppState) -> Router {
             get(routes::api::rois_list).post(routes::api::rois_add),
         )
         .route("/rois/{id}", delete(routes::api::rois_remove))
+        .route("/conflicts", get(routes::api::conflicts))
+        .route("/weather", get(routes::weather::weather_status))
+        .route("/weather/refresh", post(routes::weather::weather_refresh))
+        .route("/weather/cells", get(routes::weather::weather_cells))
+        .route("/weather/cells/{cell}", get(routes::weather::weather_cell))
         .route("/ws", get(routes::ws::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),

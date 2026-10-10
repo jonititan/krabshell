@@ -54,6 +54,9 @@ pub enum Node {
     AtStation,
     /// The low-battery failsafe has fired on this charge.
     LowBattery,
+    /// The wind and gusts in its cell at its takeoff height are within the
+    /// launch limits (`max_wind_ms`, `max_gust_ms`).
+    WindWithinLimits,
 
     // -------------------------------------------------------------- acts
     /// Keep clear of the geofences, as a ground station would: reroute the

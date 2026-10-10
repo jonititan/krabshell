@@ -81,10 +81,7 @@ impl Wander {
             flight::hold(pose);
             return;
         }
-        let limits = Limits {
-            speed_ms: f64::from(self.speed_cms) * 0.01,
-            climb_ms: 0.0,
-        };
+        let limits = Limits::still(f64::from(self.speed_cms) * 0.01, 0.0);
         let left = flight::step_toward(pose, &self.dest, limits, dt);
         if left.ground_m > 0.5 {
             return;
@@ -123,10 +120,8 @@ impl Route {
             flight::hold(pose);
             return;
         };
-        let limits = Limits {
-            speed_ms: f64::from(self.speed_cms) * 0.01,
-            climb_ms: 3.0,
-        };
+        // Intruders fly scripted routes at a set ground speed, wind or not.
+        let limits = Limits::still(f64::from(self.speed_cms) * 0.01, 3.0);
         let left = flight::step_toward(pose, &target, limits, dt);
         if left.within(1.0, 1.0) {
             self.leg = ((usize::from(self.leg) + 1) % self.waypoints.len()) as u16;

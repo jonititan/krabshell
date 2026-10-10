@@ -1,0 +1,83 @@
+{#
+  The Conflicts screen's two tables. Polls itself every two seconds; the
+  assessment behind it is worked out at most once a tick.
+#}
+<div id="conflict-tables"
+     hx-get="/fragments/conflicts"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  {% match conflicts.error %}
+  {% when Some with (err) %}
+  <div class="banner bad">The assessment failed: <span class="mono">{{ err }}</span></div>
+  {% when None %}
+  {% endmatch %}
+  {% if conflicts.ready %}
+  <p class="dim small">{{ conflicts.summary }}</p>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Requests for conflict resolution</h2>
+    {% if conflicts.requests.is_empty() %}
+    <p class="dim">None: no aircraft are predicted to conflict.</p>
+    {% else %}
+    <div class="table-scroll">
+    <table class="grid">
+      <thead>
+        <tr><th>Aircraft</th><th>Advisory</th><th>In conflict with</th><th>First conflict in</th><th title="Conflict risk over all aircraft, weighted toward the soonest, before and after this advisory">Total risk</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        {% for r in conflicts.requests %}
+        <tr>
+          <td class="mono">{{ r.callsign }}</td>
+          <td>{{ r.action }}</td>
+          <td class="mono small">{{ r.against }}</td>
+          <td>{{ r.in_s }}</td>
+          <td class="small">{{ r.risk }}</td>
+          <td><span class="tag {{ r.status_kind }}">{{ r.status }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Top 10 A5 cells by conflict probability</h2>
+    {% if conflicts.cells.is_empty() %}
+    <p class="dim">No cell has two or more aircraft predicted in it.</p>
+    {% else %}
+    <div class="table-scroll uncapped">
+    <table class="grid conflict-cells">
+      <thead>
+        <tr>
+          <th>#</th><th>A5 cell</th><th>Altitude</th><th>In</th>
+          <th title="The aircraft's probabilities summed: the number expected in the cell. A conflict at the threshold.">Summed</th>
+          <th title="The chance two or more are in the cell together">P(two or more)</th>
+          <th>Aircraft contributing</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in conflicts.cells %}
+        <tr id="cell-{{ c.cell }}" data-cell="{{ c.cell }}" data-lon="{{ c.lon }}" data-lat="{{ c.lat }}"
+            {% if c.conflict %}class="in-conflict"{% endif %} title="Show on the map">
+          <td>{{ c.rank }}</td>
+          <td class="mono small">{{ c.cell }}</td>
+          <td class="small">{{ c.altitude }}</td>
+          <td>{{ c.in_s }}</td>
+          <td class="num">{{ c.summed }}{% if c.conflict %} <span class="tag bad">conflict</span>{% endif %}</td>
+          <td class="num">{{ c.collision }}</td>
+          <td class="small">
+            {% for (who, p) in c.aircraft %}<span class="contributor"><span class="mono">{{ who }}</span> {{ p }}</span>{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if conflicts.more_cells > 0 %}
+    <p class="dim small">{{ conflicts.more_cells }} more cells are shaded on the map.</p>
+    {% endif %}
+    {% endif %}
+  </section>
+</div>

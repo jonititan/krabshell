@@ -11,6 +11,9 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sim_axum::auth::Auth;
 use sim_axum::openapi::{operations, resolve, DOC};
+use std::sync::Arc;
+
+use sim_axum::weather::WeatherService;
 use sim_axum::{router, AppState};
 use sim_engine::{Driver, ModelRegistry, ScenarioStore};
 use tower::ServiceExt;
@@ -30,11 +33,18 @@ impl Drop for Harness {
     }
 }
 
-fn harness(pack: &str) -> Harness {
+fn pack(name: &str) -> sim_core::ScenarioBlob {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scenarios")
-        .join(pack);
-    let blob = sim_engine::read_pack(&path).unwrap();
+        .join(name);
+    sim_engine::read_pack(&path).unwrap()
+}
+
+fn harness(name: &str) -> Harness {
+    harness_for(pack(name), Arc::new(WeatherService::offline()))
+}
+
+fn harness_for(blob: sim_core::ScenarioBlob, weather: Arc<WeatherService>) -> Harness {
     let dir = std::env::temp_dir().join(format!(
         "krabshell-openapi-{}-{}",
         std::process::id(),
@@ -49,12 +59,59 @@ fn harness(pack: &str) -> Harness {
         driver.handle(),
         ScenarioStore::new(&dir),
         Auth::with_token(Some(TOKEN.to_owned())),
-    );
+    )
+    .with_weather(weather);
     Harness {
         router: router(state),
         _driver: driver,
         scenarios: dir,
     }
+}
+
+/// A pack with its own wind: from the south-west, stronger with height,
+/// over every weather cell its agents' area needs.
+async fn weather_harness(name: &str) -> Harness {
+    let mut blob = pack(name);
+    let (mut w, mut s, mut e, mut n) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for a in &blob.agents {
+        let (lon, lat) = match (a.lon, a.lat, a.cell) {
+            (Some(lon), Some(lat), _) => (lon, lat),
+            (_, _, Some(cell)) => cell.centroid().unwrap(),
+            _ => continue,
+        };
+        (w, s, e, n) = (w.min(lon), s.min(lat), e.max(lon), n.max(lat));
+    }
+    let spec = sim_weather::WeatherSpec {
+        mode: sim_core::WeatherMode::Recorded,
+        start_unix: 1_773_468_000,
+        hours: 3,
+        resolution: 11,
+        world_resolution: blob.manifest.resolution,
+        bbox: [w - 0.03, s - 0.03, e + 0.03, n + 0.03],
+        model: "best_match".into(),
+        refresh_min: 60,
+    };
+    let cells = sim_weather::Fetcher::cells(&spec).unwrap();
+    let levels = [10u16, 80, 120];
+    let frames = 4;
+    let field = json!({
+        "resolution": 11, "mode": "recorded", "start_unix": spec.start_unix,
+        "t0_unix": spec.start_unix, "step_s": 3600, "frames": frames, "levels_m": levels,
+        "cells": cells.iter().map(|c| json!({
+            "cell": c,
+            "u_cms": (0..frames).flat_map(|_| [300, 400, 450]).collect::<Vec<i16>>(),
+            "v_cms": (0..frames).flat_map(|_| [300, 400, 450]).collect::<Vec<i16>>(),
+            "gust_cms": vec![800; frames],
+        })).collect::<Vec<_>>(),
+        "source": "test", "attribution": "Weather data by Open-Meteo.com (CC BY 4.0)", "fetched_unix": 0,
+    });
+    if !blob.fields.is_object() {
+        blob.fields = json!({});
+    }
+    blob.fields["weather"] = field;
+    let weather = Arc::new(WeatherService::offline());
+    weather.prepare(&mut blob).await.unwrap();
+    harness_for(blob, weather)
 }
 
 /// Status, content type and body.
@@ -284,6 +341,162 @@ fn check(pack: &str, method: &str, path: &str, code: &str, bytes: &[u8]) {
         "{pack}: {method} {path} {code} does not match openapi.json:\n  {}",
         errors.join("\n  ")
     );
+}
+
+/// With wind loaded, the weather routes and the entities match their
+/// schemas, and a drone's cell finds its wind.
+#[tokio::test]
+async fn weather_responses_match_their_schemas() {
+    let h = weather_harness("kaunas-deliveries").await;
+    let (status, _, bytes) = call(&h, "post", "/api/v1/run/step", Some(json!({"n": 300}))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, bytes_status) = call(&h, "get", "/api/v1/weather", None).await;
+    assert_eq!(status, StatusCode::OK);
+    check("kaunas-deliveries", "get", "/weather", "200", &bytes_status);
+    let body: Value = serde_json::from_slice(&bytes_status).unwrap();
+    assert_eq!(body["available"], true);
+    assert_eq!(body["origin"], "pack");
+    assert_eq!(body["in_sync"], true, "{body}");
+    assert!(
+        body["sim_utc"]
+            .as_str()
+            .unwrap()
+            .starts_with("2026-03-14T06:00:30"),
+        "{body}"
+    );
+
+    let (status, _, cells) = call(&h, "get", "/api/v1/weather/cells?alt_m=80", None).await;
+    assert_eq!(status, StatusCode::OK);
+    check("kaunas-deliveries", "get", "/weather/cells", "200", &cells);
+    let cells: Value = serde_json::from_slice(&cells).unwrap();
+    // 4 m/s each way at 80 m: from the south-west at 5.66 m/s.
+    assert_eq!(cells["cells"][0]["speed_ms"], 5.66);
+    assert_eq!(cells["cells"][0]["from_deg"], 225.0);
+
+    let (_, _, entities) = call(&h, "get", "/api/v1/state/entities?kind=drone", None).await;
+    check(
+        "kaunas-deliveries",
+        "get",
+        "/state/entities",
+        "200",
+        &entities,
+    );
+    let entities: Value = serde_json::from_slice(&entities).unwrap();
+    let cell = entities[0]["cell"].as_str().unwrap().to_owned();
+    let (status, _, detail) = call(
+        &h,
+        "get",
+        &format!("/api/v1/weather/cells/{cell}?alt_m=10"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&detail)
+    );
+    check(
+        "kaunas-deliveries",
+        "get",
+        "/weather/cells/{cell}",
+        "200",
+        &detail,
+    );
+    let detail: Value = serde_json::from_slice(&detail).unwrap();
+    assert_eq!(detail["series"].as_array().unwrap().len(), 4);
+    assert_eq!(detail["levels"].as_array().unwrap().len(), 3);
+    assert_eq!(detail["wind"]["east_ms"], 3.0);
+    let _ = bytes;
+}
+
+#[tokio::test]
+async fn without_weather_the_cell_routes_say_so() {
+    let h = harness("london-patrol");
+    let (status, _, bytes) = call(&h, "get", "/api/v1/weather/cells", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["code"], "not_found");
+    let (status, _, bytes) = call(&h, "post", "/api/v1/weather/refresh", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    check("london-patrol", "post", "/weather/refresh", "400", &bytes);
+}
+
+/// london-patrol with two more drones flying at each other at 40 m: a
+/// conflict to resolve.
+fn head_on_harness() -> Harness {
+    let mut blob = pack("london-patrol");
+    let (lat, lon0, lon1) = (51.51, -0.11, -0.0927);
+    let mission = |to_lon: f64| {
+        json!([
+            { "seq": 0, "frame": 3, "command": 22, "z": 40.0 },
+            { "seq": 1, "frame": 3, "command": 16, "x": (lat * 1e7) as i64, "y": (to_lon * 1e7) as i64, "z": 40.0 },
+        ])
+    };
+    for (id, lon, to, call) in [(901u64, lon0, lon1, "WEST-1"), (902, lon1, lon0, "EAST-1")] {
+        blob.agents.push(sim_core::SeedAgent {
+            id: Some(id),
+            kind: "drone".into(),
+            cell: None,
+            lon: Some(lon),
+            lat: Some(lat),
+            state: json!({ "sysid": id - 700, "callsign": call, "autostart": true, "mission": mission(to) }),
+        });
+    }
+    harness_for(blob, Arc::new(WeatherService::offline()))
+}
+
+/// The conflict report finds the head-on pair, asks one of them to
+/// manoeuvre, and its cells and advisories match their schemas.
+#[tokio::test]
+async fn a_head_on_pair_is_reported_and_advised() {
+    let h = head_on_harness();
+    // Up to 40 m, then about 30 s into the 1.2 km: 600 m apart, closing.
+    let (status, _, _) = call(&h, "post", "/api/v1/run/step", Some(json!({"n": 450}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, bytes) = call(&h, "get", "/api/v1/conflicts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    check("london-patrol", "get", "/conflicts", "200", &bytes);
+    let r: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(r["aircraft"].as_u64().unwrap() >= 2, "{}", r["aircraft"]);
+    let cells = r["cells"].as_array().unwrap();
+    let pair = |c: &Value| {
+        let who: Vec<&str> = c["aircraft"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["callsign"].as_str())
+            .collect();
+        who.contains(&"WEST-1") && who.contains(&"EAST-1")
+    };
+    let shared: Vec<&Value> = cells.iter().filter(|c| pair(c)).collect();
+    assert!(!shared.is_empty(), "no cell has both");
+    assert!(shared.iter().any(|c| c["conflict"] == true));
+    // Worst first.
+    let summed: Vec<f64> = cells
+        .iter()
+        .map(|c| c["summed"].as_f64().unwrap())
+        .collect();
+    assert!(summed.windows(2).all(|w| w[0] >= w[1]));
+    let advised: Vec<&str> = r["advisories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["callsign"].as_str())
+        .collect();
+    assert!(
+        advised.contains(&"WEST-1") || advised.contains(&"EAST-1"),
+        "{}",
+        r["advisories"]
+    );
+    assert!(r["risk_after"].as_f64().unwrap() < r["risk_before"].as_f64().unwrap());
+
+    // The same tick again is the same report, not worked out afresh.
+    let (_, _, again) = call(&h, "get", "/api/v1/conflicts?outlines=false", None).await;
+    let again: Value = serde_json::from_slice(&again).unwrap();
+    assert_eq!(again["took_ms"], r["took_ms"]);
+    assert!(again["cells"][0]["boundary"].as_array().unwrap().is_empty());
 }
 
 // ------------------------------------------------- a small schema checker

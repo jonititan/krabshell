@@ -223,9 +223,10 @@ pub async fn scenarios_load(
     Path(id): Path<String>,
 ) -> ApiResult<Json<RunStatus>> {
     let store = Arc::clone(&state.scenarios);
-    let blob = tokio::task::spawn_blocking(move || store.load(&id))
+    let mut blob = tokio::task::spawn_blocking(move || store.load(&id))
         .await
         .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))??;
+    state.weather.prepare(&mut blob).await?;
     command(&state, Control::Load(Box::new(blob))).await
 }
 
@@ -589,6 +590,16 @@ pub async fn state_upload(
         .await
         .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))?
         .map_err(|err| ApiError::new(ErrorCode::BadRequest, err.to_string()))?;
+    // The wind it was flying in, if it says; a checkpoint from before
+    // weather leaves the world (and this) with the pack's.
+    let weather = match snapshot.fields.get("weather") {
+        None => None,
+        Some(serde_json::Value::Null) => Some(None),
+        Some(v) => Some(Some(sim_core::WindField::from_value(v).map_err(|err| {
+            ApiError::new(ErrorCode::BadRequest, format!("checkpoint weather: {err}"))
+        })?)),
+    };
+    let scenario_id = snapshot.meta.scenario_id.clone();
 
     let driver = state.driver.clone();
     let control = Control::Restore(Box::new(snapshot));
@@ -597,6 +608,9 @@ pub async fn state_upload(
         .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))?
         .map_err(from_driver)?;
 
+    if let Some(field) = weather {
+        state.weather.adopt(&scenario_id, field);
+    }
     let view = state.driver.view();
     Ok(Json(RestoreResult {
         tick: view.meta.tick,
@@ -1221,6 +1235,10 @@ pub struct Entity {
     pub alt_m: f64,
     pub heading_deg: f64,
     pub speed_ms: f64,
+    /// Through the air, when it flies in wind; absent in still air, where it
+    /// is `speed_ms`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airspeed_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub callsign: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1291,6 +1309,7 @@ pub async fn state_entities(
                 alt_m: int(s, "alt_mm").unwrap_or(0) as f64 * 1e-3,
                 heading_deg: int(s, "hdg_cdeg").unwrap_or(0) as f64 / 100.0,
                 speed_ms: int(s, "spd_cms").unwrap_or(0) as f64 / 100.0,
+                airspeed_ms: int(s, "air_cms").map(|v| v as f64 / 100.0),
                 callsign: s
                     .get("callsign")
                     .and_then(|c| c.as_str())
@@ -1506,6 +1525,36 @@ pub async fn cells_lookup(
         in_world,
         edge_meters: cell::nominal_cell_edge_meters(resolution),
     }))
+}
+
+// ------------------------------------------------------------- conflicts
+
+#[derive(Deserialize)]
+pub struct ConflictsQuery {
+    /// Leave out the cells' outlines.
+    #[serde(default)]
+    pub outlines: Option<bool>,
+}
+
+/// Where the aircraft in the air could meet in the next minute, and what
+/// each is asked to do about it. Worked out for the current tick on the
+/// first ask, then reused until the tick moves.
+pub async fn conflicts(
+    State(state): State<AppState>,
+    Query(q): Query<ConflictsQuery>,
+) -> ApiResult<Json<crate::conflicts::ConflictReport>> {
+    let report = state
+        .conflicts
+        .report(&state.driver, &state.weather)
+        .await
+        .map_err(|err| ApiError::new(ErrorCode::Internal, format!("{err:#}")))?;
+    let mut report = (*report).clone();
+    if q.outlines == Some(false) {
+        for c in report.cells.iter_mut() {
+            c.boundary.clear();
+        }
+    }
+    Ok(Json(report))
 }
 
 #[cfg(test)]

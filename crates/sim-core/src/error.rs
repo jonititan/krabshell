@@ -36,6 +36,8 @@ pub enum ErrorCode {
     RequiresReset,
     /// The driver thread is gone or wedged.
     DriverUnavailable,
+    /// The weather service could not supply the weather a scenario asks for.
+    WeatherUnavailable,
     /// The tick body panicked.
     SimPanic,
     Internal,
@@ -62,6 +64,7 @@ impl ErrorCode {
             ErrorCode::RateLimited | ErrorCode::Backpressured => 429,
             ErrorCode::SimPanic | ErrorCode::Internal => 500,
             ErrorCode::DriverUnavailable => 503,
+            ErrorCode::WeatherUnavailable => 502,
         }
     }
 
@@ -86,6 +89,7 @@ impl ErrorCode {
             ErrorCode::RequiresPause => "requires_pause",
             ErrorCode::RequiresReset => "requires_reset",
             ErrorCode::DriverUnavailable => "driver_unavailable",
+            ErrorCode::WeatherUnavailable => "weather_unavailable",
             ErrorCode::SimPanic => "sim_panic",
             ErrorCode::Internal => "internal",
         }

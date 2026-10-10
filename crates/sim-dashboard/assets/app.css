@@ -538,3 +538,35 @@ table.responses td.s5 { color: var(--bad); }
 @media (max-width: 640px) {
   table.fields { display: block; overflow-x: auto; }
 }
+
+/* ------------------------------------------------------------- weather */
+
+.weather-readout { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.weather-readout dd { overflow-wrap: anywhere; }
+.weather-split { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 2fr); gap: 24px; margin-top: 16px; }
+.weather-split h3 { margin: 0 0 8px; color: var(--dim); font-weight: 600; }
+@media (max-width: 760px) { .weather-split { grid-template-columns: 1fr; } }
+.wind-chart { width: 100%; height: auto; display: block; }
+.wind-chart .grid { stroke: var(--line); stroke-width: 1; }
+.wind-chart .axis { fill: var(--dim); font-size: 10px; font-family: var(--mono); }
+.wind-chart polyline { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.wind-chart .l-wind { stroke: var(--accent); }
+.wind-chart .l-gust { stroke: var(--warn); stroke-dasharray: 4 3; }
+.wind-chart .l-now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart-key { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin: 0 4px 0 10px; border-top: 2px solid; }
+.chart-key.k-wind { border-color: var(--accent); }
+.chart-key.k-gust { border-color: var(--warn); border-top-style: dashed; }
+.chart-key.k-now { border-color: var(--ink); border-top-style: dotted; }
+
+/* ----------------------------------------------------------- conflicts */
+
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.warn { color: var(--warn); border-color: var(--warn); }
+table.grid td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.conflict-cells tbody tr { cursor: pointer; }
+table.conflict-cells tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+table.conflict-cells td:first-child, table.conflict-cells th:first-child { padding-left: 10px; }
+table.conflict-cells tr.in-conflict td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+.table-scroll.uncapped { max-height: none; }
+table.conflict-cells tr.picked td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.contributor { display: inline-block; margin-right: 10px; white-space: nowrap; }

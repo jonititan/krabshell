@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Weather &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Weather</h1>
+<p class="lede">
+  The wind the drones fly in, one series per A5 weather cell. A drone takes
+  the wind of its own cell's ancestor at the weather resolution, at its
+  height: it crabs into a crosswind, a headwind slows it, and its battery
+  drains with the square of its airspeed. Drones stay on the ground when the
+  wind or gusts at takeoff height are over the launch limits.
+</p>
+
+{% include "fragments/control.html" %}
+{% include "fragments/weather.html" %}
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Wind map</h2>
+    <div class="map-controls">
+      <label>Height
+        <select id="wind-alt">
+          <option value="10">10 m</option>
+          <option value="30">30 m</option>
+          <option value="50" selected>50 m</option>
+          <option value="80">80 m</option>
+          <option value="120">120 m</option>
+          <option value="180">180 m</option>
+        </select>
+      </label>
+      <label title="Show the wind at the simulation's time, following it">
+        <input id="wind-now" type="checkbox" checked> Now
+      </label>
+      <label>Hour
+        <input id="wind-frame" type="range" min="0" max="0" value="0" disabled>
+        <output id="wind-time" class="mono small"></output>
+      </label>
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input id="wind-layer" type="checkbox" checked> Wind</label>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid"> A5 occupancy grid</label>
+  </fieldset>
+  <p class="dim small">Click anywhere to query the wind there. Drag to pan, scroll to zoom.</p>
+
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" data-layers-off="grid" aria-label="Wind by A5 weather cell"></canvas>
+    <div id="map-legend" class="legend" hidden></div>
+    <div id="wind-legend" class="legend wind-legend" aria-label="Wind speed"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map and the query need JavaScript; the status above does not.</p></noscript>
+  </div>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+<section class="panel" id="wind-query">
+  <h2>Query</h2>
+  <form id="wind-form" class="row">
+    <label>Latitude <input id="q-lat" type="text" size="11" inputmode="decimal" placeholder="54.8985"></label>
+    <label>Longitude <input id="q-lon" type="text" size="11" inputmode="decimal" placeholder="23.9036"></label>
+    <span class="dim">or</span>
+    <label>A5 cell <input id="q-cell" type="text" size="18" class="mono" placeholder="6410c6…"></label>
+    <label>Height, m
+      <input id="q-alt" type="text" size="5" inputmode="decimal" value="50">
+    </label>
+    <button type="submit" class="primary">Query</button>
+  </form>
+  <p id="q-status" class="dim small"></p>
+  <div id="q-result" hidden>
+    <dl class="readout">
+      <div><dt>Weather cell</dt><dd class="mono small" id="q-wcell"></dd></div>
+      <div><dt>Wind now</dt><dd class="big" id="q-speed"></dd></div>
+      <div><dt>From</dt><dd id="q-from"></dd></div>
+      <div><dt>Gusts</dt><dd id="q-gust"></dd></div>
+      <div><dt>East, north</dt><dd class="mono small" id="q-vec"></dd></div>
+      <div><dt>At</dt><dd class="mono small" id="q-utc"></dd></div>
+    </dl>
+    <div class="weather-split">
+      <div>
+        <h3 class="small">By height, now</h3>
+        <table class="grid" id="q-levels">
+          <thead><tr><th>Height</th><th>Speed</th><th>From</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div>
+        <h3 class="small">Through the window, at this height</h3>
+        <svg id="q-chart" class="wind-chart" role="img" aria-label="Wind speed and gusts by hour"></svg>
+        <p class="dim small"><span class="chart-key k-wind"></span> Wind <span class="chart-key k-gust"></span> Gusts <span class="chart-key k-now"></span> Simulation time</p>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
+<script src="/assets/map.js" defer></script>
+<script src="/assets/weather.js" defer></script>
+{% endblock %}

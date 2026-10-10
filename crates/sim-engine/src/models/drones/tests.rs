@@ -1530,8 +1530,9 @@ fn a_courier_reaches_an_address_too_far_for_one_charge_by_recharging_at_a_statio
 #[test]
 fn without_a_station_the_same_courier_tries_straight_and_comes_back_on_its_failsafe() {
     let mut model = drones(Profile::Gold);
-    // 3 km: the failsafe goes off before it gets there.
-    model.reset(&far_blob(3_000.0, &[], 200.0)).unwrap();
+    // 4 km: 80 % of the battery at 0.25 %/s and 10 m/s is 3.2 km of
+    // cruise, so the failsafe goes off before it gets there.
+    model.reset(&far_blob(4_000.0, &[], 200.0)).unwrap();
     let reports = run(&mut model, 1, 6_000);
     assert!(reports
         .iter()
@@ -1862,4 +1863,132 @@ fn two_couriers_share_a_one_slot_station_one_holding_off_while_the_other_is_down
         .count();
     assert!(delivered >= 2, "{delivered}");
     assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash));
+}
+
+// ------------------------------------------------------------------ weather
+
+/// A uniform wind over the test area, at resolution 12, the same for two
+/// hourly frames and at every height: `east_ms`/`north_ms` the way it
+/// blows, `gust_ms` the gusts.
+fn wind_field(east_ms: f64, north_ms: f64, gust_ms: f64) -> serde_json::Value {
+    // The ancestors of the world's cells, which is where drones look.
+    let cells: BTreeSet<GeoCell> =
+        sim_core::cell::cells_in_bbox(LON - 0.1, LAT - 0.06, LON + 0.1, LAT + 0.06, 15, 1_000_000)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.parent(Some(12)).unwrap())
+            .collect();
+    let cms = |v: f64| (v * 100.0).round() as i16;
+    let levels = [10u16, 80, 120, 180];
+    let frames = 2;
+    let cells: Vec<serde_json::Value> = cells
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "cell": c,
+                "u_cms": vec![cms(east_ms); frames * levels.len()],
+                "v_cms": vec![cms(north_ms); frames * levels.len()],
+                "gust_cms": vec![cms(gust_ms); frames],
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "resolution": 12, "mode": "recorded",
+        "start_unix": 1_790_000_000i64, "t0_unix": 1_790_000_000i64, "step_s": 3600,
+        "frames": frames, "levels_m": levels, "cells": cells,
+        "source": "test", "attribution": "", "fetched_unix": 0,
+    })
+}
+
+fn first_delivery(reports: &[Report]) -> Option<u64> {
+    reports
+        .iter()
+        .find(|r| r.kind == ReportKind::Delivery)
+        .map(|r| r.tick)
+}
+
+#[test]
+fn a_headwind_on_the_way_out_makes_a_delivery_later() {
+    let calm_blob = far_blob(1_600.0, &[], 200.0);
+    let mut windy_blob = calm_blob.clone();
+    // The address is east of the hub; 4 m/s blowing west is a headwind out.
+    windy_blob.fields["weather"] = wind_field(-4.0, 0.0, 6.0);
+
+    let mut calm = Drones::new(&calm_blob).unwrap();
+    let mut windy = Drones::new(&windy_blob).unwrap();
+    let calm_at = first_delivery(&run(&mut calm, 1, 8_000)).expect("delivered in still air");
+    let windy_at = first_delivery(&run(&mut windy, 1, 8_000)).expect("delivered in wind");
+    // 1.6 km at 6 m/s rather than 10 is about 107 s, 1 070 ticks, later.
+    assert!(windy_at > calm_at + 900, "{calm_at} → {windy_at}");
+    assert!(windy.world().sim_utc().is_some());
+    assert!(calm.world().sim_utc().is_none());
+}
+
+#[test]
+fn gusts_over_the_limit_keep_couriers_down_until_a_weather_update_calms_them() {
+    let mut blob = far_blob(1_600.0, &[], 200.0);
+    blob.fields["weather"] = wind_field(3.0, 0.0, 20.0);
+    let mut model = Drones::new(&blob).unwrap();
+    let reports = run(&mut model, 1, 3_000);
+    assert!(model.world().dispatch().queued() > 0, "orders are waiting");
+    assert!(!reports
+        .iter()
+        .any(|r| r.kind == ReportKind::Waypoint && r.observer == Some(5)));
+
+    let calm = intent(&model, 5, codes::WEATHER_SET, wind_field(3.0, 0.0, 8.0));
+    model
+        .apply_intent(&Intent {
+            agent: None,
+            ..calm
+        })
+        .unwrap();
+    let reports = run(&mut model, 3_001, 5_000);
+    assert!(
+        first_delivery(&reports).is_some(),
+        "delivered once it calmed"
+    );
+}
+
+#[test]
+fn a_weather_update_finer_than_the_world_or_malformed_is_refused() {
+    let mut model = Drones::new(&far_blob(1_600.0, &[], 0.0)).unwrap();
+    let mut bad = wind_field(1.0, 0.0, 2.0);
+    bad["frames"] = 3.into();
+    let i = intent(&model, 5, codes::WEATHER_SET, bad);
+    assert!(model.apply_intent(&Intent { agent: None, ..i }).is_err());
+    let mut blob = far_blob(1_600.0, &[], 0.0);
+    let mut fine = wind_field(1.0, 0.0, 2.0);
+    fine["resolution"] = 16.into();
+    blob.fields["weather"] = fine;
+    assert!(Drones::new(&blob).is_err());
+}
+
+#[test]
+fn a_checkpoint_in_wind_replays_exactly_and_keeps_an_updated_wind() {
+    let mut blob = far_blob(1_600.0, &[1_000.0], 200.0);
+    blob.fields["weather"] = wind_field(-3.0, 2.0, 7.0);
+    let mut original = drones(Profile::Gold);
+    original.reset(&blob).unwrap();
+    run(&mut original, 1, 600);
+    // A live refresh mid-run: the checkpoint must carry it, not the pack's.
+    let update = intent(&original, 5, codes::WEATHER_SET, wind_field(5.0, -1.0, 9.0));
+    original
+        .apply_intent(&Intent {
+            agent: None,
+            ..update
+        })
+        .unwrap();
+    run(&mut original, 601, 100);
+
+    let mut restored = drones(Profile::Gold);
+    restored.reset(&blob).unwrap();
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+    restored.set_rng_state(original.rng_state());
+    run(&mut original, 701, 3_000);
+    run(&mut restored, 701, 3_000);
+    assert_eq!(hash(&original), hash(&restored));
+    assert_eq!(original.world().weather(), restored.world().weather());
 }

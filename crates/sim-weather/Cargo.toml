@@ -1,0 +1,23 @@
+[package]
+name = "sim-weather"
+description = "Wind for krabshell worlds: fetched per A5 cell from Open-Meteo, recorded or live, and cached on disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# Pinned exactly: one maintainer and one release so far. Read the changelog
+# before moving it.
+openmeteo-rs = "=1.0.0"
+time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true

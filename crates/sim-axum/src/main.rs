@@ -13,9 +13,11 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use sim_axum::auth::Auth;
+use sim_axum::weather::WeatherService;
 use sim_axum::{router, AppState};
 use sim_core::ScenarioBlob;
 use sim_engine::{checkpoint, Control, Driver, ModelRegistry, ScenarioStore};
@@ -108,6 +110,34 @@ struct Cli {
     /// Do not write run logs.
     #[arg(long)]
     no_logs: bool,
+
+    /// Where fetched weather is cached, so a scenario run again does not
+    /// fetch it again.
+    #[arg(
+        long,
+        default_value = "var/weather-cache",
+        env = "KRABSHELL_WEATHER_CACHE"
+    )]
+    weather_cache: PathBuf,
+
+    /// Never fetch weather. Scenarios asking for recorded weather then refuse
+    /// to load; live ones fly in still air; a pack's own `world/weather.json`
+    /// still works.
+    #[arg(long)]
+    no_weather: bool,
+
+    /// Open-Meteo API key. The free API is for non-commercial use only.
+    #[arg(long, env = "OPEN_METEO_API_KEY", hide_env_values = true)]
+    open_meteo_key: Option<String>,
+
+    /// Root URL of an Open-Meteo forecast API to use instead of the public
+    /// one (a self-hosted instance, say).
+    #[arg(long, env = "KRABSHELL_OPEN_METEO_URL")]
+    open_meteo_url: Option<String>,
+
+    /// Root URL of an Open-Meteo historical forecast API, likewise.
+    #[arg(long, env = "KRABSHELL_OPEN_METEO_HISTORICAL_URL")]
+    open_meteo_historical_url: Option<String>,
 }
 
 #[tokio::main]
@@ -141,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
         })?,
         None => ScenarioBlob::empty(),
     };
-    let blob = match &cli.model {
+    let mut blob = match &cli.model {
         Some(model) => ScenarioBlob {
             manifest: sim_core::ScenarioManifest {
                 model: model.clone(),
@@ -151,6 +181,24 @@ async fn main() -> anyhow::Result<()> {
         },
         None => blob,
     };
+
+    let weather = Arc::new(WeatherService::new(if cli.no_weather {
+        None
+    } else {
+        let hosts = sim_weather::fetch::Hosts {
+            api_key: cli.open_meteo_key.clone(),
+            forecast: cli.open_meteo_url.clone(),
+            historical: cli.open_meteo_historical_url.clone(),
+        };
+        Some(sim_weather::Fetcher::new(
+            sim_weather::Cache::new(&cli.weather_cache),
+            hosts,
+        )?)
+    }));
+    weather
+        .prepare(&mut blob)
+        .await
+        .map_err(|err| anyhow::anyhow!("scenario '{}': {err}", blob.manifest.id))?;
 
     tracing::info!(
         scenario = %blob.manifest.id,
@@ -167,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
         handle.command(Control::Start { target_tps: None })?;
     }
 
-    let state = AppState::new(handle.clone(), store, auth);
+    let state = AppState::new(handle.clone(), store, auth).with_weather(Arc::clone(&weather));
 
     // One signal stops the HTTP server and both gateways.
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -211,6 +259,13 @@ async fn main() -> anyhow::Result<()> {
         edges.push(tokio::spawn(emitter.run(stop_rx.clone())));
     }
 
+    let weather_task = tokio::spawn(Arc::clone(&weather).run(handle.clone(), stop_rx.clone()));
+    let conflict_task = tokio::spawn(Arc::clone(&state.conflicts).run(
+        handle.clone(),
+        Arc::clone(&weather),
+        stop_rx.clone(),
+    ));
+
     if !cli.no_logs {
         let cfg = sim_axum::runlog::RunLogConfig {
             dir: cli.log_dir.clone(),
@@ -239,6 +294,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!(%err, "the http server stopped");
     }
 
+    let _ = weather_task.await;
+    let _ = conflict_task.await;
     for edge in edges {
         match edge.await {
             Ok(Ok(())) => {}

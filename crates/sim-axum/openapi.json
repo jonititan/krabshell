@@ -23,6 +23,8 @@
     { "name": "intents", "description": "Change the world. Intents are applied by the driver at a tick boundary." },
     { "name": "geofences", "description": "Airspace the drones keep out of. Each change is an intent, applied on the next tick." },
     { "name": "stations", "description": "Launch and recovery stations, and regions of interest for the drones to survey." },
+    { "name": "weather", "description": "The wind the drones fly in, one series per A5 weather cell, fetched from Open-Meteo (recorded or live) or carried by the pack. A drone takes the wind of its cell's ancestor at the weather resolution." },
+    { "name": "conflicts", "description": "Where the aircraft in the air could meet in the next minute, cell by cell, and the resolution advisories that would keep them apart. Each aircraft is predicted as a cloud of particles flown under an energy model and counted into A5 cells and altitude layers; a cell where two or more aircraft's probabilities sum to the threshold is in conflict." },
     { "name": "cells", "description": "A5 cell maths." },
     { "name": "live", "description": "The WebSocket subscription." },
     { "name": "meta", "description": "This document." }
@@ -187,7 +189,7 @@
         "tags": ["scenarios"],
         "operationId": "scenariosLoad",
         "summary": "Load a scenario",
-        "description": "Replace the running world with this pack, paused at tick 0.",
+        "description": "Replace the running world with this pack, paused at tick 0. A pack whose params ask for weather has it fetched first (or read from the cache); recorded weather that cannot be fetched refuses the load with `weather_unavailable`, and weather params that cannot work with `bad_config`.",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Pack id, as listed." }
         ],
@@ -196,6 +198,7 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "404": { "$ref": "#/components/responses/NotFound" },
+          "502": { "$ref": "#/components/responses/WeatherUnavailable" },
           "503": { "$ref": "#/components/responses/DriverUnavailable" }
         }
       }
@@ -611,6 +614,86 @@
         }
       }
     },
+    "/conflicts": {
+      "get": {
+        "tags": ["conflicts"],
+        "operationId": "conflicts",
+        "summary": "Conflicts and advisories",
+        "description": "Assesses the drones and intruders in the air at the current tick: the A5 cells two or more could share in the next minute (each at its worst altitude layer and step, most aircraft expected first), the advisories that would resolve the conflicts, and any left unresolved. Worked out on the first ask for a tick, then reused until the tick moves. Times are simulated seconds ahead.",
+        "parameters": [
+          { "name": "outlines", "in": "query", "schema": { "type": "boolean", "default": true }, "description": "`false` leaves out the cells' outlines." }
+        ],
+        "responses": {
+          "200": { "description": "The assessment.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConflictReport" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "description": "The assessment failed.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+        }
+      }
+    },
+    "/weather": {
+      "get": {
+        "tags": ["weather"],
+        "operationId": "weatherStatus",
+        "summary": "Weather status",
+        "description": "Whether the run has wind, where it came from (Open-Meteo, the pack, a checkpoint), the window and cells it covers, the simulation's UTC time, how the last fetch went and what the cache holds, and whether the field here is the one the world flies in.",
+        "responses": {
+          "200": { "description": "Status. Every field is null or empty for a run without weather.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WeatherStatus" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/weather/refresh": {
+      "post": {
+        "tags": ["weather"],
+        "operationId": "weatherRefresh",
+        "summary": "Refresh live weather",
+        "description": "Fetch a live run's weather again now (from the cache if the hour has not turned) and hand it to the world from the next tick. The run's clock stays where it was. Recorded weather is fixed and is not refreshed.",
+        "responses": {
+          "200": { "description": "Refreshed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WeatherStatus" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/WeatherUnavailable" }
+        }
+      }
+    },
+    "/weather/cells": {
+      "get": {
+        "tags": ["weather"],
+        "operationId": "weatherCells",
+        "summary": "Wind in every weather cell",
+        "description": "The wind in each weather cell at one height and time, with the cell's outline, for a map.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AltM" },
+          { "$ref": "#/components/parameters/Utc" }
+        ],
+        "responses": {
+          "200": { "description": "The cells.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WeatherCells" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/weather/cells/{cell}": {
+      "get": {
+        "tags": ["weather"],
+        "operationId": "weatherCell",
+        "summary": "Wind for a cell",
+        "description": "The wind a cell takes, from its ancestor at the weather resolution (or itself): now at the height asked and at every fetched height, and at the height asked through the whole window. Any cell at least as fine as the weather's works, such as a drone's occupancy cell from `/state/entities` or one from `/cells/lookup`.",
+        "parameters": [
+          { "name": "cell", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/GeoCell" } },
+          { "$ref": "#/components/parameters/AltM" },
+          { "$ref": "#/components/parameters/Utc" }
+        ],
+        "responses": {
+          "200": { "description": "The cell's wind.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WeatherCellDetail" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/ws": {
       "get": {
         "tags": ["live"],
@@ -634,7 +717,9 @@
       "query": { "type": "apiKey", "in": "query", "name": "token", "description": "For WebSockets, which cannot carry a header from a browser." }
     },
     "parameters": {
-      "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 }, "description": "The id the list gives it." }
+      "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 }, "description": "The id the list gives it." },
+      "AltM": { "name": "alt_m", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 10000, "default": 50 }, "description": "Metres above the ground. Between fetched heights the wind is linear; below the lowest it falls off toward the ground as a 1/7 power law; above the highest it holds." },
+      "Utc": { "name": "utc", "in": "query", "schema": { "type": "string", "format": "date-time" }, "description": "An RFC 3339 time. Defaults to the simulation's now. Before the first frame or after the last, the end frame holds." }
     },
     "headers": {
       "SimTick": { "description": "The tick the body is from.", "schema": { "type": "integer" } },
@@ -651,7 +736,8 @@
       "Conflict": { "description": "Not in this run mode: `requires_pause` or `requires_reset`.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
       "PayloadTooLarge": { "description": "The body is over the limit.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
       "TooManyRequests": { "description": "`rate_limited` (this actor) or `backpressured` (the driver's queue is full).", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
-      "DriverUnavailable": { "description": "The simulation thread is not running, or did not answer in time.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+      "DriverUnavailable": { "description": "The simulation thread is not running, or did not answer in time.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "WeatherUnavailable": { "description": "Open-Meteo (or the configured weather host) could not supply the weather: `weather_unavailable`.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
     },
     "schemas": {
       "Problem": {
@@ -669,7 +755,7 @@
       "ErrorCode": {
         "type": "string",
         "description": "Stable error codes. Switch on these, not on `detail`.",
-        "enum": ["bad_request", "unauthorized", "forbidden", "not_found", "payload_too_large", "unknown_scenario", "malformed_scenario", "bad_cell", "bad_config", "stale_intent", "intent_too_far", "backpressured", "duplicate_intent", "cell_out_of_bounds", "intent_rejected", "rate_limited", "requires_pause", "requires_reset", "driver_unavailable", "sim_panic", "internal"]
+        "enum": ["bad_request", "unauthorized", "forbidden", "not_found", "payload_too_large", "unknown_scenario", "malformed_scenario", "bad_cell", "bad_config", "stale_intent", "intent_too_far", "backpressured", "duplicate_intent", "cell_out_of_bounds", "intent_rejected", "rate_limited", "requires_pause", "requires_reset", "driver_unavailable", "weather_unavailable", "sim_panic", "internal"]
       },
       "GeoCell": {
         "type": "string",
@@ -930,8 +1016,9 @@
           "lat": { "type": "number" },
           "lon": { "type": "number" },
           "alt_m": { "type": "number" },
-          "heading_deg": { "type": "number" },
-          "speed_ms": { "type": "number" },
+          "heading_deg": { "type": "number", "description": "Track over the ground, degrees clockwise from north." },
+          "speed_ms": { "type": "number", "description": "Ground speed." },
+          "airspeed_ms": { "type": "number", "description": "Speed through the air, when it flies in wind. Absent in still air, where it is `speed_ms`." },
           "callsign": { "type": "string" },
           "mode": { "type": "string", "description": "A drone's flight mode." },
           "activity": { "type": "string", "description": "What a drone's behaviour is doing: delivering, surveying, charging and so on." }
@@ -945,7 +1032,7 @@
           "meta": { "$ref": "#/components/schemas/SnapshotMeta" },
           "config": { "$ref": "#/components/schemas/Config" },
           "cells": { "type": "array", "items": { "$ref": "#/components/schemas/CellBag" } },
-          "fields": { "description": "Model state that is not agents." },
+          "fields": { "description": "Model state that is not agents. For the drones, this includes `weather`: the wind the world was flying in, so a restore flies in the same air." },
           "rng": { "type": "integer" },
           "intent_log": { "type": "array", "items": { "$ref": "#/components/schemas/LoggedIntent" } }
         }
@@ -1207,6 +1294,213 @@
           "parent": { "oneOf": [ { "$ref": "#/components/schemas/GeoCell" }, { "type": "null" } ] },
           "in_world": { "type": "boolean", "description": "Intents may address this cell in the current run." },
           "edge_meters": { "type": "number", "description": "Nominal edge length at this resolution." }
+        }
+      },
+      "WeatherMode": { "type": "string", "enum": ["recorded", "live"], "description": "`recorded`: tick 0 is a fixed UTC time and the field is fetched once. `live`: tick 0 is when it loaded, and the field is refreshed while it runs." },
+      "Wind": {
+        "type": "object",
+        "required": ["east_ms", "north_ms", "speed_ms", "from_deg", "gust_ms"],
+        "properties": {
+          "east_ms": { "type": "number", "description": "Toward the east, m/s." },
+          "north_ms": { "type": "number", "description": "Toward the north, m/s." },
+          "speed_ms": { "type": "number" },
+          "from_deg": { "type": "number", "description": "Where it blows from, degrees clockwise from north, as forecasts give it." },
+          "gust_ms": { "type": "number", "description": "Gusts near the ground (10 m), whatever the height asked." }
+        }
+      },
+      "WeatherWindow": {
+        "type": "object",
+        "required": ["first_utc", "last_utc", "frames", "step_s"],
+        "properties": {
+          "first_utc": { "type": "string", "format": "date-time" },
+          "last_utc": { "type": "string", "format": "date-time" },
+          "frames": { "type": "integer" },
+          "step_s": { "type": "integer" }
+        }
+      },
+      "WeatherCache": {
+        "type": "object",
+        "required": ["dir", "entries", "bytes"],
+        "properties": {
+          "dir": { "type": "string" },
+          "entries": { "type": "integer" },
+          "bytes": { "type": "integer" }
+        }
+      },
+      "WeatherStatus": {
+        "type": "object",
+        "required": ["available", "mode", "origin", "source", "attribution", "start_utc", "sim_utc", "window", "resolution", "cells", "levels_m", "area", "model", "hours", "refresh_min", "fetched_utc", "attempted_utc", "cache_hit", "locations", "cache", "rev", "world_rev", "in_sync", "error", "limits"],
+        "properties": {
+          "available": { "type": "boolean", "description": "There is a wind field; the drones fly in it." },
+          "mode": { "anyOf": [ { "$ref": "#/components/schemas/WeatherMode" }, { "type": "null" } ] },
+          "origin": { "type": ["string", "null"], "enum": ["open_meteo", "pack", "checkpoint", null] },
+          "source": { "type": ["string", "null"], "description": "The service and model." },
+          "attribution": { "type": ["string", "null"], "description": "The credit the data's licence asks for." },
+          "start_utc": { "type": ["string", "null"], "format": "date-time", "description": "The UTC time of tick 0." },
+          "sim_utc": { "type": ["string", "null"], "format": "date-time", "description": "The UTC time now in the simulation." },
+          "window": { "anyOf": [ { "$ref": "#/components/schemas/WeatherWindow" }, { "type": "null" } ] },
+          "resolution": { "type": ["integer", "null"], "description": "Resolution of the weather cells." },
+          "cells": { "type": "integer" },
+          "levels_m": { "type": "array", "items": { "type": "integer" }, "description": "Heights above the ground fetched, metres." },
+          "area": { "type": ["array", "null"], "items": { "type": "number" }, "description": "`[min_lon, min_lat, max_lon, max_lat]` fetched." },
+          "model": { "type": ["string", "null"] },
+          "hours": { "type": ["integer", "null"] },
+          "refresh_min": { "type": ["integer", "null"], "description": "Live only: how often it fetches again." },
+          "fetched_utc": { "type": ["string", "null"], "format": "date-time" },
+          "attempted_utc": { "type": ["string", "null"], "format": "date-time" },
+          "cache_hit": { "type": "boolean", "description": "The last fetch was served from the cache." },
+          "locations": { "type": "integer", "description": "Open-Meteo locations the last fetch cost; 0 from the cache." },
+          "cache": { "anyOf": [ { "$ref": "#/components/schemas/WeatherCache" }, { "type": "null" } ], "description": "Null when fetching is switched off." },
+          "rev": { "type": ["string", "null"], "description": "Fingerprint of the field here." },
+          "world_rev": { "type": ["string", "null"], "description": "Fingerprint of the field the world flies in." },
+          "in_sync": { "type": "boolean" },
+          "error": { "type": ["string", "null"], "description": "Why the last fetch failed. A live run flies in still air until one succeeds." },
+          "limits": {
+            "type": "object",
+            "required": ["max_wind_ms", "max_gust_ms"],
+            "description": "Drones will not take off into more than this (0: no limit).",
+            "properties": {
+              "max_wind_ms": { "type": "number" },
+              "max_gust_ms": { "type": "number" }
+            }
+          }
+        }
+      },
+      "WeatherCell": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["cell", "boundary"],
+            "properties": {
+              "cell": { "$ref": "#/components/schemas/GeoCell" },
+              "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" } }
+            }
+          },
+          { "$ref": "#/components/schemas/Wind" }
+        ]
+      },
+      "WeatherCells": {
+        "type": "object",
+        "required": ["utc", "alt_m", "resolution", "max_speed_ms", "cells"],
+        "properties": {
+          "utc": { "type": "string", "format": "date-time" },
+          "alt_m": { "type": "number" },
+          "resolution": { "type": "integer" },
+          "max_speed_ms": { "type": "number" },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/WeatherCell" } }
+        }
+      },
+      "WeatherLevel": {
+        "allOf": [
+          { "type": "object", "required": ["alt_m"], "properties": { "alt_m": { "type": "number" } } },
+          { "$ref": "#/components/schemas/Wind" }
+        ]
+      },
+      "WeatherFrame": {
+        "allOf": [
+          { "type": "object", "required": ["utc"], "properties": { "utc": { "type": "string", "format": "date-time" } } },
+          { "$ref": "#/components/schemas/Wind" }
+        ]
+      },
+      "WeatherCellDetail": {
+        "type": "object",
+        "required": ["cell", "weather_cell", "resolution", "centroid", "boundary", "utc", "alt_m", "wind", "levels", "series"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell", "description": "The cell asked about." },
+          "weather_cell": { "$ref": "#/components/schemas/GeoCell", "description": "The cell its wind comes from." },
+          "resolution": { "type": "integer" },
+          "centroid": { "$ref": "#/components/schemas/LonLat", "description": "Where the weather was fetched." },
+          "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" } },
+          "utc": { "type": "string", "format": "date-time" },
+          "alt_m": { "type": "number" },
+          "wind": { "$ref": "#/components/schemas/Wind" },
+          "levels": { "type": "array", "items": { "$ref": "#/components/schemas/WeatherLevel" } },
+          "series": { "type": "array", "items": { "$ref": "#/components/schemas/WeatherFrame" } }
+        }
+      },
+      "Contributor": {
+        "type": "object",
+        "required": ["id", "callsign", "probability"],
+        "properties": {
+          "id": { "type": "integer" },
+          "callsign": { "type": "string" },
+          "probability": { "type": "number", "description": "Its probability of being in the cell; 0 where it is just named." }
+        }
+      },
+      "Manoeuvre": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "type": "string", "enum": ["maintain", "climb", "descend", "level_off", "turn_left", "turn_right", "speed_up", "slow_down"] }
+        }
+      },
+      "ManoeuvreTargets": {
+        "type": "object",
+        "properties": {
+          "vs_ms": { "type": "number", "description": "Vertical speed to fly, m/s, positive up." },
+          "heading_deg": { "type": "number" },
+          "tas_ms": { "type": "number", "description": "True airspeed to fly, m/s." }
+        }
+      },
+      "ConflictCell": {
+        "type": "object",
+        "required": ["cell", "boundary", "layer", "alt_from_m", "alt_to_m", "t_s", "summed", "collision", "conflict", "aircraft"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" } },
+          "layer": { "type": "integer", "description": "The altitude layer of its worst moment." },
+          "alt_from_m": { "type": "number" },
+          "alt_to_m": { "type": "number" },
+          "t_s": { "type": "number", "description": "When its worst moment is, simulated seconds ahead." },
+          "summed": { "type": "number", "description": "The aircraft's probabilities summed: the number expected there. A conflict at or over the threshold." },
+          "collision": { "type": "number", "description": "The chance two or more are there together, taking them as independent." },
+          "conflict": { "type": "boolean" },
+          "aircraft": { "type": "array", "items": { "$ref": "#/components/schemas/Contributor" }, "description": "Most likely first." }
+        }
+      },
+      "ConflictAdvisory": {
+        "type": "object",
+        "required": ["id", "callsign", "manoeuvre", "targets", "against", "first_conflict_s", "risk_before", "risk_after", "clear"],
+        "properties": {
+          "id": { "type": "integer" },
+          "callsign": { "type": "string" },
+          "manoeuvre": { "$ref": "#/components/schemas/Manoeuvre" },
+          "targets": { "$ref": "#/components/schemas/ManoeuvreTargets" },
+          "against": { "type": "array", "items": { "$ref": "#/components/schemas/Contributor" } },
+          "first_conflict_s": { "type": "number" },
+          "risk_before": { "type": "number" },
+          "risk_after": { "type": "number" },
+          "clear": { "type": "boolean", "description": "In no conflict once every advisory is followed." }
+        }
+      },
+      "Unresolved": {
+        "type": "object",
+        "required": ["a", "b", "first_s", "peak_total"],
+        "properties": {
+          "a": { "$ref": "#/components/schemas/Contributor" },
+          "b": { "$ref": "#/components/schemas/Contributor" },
+          "first_s": { "type": "number" },
+          "peak_total": { "type": "number" }
+        }
+      },
+      "ConflictReport": {
+        "type": "object",
+        "required": ["tick", "sim_utc", "took_ms", "aircraft", "resolution", "threshold", "step_s", "horizon_s", "layer_m", "risk_before", "risk_after", "advisories", "unresolved", "cells"],
+        "properties": {
+          "tick": { "type": "integer", "description": "The tick assessed." },
+          "sim_utc": { "type": ["string", "null"], "format": "date-time" },
+          "took_ms": { "type": "number" },
+          "aircraft": { "type": "integer", "description": "Aircraft in the air assessed." },
+          "resolution": { "type": "integer" },
+          "threshold": { "type": "number" },
+          "step_s": { "type": "number" },
+          "horizon_s": { "type": "number" },
+          "layer_m": { "type": "number" },
+          "risk_before": { "type": "number" },
+          "risk_after": { "type": "number" },
+          "advisories": { "type": "array", "items": { "$ref": "#/components/schemas/ConflictAdvisory" }, "description": "Requests for conflict resolution, in the order given." },
+          "unresolved": { "type": "array", "items": { "$ref": "#/components/schemas/Unresolved" } },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/ConflictCell" } }
         }
       },
       "Removal": {

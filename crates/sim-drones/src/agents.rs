@@ -8,7 +8,7 @@
 
 use krabmaga::engine::agent::Agent;
 use krabmaga::engine::state::State;
-use sim_core::{AgentId, GeoCell, Report, ReportKind};
+use sim_core::{AgentId, GeoCell, Report, ReportKind, Wind};
 
 use crate::behaviour::Node;
 use crate::dispatch::{self, AddressBook, Courier, Order};
@@ -161,6 +161,10 @@ impl Agent for DroneAgent {
         if let Some(courier) = world.call_ups.remove(&self.body.id) {
             self.courier = Some(courier);
         }
+
+        // The wind where it is, and at its takeoff height, for everything
+        // it decides and does this tick.
+        self.feel_the_wind(world);
 
         // What it does this tick is up to its brain.
         let mut brain = world.brain.take().expect("a world always has a brain");
@@ -393,6 +397,7 @@ impl DroneAgent {
             Node::SensorDue => world.settings.sensor.scans_on(tick),
             Node::AtStation => grounded() && self.at_station(world),
             Node::LowBattery => self.drone.failsafe,
+            Node::WindWithinLimits => !world.settings.tuning.too_windy(&self.drone.launch_wind),
             Node::AvoidGeofences => {
                 world.operate_drone(
                     self.body.id,
@@ -439,6 +444,22 @@ impl DroneAgent {
                 true
             }
         })
+    }
+
+    /// Look up the wind in its cell: at its height for flying, and at its
+    /// takeoff height for whether it may launch.
+    fn feel_the_wind(&mut self, world: &World) {
+        if world.weather.is_none() {
+            self.drone.wind = Wind::CALM;
+            self.drone.launch_wind = Wind::CALM;
+            return;
+        }
+        let pose = &self.body.pose;
+        let ground = world.terrain.ground_mm(pose.lat_e7, pose.lon_e7);
+        let agl_m = f64::from(pose.alt_mm - ground) * 1e-3;
+        let takeoff_m = f64::from(world.settings.tuning.takeoff_alt_mm) * 1e-3;
+        self.drone.wind = world.wind_at(self.body.cell, agl_m);
+        self.drone.launch_wind = world.wind_at(self.body.cell, takeoff_m);
     }
 
     /// One tick of the autopilot, and what came of it. False if it crashed.
@@ -721,8 +742,10 @@ impl DroneAgent {
 
     fn planner(&self, world: &World, charge: f64) -> Planner<'_> {
         let tuning = world.settings.tuning;
+        // Planned for the wind in its cell now, at the height it cruises.
+        let wind = world.wind_at(self.body.cell, f64::from(self.cruise_agl_m(world)));
         Planner {
-            range: Range::new(&tuning, self.drone.cruise_cms),
+            range: Range::new(&tuning, self.drone.cruise_cms).with_wind(&wind),
             stations: world.usable_stations(),
             climb_m: f64::from(self.cruise_agl_m(world) + world.settings.dispatch.takeoff_m),
             home: &self.drone.home,
@@ -861,11 +884,7 @@ impl DroneAgent {
                 return false;
             };
             let first = stops.first().map_or(self.drone.home, |s| s.0);
-            let need = planner.range.need(
-                flight::ground_distance_m(&here, &first),
-                planner.climb_m,
-                0.0,
-            );
+            let need = planner.range.need(&[here, first], planner.climb_m, 0.0);
             (stops, planner.range.leave_pct(need))
         };
         let mut takeoff = mission_item(mission::NAV_TAKEOFF, &Point::default(), ds.takeoff_m);

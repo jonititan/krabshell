@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Conflicts &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Conflicts</h1>
+<p class="lede">
+  Where the drones and intruders in the air could meet over the next minute.
+  Each is predicted as a cloud of possible paths under its performance model
+  and counted into A5 cells and altitude layers; a cell where two or more
+  aircraft's probabilities add up to the threshold is a conflict, and the
+  advisories below would resolve it.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Collision probability</h2>
+    <div class="map-controls">
+      <label>Shade by
+        <select id="conflict-metric">
+          <option value="collision" selected>P(two or more)</option>
+          <option value="summed">Summed probability</option>
+        </select>
+      </label>
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input id="conflict-layer" type="checkbox" checked> Collision heatmap</label>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid"> A5 occupancy grid</label>
+  </fieldset>
+  <p class="dim small">Each cell is shaded at its worst moment in the next minute, at any height. Click a cell, or a row of the table, to pick it out.</p>
+
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" data-layers-off="grid" aria-label="Collision probability by A5 cell"></canvas>
+    <div id="map-legend" class="legend" hidden></div>
+    <div id="conflict-legend" class="legend" aria-label="Collision probability scale"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map needs JavaScript; the tables below do not.</p></noscript>
+  </div>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+{% include "fragments/conflicts.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
+<script src="/assets/map.js" defer></script>
+<script src="/assets/conflicts.js" defer></script>
+{% endblock %}

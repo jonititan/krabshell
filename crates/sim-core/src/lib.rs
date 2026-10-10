@@ -17,6 +17,7 @@ pub mod report;
 pub mod rng;
 pub mod scenario;
 pub mod snapshot;
+pub mod weather;
 pub mod wire;
 
 pub use cell::{CellError, GeoCell, MAX_RESOLUTION};
@@ -29,4 +30,5 @@ pub use scenario::{ScenarioBlob, ScenarioError, ScenarioManifest, ScenarioSummar
 pub use snapshot::{
     CellBag, Checkpoint, DriverHealth, Metrics, RunMode, SnapshotMeta, WorldObject,
 };
+pub use weather::{WeatherMode, Wind, WindField};
 pub use wire::{ClientMsg, ServerMsg};

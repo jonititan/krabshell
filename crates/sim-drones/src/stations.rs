@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::dispatch::DispatchSettings;
 use crate::flight::{self, Point};
 use crate::mission::{MissionItem, Tuning, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT};
+use sim_core::Wind;
 
 const FRAME_TERRAIN: u8 = 11;
 
@@ -121,15 +122,25 @@ impl Stations {
     }
 }
 
-/// How far a charge goes, from the pack's flight and battery settings.
+/// How far a charge goes, from the pack's flight and battery settings and
+/// the wind.
+///
+/// Drain goes with the square of airspeed ([`Tuning::drain_at`]). A level
+/// leg is flown at cruise airspeed, so it costs the cruise drain for as long
+/// as the leg takes, and how long that is depends on the wind along it: a
+/// headwind leg costs more than the same leg downwind. Climbs, descents and
+/// work at the far end are flown hovering, into whatever wind there is. The
+/// wind is one vector for the whole trip, taken where the planning drone is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Range {
-    /// Charge used per metre flown level at cruise, ppm.
-    per_m: f64,
-    /// Charge used per metre climbed or descended, ppm.
-    per_m_up: f64,
-    /// Charge used per second hovering, ppm.
-    per_s: f64,
+    /// Drain at the reference airspeed, ppm per second.
+    ref_per_s: f64,
+    ref_ms: f64,
+    hover_share: f64,
+    cruise_ms: f64,
+    climb_ms: f64,
+    wind_east_ms: f64,
+    wind_north_ms: f64,
     reserve: f64,
     /// Stations charge drones at all.
     charging: bool,
@@ -137,38 +148,104 @@ pub struct Range {
 
 impl Range {
     pub fn new(tuning: &Tuning, cruise_cms: i32) -> Range {
-        let per_tick = f64::from(tuning.drain_ppm_tick);
-        let per_s = per_tick / tuning.dt;
         Range {
-            per_m: per_s / (f64::from(cruise_cms.max(1)) / 100.0),
-            per_m_up: per_s / tuning.climb_ms,
-            per_s,
+            ref_per_s: f64::from(tuning.drain_ppm_tick) / tuning.dt,
+            ref_ms: tuning.drain_ref_ms.max(0.1),
+            hover_share: tuning.hover_drain_share.clamp(0.0, 1.0),
+            cruise_ms: (f64::from(cruise_cms) / 100.0).max(0.01),
+            climb_ms: tuning.climb_ms,
+            wind_east_ms: 0.0,
+            wind_north_ms: 0.0,
             reserve: f64::from(tuning.reserve_ppm),
             charging: tuning.charge_ppm_tick > 0,
         }
     }
 
+    /// The same range, planned for a wind.
+    pub fn with_wind(self, wind: &Wind) -> Range {
+        Range {
+            wind_east_ms: wind.east_ms,
+            wind_north_ms: wind.north_ms,
+            ..self
+        }
+    }
+
     /// The battery never runs down: anywhere is in reach.
     pub fn endless(&self) -> bool {
-        self.per_s <= 0.0
+        self.ref_per_s <= 0.0
     }
 
-    /// Charge one hop needs: `metres` level, up `climb_m` at the start and
-    /// down again at the end, and `work_s` hovering, with the margin.
-    pub fn need(&self, metres: f64, climb_m: f64, work_s: f64) -> f64 {
-        SAFETY * (metres * self.per_m + 2.0 * climb_m * self.per_m_up + work_s * self.per_s)
+    /// Drain at an airspeed, ppm per second.
+    fn rate(&self, airspeed: f64) -> f64 {
+        let v = airspeed / self.ref_ms;
+        self.ref_per_s * (self.hover_share + (1.0 - self.hover_share) * v * v)
     }
 
-    /// The furthest a hop can go level, metres, starting with `charge`,
-    /// climbing `climb_m` and doing `work_s` at the far end, the reserve
-    /// kept and the margin allowed. Infinite if the battery never runs down.
+    fn wind_sq(&self) -> f64 {
+        self.wind_east_ms * self.wind_east_ms + self.wind_north_ms * self.wind_north_ms
+    }
+
+    /// Charge per second hovering, into the wind.
+    fn per_s(&self) -> f64 {
+        self.rate(libm::sqrt(self.wind_sq()))
+    }
+
+    /// Charge per metre climbed or descended, hovering into the wind.
+    fn per_m_up(&self) -> f64 {
+        let c = self.climb_ms.max(0.01);
+        self.rate(libm::sqrt(self.wind_sq() + c * c)) / c
+    }
+
+    /// Charge to fly level from `a` to `b` at cruise airspeed; infinite if
+    /// the wind leaves no headway that way.
+    fn leg(&self, a: &Point, b: &Point) -> f64 {
+        let (east, north) = flight::offset_m(a.lat_e7, a.lon_e7, b.lat_e7, b.lon_e7);
+        let d = libm::sqrt(east * east + north * north);
+        if d < 1e-3 {
+            return 0.0;
+        }
+        match flight::ground_speed_along(
+            east / d,
+            north / d,
+            self.wind_east_ms,
+            self.wind_north_ms,
+            self.cruise_ms,
+        ) {
+            Some(speed) => self.rate(self.cruise_ms) * d / speed,
+            None => f64::INFINITY,
+        }
+    }
+
+    /// Charge one hop needs: level along `path` (each leg in its own
+    /// direction), up `climb_m` at the start and down again at the end, and
+    /// `work_s` hovering, with the margin.
+    pub fn need(&self, path: &[Point], climb_m: f64, work_s: f64) -> f64 {
+        let level: f64 = path.windows(2).map(|w| self.leg(&w[0], &w[1])).sum();
+        SAFETY * (level + 2.0 * climb_m * self.per_m_up() + work_s * self.per_s())
+    }
+
+    /// The furthest a hop can go level, metres, there and back the worst way
+    /// the wind can blow, starting with `charge`, climbing `climb_m` and
+    /// doing `work_s` at the far end, the reserve kept and the margin
+    /// allowed. Infinite if the battery never runs down.
+    ///
+    /// Out into a wind of `w` and back with it averages `(V² − w²) / V` over
+    /// the ground, and any other heading does better, so this is the reach
+    /// in every direction.
     pub fn reach_m(&self, charge: f64, climb_m: f64, work_s: f64) -> f64 {
         if self.endless() {
             return f64::INFINITY;
         }
-        let left =
-            (charge - self.reserve) / SAFETY - 2.0 * climb_m * self.per_m_up - work_s * self.per_s;
-        (left / self.per_m).max(0.0)
+        let v = self.cruise_ms;
+        let speed = (v * v - self.wind_sq()) / v;
+        if speed <= 0.0 {
+            return 0.0;
+        }
+        let per_m = self.rate(v) / speed;
+        let left = (charge - self.reserve) / SAFETY
+            - 2.0 * climb_m * self.per_m_up()
+            - work_s * self.per_s();
+        (left / per_m).max(0.0)
     }
 
     /// Can a hop needing `need` be flown starting with `charge`?
@@ -226,8 +303,8 @@ impl Planner<'_> {
     /// out of reach is still flown straight.
     pub fn trip(&self, target: &Point, work_s: f64, direct_anyway: bool) -> Option<Trip> {
         let r = &self.range;
-        let there_and_back = 2.0 * flight::ground_distance_m(self.home, target);
-        if r.endless() || r.fits(r.need(there_and_back, self.climb_m, work_s), self.charge) {
+        let there_and_back = [*self.home, *target, *self.home];
+        if r.endless() || r.fits(r.need(&there_and_back, self.climb_m, work_s), self.charge) {
             return Some(Trip::direct());
         }
         if self.stations.is_empty() || !r.charging {
@@ -235,7 +312,6 @@ impl Planner<'_> {
         }
         let Chains { nodes, out, back } = self.chains();
         let n = nodes.len();
-        let d = |a: usize, b: usize| flight::ground_distance_m(&nodes[a], &nodes[b]);
         let cap = |a: usize| self.cap(a);
         let mut best: Option<(f64, usize, usize)> = None;
         for c1 in 0..n {
@@ -244,7 +320,8 @@ impl Planner<'_> {
                 let Some(from_c2) = back.0[c2] else { continue };
                 let reach = flight::ground_distance_m(&nodes[c1], target)
                     + flight::ground_distance_m(target, &nodes[c2]);
-                if !r.fits(r.need(reach, self.climb_m, work_s), cap(c1)) {
+                let via = [nodes[c1], *target, nodes[c2]];
+                if !r.fits(r.need(&via, self.climb_m, work_s), cap(c1)) {
                     continue;
                 }
                 let total = to_c1 + reach + from_c2;
@@ -262,22 +339,19 @@ impl Planner<'_> {
         let mut back_path = path(&back.1, c2);
         back_path.reverse();
         back_path.retain(|i| *i != 0);
-        let leave = |metres: f64, work: f64| r.leave_pct(r.need(metres, self.climb_m, work));
+        let leave = |path: &[Point], work: f64| r.leave_pct(r.need(path, self.climb_m, work));
         let mut trip = Trip::direct();
         for (k, &s) in out_path.iter().enumerate() {
             let pct = match out_path.get(k + 1) {
-                Some(&next) => leave(d(s, next), 0.0),
-                None => leave(
-                    flight::ground_distance_m(&nodes[s], target)
-                        + flight::ground_distance_m(target, &nodes[c2]),
-                    work_s,
-                ),
+                Some(&next) => leave(&[nodes[s], nodes[next]], 0.0),
+                None => leave(&[nodes[s], *target, nodes[c2]], work_s),
             };
             trip.out.push((nodes[s], pct));
         }
         for (k, &s) in back_path.iter().enumerate() {
             let next = back_path.get(k + 1).copied().unwrap_or(0);
-            trip.back.push((nodes[s], leave(d(s, next), 0.0)));
+            trip.back
+                .push((nodes[s], leave(&[nodes[s], nodes[next]], 0.0)));
         }
         Some(trip)
     }
@@ -301,7 +375,13 @@ impl Planner<'_> {
         nodes.extend(self.stations.iter().copied());
         let n = nodes.len();
         let d = |a: usize, b: usize| flight::ground_distance_m(&nodes[a], &nodes[b]);
-        let hop = |a: usize, b: usize| r.fits(r.need(d(a, b), self.climb_m, 0.0), self.cap(a));
+        // Hops are flown one way, so into the wind and with it differ.
+        let hop = |a: usize, b: usize| {
+            r.fits(
+                r.need(&[nodes[a], nodes[b]], self.climb_m, 0.0),
+                self.cap(a),
+            )
+        };
         let out = shortest(n, 0, |a, b| hop(a, b).then(|| d(a, b)));
         let back = shortest(n, 0, |a, b| (b != 0 && hop(b, a)).then(|| d(b, a)));
         Chains { nodes, out, back }
@@ -345,8 +425,7 @@ impl Planner<'_> {
     /// home is out of reach even so.
     pub fn home_from(&self, here: &Point) -> Option<Vec<(Point, f32)>> {
         let r = &self.range;
-        let direct = flight::ground_distance_m(here, self.home);
-        if r.endless() || r.fits(r.need(direct, self.climb_m, 0.0), self.charge) {
+        if r.endless() || r.fits(r.need(&[*here, *self.home], self.climb_m, 0.0), self.charge) {
             return Some(Vec::new());
         }
         if !r.charging {
@@ -359,7 +438,8 @@ impl Planner<'_> {
         let d = |a: usize, b: usize| flight::ground_distance_m(&nodes[a], &nodes[b]);
         let cap = |a: usize| if a == 1 { self.charge } else { FULL };
         let (dist, prev) = shortest(n, 1, |a, b| {
-            (a != 0 && r.fits(r.need(d(a, b), self.climb_m, 0.0), cap(a))).then(|| d(a, b))
+            let hop = [nodes[a], nodes[b]];
+            (a != 0 && r.fits(r.need(&hop, self.climb_m, 0.0), cap(a))).then(|| d(a, b))
         });
         dist[0]?;
         let mut stops = path(&prev, 0);
@@ -370,7 +450,8 @@ impl Planner<'_> {
                 .enumerate()
                 .map(|(k, &s)| {
                     let next = stops.get(k + 1).copied().unwrap_or(0);
-                    (nodes[s], r.leave_pct(r.need(d(s, next), self.climb_m, 0.0)))
+                    let hop = [nodes[s], nodes[next]];
+                    (nodes[s], r.leave_pct(r.need(&hop, self.climb_m, 0.0)))
                 })
                 .collect(),
         )
@@ -382,15 +463,14 @@ impl Planner<'_> {
         self.stations
             .iter()
             .map(|s| (flight::ground_distance_m(here, s), *s))
-            .filter(|(d, _)| r.need(*d, 0.0, 0.0) <= self.charge)
+            .filter(|(_, s)| r.need(&[*here, *s], 0.0, 0.0) <= self.charge)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, s)| s)
     }
 
     /// Can it get home from `here` on what it has, down to empty?
     pub fn home_in_reach(&self, here: &Point) -> bool {
-        let d = flight::ground_distance_m(here, self.home);
-        self.range.endless() || self.range.need(d, 0.0, 0.0) <= self.charge
+        self.range.endless() || self.range.need(&[*here, *self.home], 0.0, 0.0) <= self.charge
     }
 }
 
@@ -537,6 +617,12 @@ mod tests {
             takeoff_alt_mm: 20_000,
             rtl_alt_mm: 30_000,
             drain_ppm_tick: 100,
+            drain_ref_ms: 10.0,
+            // The flat drain these tests were written for; airspeed-squared
+            // drain and wind have tests of their own.
+            hover_drain_share: 1.0,
+            max_wind_ms: 12.0,
+            max_gust_ms: 15.0,
             reserve_ppm: 200_000,
             charge_ppm_tick: 50,
             launch_ppm: 800_000,
@@ -609,5 +695,81 @@ mod tests {
         // Too little to reach any station from out in the open.
         let flat = planner(&home, p.stations.clone(), 250_000.0);
         assert_eq!(flat.home_from(&east(12_000.0)), None);
+    }
+
+    fn wind(east_ms: f64, north_ms: f64) -> Wind {
+        Wind {
+            east_ms,
+            north_ms,
+            gust_ms: 0.0,
+        }
+    }
+
+    /// Pure airspeed-squared drain: nothing for hovering in still air.
+    fn squared() -> Tuning {
+        Tuning {
+            hover_drain_share: 0.0,
+            ..tuning()
+        }
+    }
+
+    #[test]
+    fn a_leg_into_the_wind_costs_more_than_the_same_leg_with_it() {
+        let r = Range::new(&tuning(), 1_000).with_wind(&wind(4.0, 0.0));
+        let (a, b) = (east(0.0), east(1_000.0));
+        let d = flight::ground_distance_m(&a, &b);
+        // 1 km at 14 m/s over the ground downwind, 6 m/s back into it, at
+        // 1000 ppm/s of cruise drain.
+        let with = r.need(&[a, b], 0.0, 0.0) / SAFETY;
+        let into = r.need(&[b, a], 0.0, 0.0) / SAFETY;
+        assert!((with - d * 1_000.0 / 14.0).abs() < 1e-6, "{with}");
+        assert!((into - d * 1_000.0 / 6.0).abs() < 1e-6, "{into}");
+    }
+
+    #[test]
+    fn in_still_air_a_leg_costs_what_it_always_did() {
+        let r = Range::new(&tuning(), 1_000);
+        let (a, b) = (east(0.0), east(2_000.0));
+        let d = flight::ground_distance_m(&a, &b);
+        // 0.1 %/s at 10 m/s: 100 ppm a metre.
+        assert!((r.need(&[a, b], 0.0, 0.0) - SAFETY * 100.0 * d).abs() < 1e-6);
+        assert!((r.reach_m(FULL, 0.0, 0.0) - (FULL - 200_000.0) / SAFETY / 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_wind_stronger_than_cruise_puts_the_upwind_side_out_of_reach() {
+        let r = Range::new(&tuning(), 1_000).with_wind(&wind(-12.0, 0.0));
+        assert!(r.need(&[east(0.0), east(10.0)], 0.0, 0.0).is_infinite());
+        assert!(r.need(&[east(10.0), east(0.0)], 0.0, 0.0).is_finite());
+        assert_eq!(r.reach_m(FULL, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn a_headwind_shrinks_reach_and_the_planner_stops_for_it() {
+        let home = east(0.0);
+        let calm = planner(&home, vec![east(2_000.0)], FULL);
+        // 3 km out and back is 6 km × 1.25 of the 8 km budget in still air.
+        assert_eq!(calm.trip(&east(3_000.0), 0.0, false), Some(Trip::direct()));
+        // With 5 m/s blowing west it is (1/15 + 1/5) s/m × 3 km × 1000
+        // ppm/s × 1.25, a whole charge: it has to stop at the station.
+        let windy = Planner {
+            range: calm.range.with_wind(&wind(-5.0, 0.0)),
+            ..planner(&home, vec![east(2_000.0)], FULL)
+        };
+        let trip = windy.trip(&east(3_000.0), 0.0, false).unwrap();
+        assert!(!trip.is_direct(), "{trip:?}");
+        let still = Range::new(&tuning(), 1_000).reach_m(FULL, 0.0, 0.0);
+        let headwind = windy.range.reach_m(FULL, 0.0, 0.0);
+        assert!(headwind < still * 0.8, "{headwind} vs {still}");
+    }
+
+    #[test]
+    fn with_squared_drain_hovering_costs_only_the_wind_it_holds_against() {
+        let calm = Range::new(&squared(), 1_000);
+        assert_eq!(calm.need(&[east(0.0), east(0.0)], 0.0, 60.0), 0.0);
+        // Hovering into 5 m/s is a quarter of the cruise drain at 10 m/s.
+        let windy = calm.with_wind(&wind(0.0, 5.0));
+        let hover = windy.need(&[east(0.0), east(0.0)], 0.0, 60.0) / SAFETY;
+        assert!((hover - 60.0 * 250.0).abs() < 1e-6, "{hover}");
     }
 }
