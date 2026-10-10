@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 360" width="760" height="360" role="img" aria-labelledby="t d">
+<title id="t">Two drones head-on: summed probability by cell</title><desc id="d">Two drones 1.2 km apart flying at each other at 60 m and 10 m/s. Each cell is shaded by the probabilities both drones put in it, summed. 20 s ahead their clouds are apart; 40 s ahead one cell holds 1.31 aircraft and is a conflict; 60 s ahead six cells are.</desc>
+<style>
+svg{--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--surface:#ffffff;--box:#f6f7f9;--s1:#2a78d6;--s2:#eb6834;--bad:#d03b3b;--cost:#c3c2b7;--q1:#cde2fb;--q2:#9ec5f4;--q3:#6da7ec;--q4:#3987e5;--q5:#1c5cab;--o1:#86b6ef;--o2:#3987e5;--o3:#1c5cab;--o4:#0d366b;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){svg{--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--surface:#171b21;--box:#1f242b;--s1:#3987e5;--s2:#d95926;--bad:#e66767;--cost:#5a5955;--q1:#184f95;--q2:#1c5cab;--q3:#2a78d6;--q4:#6da7ec;--q5:#b7d3f6;--o1:#184f95;--o2:#256abf;--o3:#5598e7;--o4:#b7d3f6}}
+text{fill:var(--ink);font-size:13px}
+.t2{fill:var(--ink2)} .tm{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.h{font-weight:600} .small{font-size:12px}
+.halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+</style>
+<clipPath id="clip132400716572848"><rect x="56.0" y="48" width="218.66666666666666" height="242"/></clipPath>
+<line x1="78.7" y1="48.0" x2="78.7" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="78.7" y="305.0" text-anchor="middle" class="tm">0</text>
+<line x1="152.6" y1="48.0" x2="152.6" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="152.6" y="305.0" text-anchor="middle" class="tm">500</text>
+<line x1="226.4" y1="48.0" x2="226.4" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="226.4" y="305.0" text-anchor="middle" class="tm">1000</text>
+<line x1="56.0" y1="239.6" x2="274.7" y2="239.6" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="243.6" text-anchor="end" class="tm">-500</text>
+<line x1="56.0" y1="165.7" x2="274.7" y2="165.7" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="169.7" text-anchor="end" class="tm">0</text>
+<line x1="56.0" y1="91.9" x2="274.7" y2="91.9" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="95.9" text-anchor="end" class="tm">500</text>
+<rect x="56.0" y="48" width="218.66666666666666" height="242" fill="none" stroke="var(--axis)"/>
+<g clip-path="url(#clip132400716572848)">
+<path d="M210.1,207.8L221.2,227.4L233.4,210.7L228.5,188.4L208.7,185.2L210.1,207.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M208.7,185.2L197.5,165.6L185.4,182.3L190.2,204.6L210.1,207.8L208.7,185.2Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M224.7,129.8L235.8,149.4L248.0,132.7L243.1,110.4L223.3,107.2L224.7,129.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M223.3,107.2L212.1,87.6L200.0,104.3L204.8,126.6L224.7,129.8L223.3,107.2Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M186.4,146.0L197.5,165.6L209.7,148.9L204.8,126.6L185.0,123.4L186.4,146.0Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M151.9,220.7L147.1,198.5L133.1,181.2L120.9,197.9L132.1,217.5L151.9,220.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M128.2,158.9L133.1,181.2L147.1,198.5L159.2,181.7L148.1,162.1L128.2,158.9Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M66.2,113.2L71.1,135.5L85.1,152.8L97.2,136.1L86.1,116.4L66.2,113.2Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M90.0,175.1L85.1,152.8L71.1,135.5L59.0,152.2L70.1,171.8L90.0,175.1Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M248.4,191.7L259.5,211.3L271.7,194.5L266.8,172.3L247.0,169.1L248.4,191.7Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M228.5,188.4L233.4,210.7L247.3,228.0L259.5,211.3L248.4,191.7L228.5,188.4Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M266.8,172.3L261.9,150.0L248.0,132.7L235.8,149.4L247.0,169.1L266.8,172.3Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M247.0,169.1L235.8,149.4L223.6,166.2L228.5,188.4L248.4,191.7L247.0,169.1Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M90.0,175.1L94.8,197.3L108.8,214.6L120.9,197.9L109.8,178.3L90.0,175.1Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M108.4,155.7L97.2,136.1L85.1,152.8L90.0,175.1L109.8,178.3L108.4,155.7Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M109.8,178.3L120.9,197.9L133.1,181.2L128.2,158.9L108.4,155.7L109.8,178.3Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M128.2,158.9L123.4,136.6L109.4,119.3L97.2,136.1L108.4,155.7L128.2,158.9Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M228.5,188.4L223.6,166.2L209.7,148.9L197.5,165.6L208.7,185.2L228.5,188.4Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M204.8,126.6L209.7,148.9L223.6,166.2L235.8,149.4L224.7,129.8L204.8,126.6Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M115.24110167510317,165.74268573008007 l-12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="108.2" y="153.7" text-anchor="middle" class="small h halo">UAV 1</text>
+<path d="M219.38699115524065,165.64874210675796 l12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="226.4" y="187.6" text-anchor="middle" class="small h halo">UAV 2</text>
+</g>
+<text x="56.0" y="16.0" text-anchor="start" class="h">20 s ahead</text>
+<text x="56.0" y="34.0" text-anchor="start" class="small t2">peak 1.00, no conflict</text>
+<clipPath id="clip132400716577472"><rect x="290.66666666666663" y="48" width="218.66666666666666" height="242"/></clipPath>
+<line x1="313.4" y1="48.0" x2="313.4" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="387.2" y1="48.0" x2="387.2" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="461.1" y1="48.0" x2="461.1" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="290.7" y1="239.6" x2="509.3" y2="239.6" stroke="var(--grid)" stroke-width="1"/>
+<line x1="290.7" y1="165.7" x2="509.3" y2="165.7" stroke="var(--grid)" stroke-width="1"/>
+<line x1="290.7" y1="91.9" x2="509.3" y2="91.9" stroke="var(--grid)" stroke-width="1"/>
+<rect x="290.66666666666663" y="48" width="218.66666666666666" height="242" fill="none" stroke="var(--axis)"/>
+<text x="313.4" y="305.0" text-anchor="middle" class="tm">0</text>
+<text x="387.2" y="305.0" text-anchor="middle" class="tm">500</text>
+<text x="461.1" y="305.0" text-anchor="middle" class="tm">1000</text>
+<g clip-path="url(#clip132400716577472)">
+<path d="M324.6,175.1L329.5,197.3L343.4,214.6L355.6,197.9L344.5,178.3L324.6,175.1Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M343.1,155.7L331.9,136.1L319.7,152.8L324.6,175.1L344.5,178.3L343.1,155.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M339.2,97.1L344.1,119.3L358.0,136.6L370.2,119.9L359.0,100.3L339.2,97.1Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M401.2,142.7L396.3,120.5L382.4,103.2L370.2,119.9L381.4,139.5L401.2,142.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M362.9,158.9L358.0,136.6L344.1,119.3L331.9,136.1L343.1,155.7L362.9,158.9Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M439.5,126.6L434.6,104.3L420.7,87.0L408.5,103.7L419.7,123.4L439.5,126.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M424.9,204.6L429.8,226.9L443.7,244.2L455.9,227.4L444.7,207.8L424.9,204.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M481.7,169.1L470.5,149.4L458.3,166.2L463.2,188.4L483.0,191.7L481.7,169.1Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M439.5,126.6L444.4,148.9L458.3,166.2L470.5,149.4L459.3,129.8L439.5,126.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M444.7,207.8L455.9,227.4L468.1,210.7L463.2,188.4L443.4,185.2L444.7,207.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M419.7,123.4L408.5,103.7L396.3,120.5L401.2,142.7L421.0,146.0L419.7,123.4Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M424.9,204.6L420.0,182.3L406.1,165.0L393.9,181.7L405.1,201.4L424.9,204.6Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M463.2,188.4L458.3,166.2L444.4,148.9L432.2,165.6L443.4,185.2L463.2,188.4Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M401.2,142.7L406.1,165.0L420.0,182.3L432.2,165.6L421.0,146.0L401.2,142.7Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M421.0,146.0L432.2,165.6L444.4,148.9L439.5,126.6L419.7,123.4L421.0,146.0Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M443.4,185.2L432.2,165.6L420.0,182.3L424.9,204.6L444.7,207.8L443.4,185.2Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M405.1,201.4L393.9,181.7L381.7,198.5L386.6,220.7L406.4,224.0L405.1,201.4Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M344.5,178.3L355.6,197.9L367.8,181.2L362.9,158.9L343.1,155.7L344.5,178.3Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M386.6,220.7L381.7,198.5L367.8,181.2L355.6,197.9L366.8,217.5L386.6,220.7Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M381.4,139.5L370.2,119.9L358.0,136.6L362.9,158.9L382.7,162.1L381.4,139.5Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M362.9,158.9L367.8,181.2L381.7,198.5L393.9,181.7L382.7,162.1L362.9,158.9Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M382.7,162.1L393.9,181.7L406.1,165.0L401.2,142.7L381.4,139.5L382.7,162.1Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M382.7,162.1L393.9,181.7L406.1,165.0L401.2,142.7L381.4,139.5L382.7,162.1Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M379.339993133114,165.68587936926642 l-12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="372.3" y="153.7" text-anchor="middle" class="small h halo">UAV 1</text>
+<path d="M424.62408845687185,165.53779106328855 l12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="431.6" y="187.5" text-anchor="middle" class="small h halo">UAV 2</text>
+</g>
+<text x="290.7" y="16.0" text-anchor="start" class="h">40 s ahead</text>
+<text x="290.7" y="34.0" text-anchor="start" class="small t2">peak 1.31, 1 cell in conflict</text>
+<clipPath id="clip132400715980624"><rect x="525.3333333333333" y="48" width="218.66666666666666" height="242"/></clipPath>
+<line x1="548.1" y1="48.0" x2="548.1" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="621.9" y1="48.0" x2="621.9" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="695.8" y1="48.0" x2="695.8" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
+<line x1="525.3" y1="239.6" x2="744.0" y2="239.6" stroke="var(--grid)" stroke-width="1"/>
+<line x1="525.3" y1="165.7" x2="744.0" y2="165.7" stroke="var(--grid)" stroke-width="1"/>
+<line x1="525.3" y1="91.9" x2="744.0" y2="91.9" stroke="var(--grid)" stroke-width="1"/>
+<rect x="525.3333333333333" y="48" width="218.66666666666666" height="242" fill="none" stroke="var(--axis)"/>
+<text x="548.1" y="305.0" text-anchor="middle" class="tm">0</text>
+<text x="621.9" y="305.0" text-anchor="middle" class="tm">500</text>
+<text x="695.8" y="305.0" text-anchor="middle" class="tm">1000</text>
+<g clip-path="url(#clip132400715980624)">
+<path d="M659.6,204.6L664.5,226.9L678.4,244.2L690.6,227.4L679.4,207.8L659.6,204.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M679.4,207.8L690.6,227.4L702.7,210.7L697.9,188.4L678.0,185.2L679.4,207.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M697.9,188.4L693.0,166.2L679.1,148.9L666.9,165.6L678.0,185.2L697.9,188.4Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M593.7,100.3L604.9,119.9L617.1,103.2L612.2,80.9L592.3,77.7L593.7,100.3Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M621.3,220.7L626.2,243.0L640.1,260.3L652.3,243.6L641.1,224.0L621.3,220.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M674.2,126.6L669.3,104.3L655.4,87.0L643.2,103.7L654.3,123.4L674.2,126.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M579.1,178.3L590.3,197.9L602.5,181.2L597.6,158.9L577.7,155.7L579.1,178.3Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M612.2,80.9L617.1,103.2L631.0,120.5L643.2,103.7L632.0,84.1L612.2,80.9Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M621.3,220.7L616.4,198.5L602.5,181.2L590.3,197.9L601.4,217.5L621.3,220.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M655.7,146.0L666.9,165.6L679.1,148.9L674.2,126.6L654.3,123.4L655.7,146.0Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M654.3,123.4L643.2,103.7L631.0,120.5L635.9,142.7L655.7,146.0L654.3,123.4Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M641.1,224.0L652.3,243.6L664.5,226.9L659.6,204.6L639.7,201.4L641.1,224.0Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M639.7,201.4L628.6,181.7L616.4,198.5L621.3,220.7L641.1,224.0L639.7,201.4Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M678.0,185.2L666.9,165.6L654.7,182.3L659.6,204.6L679.4,207.8L678.0,185.2Z" fill="var(--q2)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M635.9,142.7L631.0,120.5L617.1,103.2L604.9,119.9L616.0,139.5L635.9,142.7Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M616.0,139.5L604.9,119.9L592.7,136.6L597.6,158.9L617.4,162.1L616.0,139.5Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M597.6,158.9L602.5,181.2L616.4,198.5L628.6,181.7L617.4,162.1L597.6,158.9Z" fill="var(--q4)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M659.6,204.6L654.7,182.3L640.8,165.0L628.6,181.7L639.7,201.4L659.6,204.6Z" fill="var(--q5)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M635.9,142.7L640.8,165.0L654.7,182.3L666.9,165.6L655.7,146.0L635.9,142.7Z" fill="var(--q5)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M617.4,162.1L628.6,181.7L640.8,165.0L635.9,142.7L616.0,139.5L617.4,162.1Z" fill="var(--q5)" stroke="var(--surface)" stroke-width="1.5"/>
+<path d="M617.4,162.1L628.6,181.7L640.8,165.0L635.9,142.7L616.0,139.5L617.4,162.1Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M635.9,142.7L640.8,165.0L654.7,182.3L666.9,165.6L655.7,146.0L635.9,142.7Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M659.6,204.6L654.7,182.3L640.8,165.0L628.6,181.7L639.7,201.4L659.6,204.6Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M597.6,158.9L602.5,181.2L616.4,198.5L628.6,181.7L617.4,162.1L597.6,158.9Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M616.0,139.5L604.9,119.9L592.7,136.6L597.6,158.9L617.4,162.1L616.0,139.5Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M635.9,142.7L631.0,120.5L617.1,103.2L604.9,119.9L616.0,139.5L635.9,142.7Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<path d="M643.1211105729768,165.43033424095097 l-12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="636.1" y="153.4" text-anchor="middle" class="small h halo">UAV 1</text>
+<path d="M630.2369790487766,165.45496765708285 l12,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="637.2" y="187.5" text-anchor="middle" class="small h halo">UAV 2</text>
+</g>
+<text x="525.3" y="16.0" text-anchor="start" class="h">60 s ahead</text>
+<text x="525.3" y="34.0" text-anchor="start" class="small t2">peak 1.96, 6 cells in conflict</text>
+<text x="380.0" y="322.0" text-anchor="middle" class="small t2">metres east of where UAV 1 is now</text>
+<rect x="56" y="340" width="12" height="12" rx="2" fill="var(--q1)"/>
+<text x="74.0" y="350.0" text-anchor="start" class="small t2">summed under 0.5</text>
+<rect x="194" y="340" width="12" height="12" rx="2" fill="var(--q2)"/>
+<text x="212.0" y="350.0" text-anchor="start" class="small t2">0.5 to 1</text>
+<rect x="276" y="340" width="12" height="12" rx="2" fill="var(--q4)"/>
+<text x="294.0" y="350.0" text-anchor="start" class="small t2">1 to 1.5</text>
+<rect x="358" y="340" width="12" height="12" rx="2" fill="var(--q5)"/>
+<text x="376.0" y="350.0" text-anchor="start" class="small t2">1.5 to 2</text>
+<rect x="445" y="341" width="10" height="10" fill="none" stroke="var(--bad)" stroke-width="2"/>
+<text x="462.0" y="350.0" text-anchor="start" class="small t2">in conflict (2 aircraft, sum ≥ 1)</text>
+</svg>

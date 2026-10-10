@@ -267,7 +267,8 @@
     "state": {
       "sysid": 21,
       "callsign": "MEGA-SPARE",
-      "elevation_m": 81.2
+      "elevation_m": 81.2,
+      "spare": "MEGA"
     }
   },
   {
@@ -538,7 +539,8 @@
     "state": {
       "sysid": 42,
       "callsign": "AKRO-SPARE",
-      "elevation_m": 45.9
+      "elevation_m": 45.9,
+      "spare": "AKRO"
     }
   },
   {

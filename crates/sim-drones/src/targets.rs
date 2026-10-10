@@ -5,6 +5,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::flight::{self, Limits, Point, Pose};
 
+/// What sort of vehicle a vehicle is. Each is one of APP-6's civilian
+/// vehicles, so a map can draw it as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VehicleType {
+    Car,
+    Van,
+    Pickup,
+    Bus,
+    Lorry,
+}
+
+impl VehicleType {
+    pub fn name(self) -> &'static str {
+        match self {
+            VehicleType::Car => "car",
+            VehicleType::Van => "van",
+            VehicleType::Pickup => "pickup",
+            VehicleType::Bus => "bus",
+            VehicleType::Lorry => "lorry",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<VehicleType> {
+        Some(match name {
+            "car" => VehicleType::Car,
+            "van" => VehicleType::Van,
+            "pickup" => VehicleType::Pickup,
+            "bus" => VehicleType::Bus,
+            "lorry" => VehicleType::Lorry,
+            _ => return None,
+        })
+    }
+
+    /// One drawn from city traffic by a uniform number: mostly cars, then
+    /// vans, pickups, lorries and buses.
+    pub fn draw(u: f64) -> VehicleType {
+        match u {
+            u if u < 0.70 => VehicleType::Car,
+            u if u < 0.84 => VehicleType::Van,
+            u if u < 0.92 => VehicleType::Pickup,
+            u if u < 0.97 => VehicleType::Lorry,
+            _ => VehicleType::Bus,
+        }
+    }
+}
+
 /// A ground target that walks or drives between random destinations near
 /// where it started.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,10 +81,7 @@ impl Wander {
             flight::hold(pose);
             return;
         }
-        let limits = Limits {
-            speed_ms: f64::from(self.speed_cms) * 0.01,
-            climb_ms: 0.0,
-        };
+        let limits = Limits::still(f64::from(self.speed_cms) * 0.01, 0.0);
         let left = flight::step_toward(pose, &self.dest, limits, dt);
         if left.ground_m > 0.5 {
             return;
@@ -76,10 +120,8 @@ impl Route {
             flight::hold(pose);
             return;
         };
-        let limits = Limits {
-            speed_ms: f64::from(self.speed_cms) * 0.01,
-            climb_ms: 3.0,
-        };
+        // Intruders fly scripted routes at a set ground speed, wind or not.
+        let limits = Limits::still(f64::from(self.speed_cms) * 0.01, 3.0);
         let left = flight::step_toward(pose, &target, limits, dt);
         if left.within(1.0, 1.0) {
             self.leg = ((usize::from(self.leg) + 1) % self.waypoints.len()) as u16;

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 330" width="760" height="330" role="img" aria-labelledby="t d">
+<title id="t">Round one of the advisory search</title><desc id="d">Every manoeuvre of both drones, scored as risk left plus the manoeuvre's cost. Carrying on scores 22.1; an advisory must score under 21.6. Climb and descend both leave no risk and score 1.1; climb is tried first and is advised to UAV 1. Speeding up makes things worse.</desc>
+<style>
+svg{--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--surface:#ffffff;--box:#f6f7f9;--s1:#2a78d6;--s2:#eb6834;--bad:#d03b3b;--cost:#c3c2b7;--q1:#cde2fb;--q2:#9ec5f4;--q3:#6da7ec;--q4:#3987e5;--q5:#1c5cab;--o1:#86b6ef;--o2:#3987e5;--o3:#1c5cab;--o4:#0d366b;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){svg{--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--surface:#171b21;--box:#1f242b;--s1:#3987e5;--s2:#d95926;--bad:#e66767;--cost:#5a5955;--q1:#184f95;--q2:#1c5cab;--q3:#2a78d6;--q4:#6da7ec;--q5:#b7d3f6;--o1:#184f95;--o2:#256abf;--o3:#5598e7;--o4:#b7d3f6}}
+text{fill:var(--ink);font-size:13px}
+.t2{fill:var(--ink2)} .tm{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.h{font-weight:600} .small{font-size:12px}
+.halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+</style>
+<line x1="92.0" y1="54.0" x2="92.0" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="92.0" y="283.0" text-anchor="middle" class="tm">0</text>
+<line x1="174.2" y1="54.0" x2="174.2" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="174.2" y="283.0" text-anchor="middle" class="tm">10</text>
+<line x1="256.5" y1="54.0" x2="256.5" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="256.5" y="283.0" text-anchor="middle" class="tm">20</text>
+<line x1="338.7" y1="54.0" x2="338.7" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="338.7" y="283.0" text-anchor="middle" class="tm">30</text>
+<text x="8.0" y="18.0" text-anchor="start" class="h">UAV 1</text>
+<text x="84.0" y="77.0" text-anchor="end" class="small">Climb</text>
+<rect x="92.0" y="64" width="8.1" height="18" rx="2" fill="var(--cost)"/>
+<text x="107.1" y="77.0" text-anchor="start" class="small h">1.1  advised</text>
+<text x="84.0" y="107.0" text-anchor="end" class="small">Descend</text>
+<rect x="92.0" y="94" width="8.1" height="18" rx="2" fill="var(--cost)"/>
+<text x="84.0" y="137.0" text-anchor="end" class="small">Level off</text>
+<text x="96.0" y="137.0" text-anchor="start" class="small t2">not offered: already level</text>
+<text x="84.0" y="167.0" text-anchor="end" class="small">Turn left</text>
+<rect x="92.0" y="154" width="24.3" height="18" rx="2" fill="var(--s1)"/>
+<rect x="118.3" y="154" width="17.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="84.0" y="197.0" text-anchor="end" class="small">Turn right</text>
+<rect x="92.0" y="184" width="4.5" height="18" rx="2" fill="var(--s1)"/>
+<rect x="98.5" y="184" width="17.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="84.0" y="227.0" text-anchor="end" class="small">Speed up</text>
+<rect x="92.0" y="214" width="248.0" height="18" rx="2" fill="var(--s1)"/>
+<rect x="342.0" y="214" width="26.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="84.0" y="257.0" text-anchor="end" class="small">Slow down</text>
+<rect x="92.0" y="244" width="80.1" height="18" rx="2" fill="var(--s1)"/>
+<rect x="174.1" y="244" width="26.2" height="18" rx="2" fill="var(--cost)"/>
+<line x1="269.9" y1="52.0" x2="269.9" y2="268.0" stroke="var(--bad)" stroke-width="1.5"/>
+<text x="269.9" y="32.0" text-anchor="middle" class="small" style="fill:var(--bad)">advise only below 21.6</text>
+<text x="269.9" y="47.0" text-anchor="middle" class="tm">(2 % under carrying on, 22.1)</text>
+<text x="237.0" y="302.0" text-anchor="middle" class="small t2">score: risk left + cost</text>
+<line x1="468.0" y1="54.0" x2="468.0" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="468.0" y="283.0" text-anchor="middle" class="tm">0</text>
+<line x1="550.2" y1="54.0" x2="550.2" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="550.2" y="283.0" text-anchor="middle" class="tm">10</text>
+<line x1="632.5" y1="54.0" x2="632.5" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="632.5" y="283.0" text-anchor="middle" class="tm">20</text>
+<line x1="714.7" y1="54.0" x2="714.7" y2="268.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="714.7" y="283.0" text-anchor="middle" class="tm">30</text>
+<text x="384.0" y="18.0" text-anchor="start" class="h">UAV 2</text>
+<text x="460.0" y="77.0" text-anchor="end" class="small">Climb</text>
+<rect x="468.0" y="64" width="8.1" height="18" rx="2" fill="var(--cost)"/>
+<text x="460.0" y="107.0" text-anchor="end" class="small">Descend</text>
+<rect x="468.0" y="94" width="8.1" height="18" rx="2" fill="var(--cost)"/>
+<text x="460.0" y="137.0" text-anchor="end" class="small">Level off</text>
+<text x="472.0" y="137.0" text-anchor="start" class="small t2">not offered: already level</text>
+<text x="460.0" y="167.0" text-anchor="end" class="small">Turn left</text>
+<rect x="468.0" y="154" width="45.4" height="18" rx="2" fill="var(--s2)"/>
+<rect x="515.4" y="154" width="17.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="460.0" y="197.0" text-anchor="end" class="small">Turn right</text>
+<rect x="468.0" y="184" width="17.6" height="18" rx="2" fill="var(--s2)"/>
+<rect x="487.6" y="184" width="17.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="460.0" y="227.0" text-anchor="end" class="small">Speed up</text>
+<rect x="468.0" y="214" width="228.8" height="18" rx="2" fill="var(--s2)"/>
+<rect x="698.8" y="214" width="26.2" height="18" rx="2" fill="var(--cost)"/>
+<text x="460.0" y="257.0" text-anchor="end" class="small">Slow down</text>
+<rect x="468.0" y="244" width="69.3" height="18" rx="2" fill="var(--s2)"/>
+<rect x="539.3" y="244" width="26.2" height="18" rx="2" fill="var(--cost)"/>
+<line x1="645.9" y1="52.0" x2="645.9" y2="268.0" stroke="var(--bad)" stroke-width="1.5"/>
+<text x="645.9" y="32.0" text-anchor="middle" class="small" style="fill:var(--bad)">advise only below 21.6</text>
+<text x="645.9" y="47.0" text-anchor="middle" class="tm">(2 % under carrying on, 22.1)</text>
+<text x="613.0" y="302.0" text-anchor="middle" class="small t2">score: risk left + cost</text>
+<rect x="10" y="308" width="12" height="12" rx="2" fill="var(--s1)"/>
+<text x="28.0" y="318.0" text-anchor="start" class="small t2">risk left, UAV 1</text>
+<rect x="148" y="308" width="12" height="12" rx="2" fill="var(--s2)"/>
+<text x="166.0" y="318.0" text-anchor="start" class="small t2">risk left, UAV 2</text>
+<rect x="286" y="308" width="12" height="12" rx="2" fill="var(--cost)"/>
+<text x="304.0" y="318.0" text-anchor="start" class="small t2">manoeuvre's cost (share of carrying on)</text>
+</svg>

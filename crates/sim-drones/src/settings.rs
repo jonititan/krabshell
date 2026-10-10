@@ -23,6 +23,23 @@ pub(crate) struct Settings {
     pub(crate) vehicle_speed_cms: i32,
     pub(crate) intruder_speed_cms: i32,
     pub(crate) wander_radius_m: u32,
+    /// How far drones keep from a geofence, metres.
+    pub(crate) geofence_margin_m: f64,
+    /// How far above or below a geofence's band drones keep, metres.
+    pub(crate) geofence_vertical_margin_m: f64,
+    /// The lowest drones fly to pass beneath a geofence, metres above the
+    /// ground.
+    pub(crate) beneath_min_agl_m: f64,
+    /// How long after a survey a region of interest is due another, ticks.
+    pub(crate) roi_revisit_ticks: u64,
+    /// The radius of the region of interest left where a drone crashes,
+    /// metres; 0 leaves none.
+    pub(crate) crash_roi_radius_m: f64,
+    /// How high above the ground drones fly a survey, metres.
+    pub(crate) survey_agl_m: f32,
+    /// Turn away orders whose address is inside a geofence when they are
+    /// placed, rather than queue them until it closes.
+    pub(crate) reject_orders_in_geofences: bool,
 }
 
 pub(crate) fn param_f64(params: &BTreeMap<String, Param>, key: &str, default: f64) -> f64 {
@@ -48,10 +65,17 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
             climb_ms: param_f64(params, "climb_ms", 3.0).max(0.1),
             takeoff_alt_mm: flight::to_mm(param_f64(params, "takeoff_alt_m", 20.0)),
             rtl_alt_mm: flight::to_mm(param_f64(params, "rtl_alt_m", 30.0)),
-            // A 25-minute endurance by default. 0 flies forever.
+            // At cruise speed in still air: a 25-minute endurance by default.
+            // 0 flies forever.
             drain_ppm_tick: libm::round(
                 param_f64(params, "battery_drain_pct_s", 100.0 / 1500.0).max(0.0) * 10_000.0 * dt,
             ) as u32,
+            drain_ref_ms: param_f64(params, "cruise_ms", 10.0).max(0.1),
+            // Drain goes as the square of airspeed. A share drawn at zero
+            // airspeed (hovering in still air) is off by default.
+            hover_drain_share: param_f64(params, "hover_drain_pct", 0.0).clamp(0.0, 100.0) / 100.0,
+            max_wind_ms: param_f64(params, "max_wind_ms", 12.0).max(0.0),
+            max_gust_ms: param_f64(params, "max_gust_ms", 15.0).max(0.0),
             reserve_ppm: (param_f64(params, "battery_reserve_pct", 15.0).clamp(0.0, 100.0)
                 * 10_000.0) as u32,
             // No charger by default.
@@ -93,5 +117,16 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
         vehicle_speed_cms: cms(param_f64(params, "vehicle_speed_ms", 8.0)),
         intruder_speed_cms: cms(param_f64(params, "intruder_speed_ms", 12.0)),
         wander_radius_m: param_f64(params, "wander_radius_m", 600.0).max(1.0) as u32,
+        geofence_margin_m: param_f64(params, "geofence_margin_m", 30.0).clamp(2.0, 1_000.0),
+        geofence_vertical_margin_m: param_f64(params, "geofence_vertical_margin_m", 10.0)
+            .clamp(0.0, 500.0),
+        beneath_min_agl_m: param_f64(params, "beneath_min_agl_m", 20.0).clamp(1.0, 1_000.0),
+        roi_revisit_ticks: ticks(param_f64(params, "roi_revisit_min", 30.0).max(0.0) * 60.0),
+        crash_roi_radius_m: param_f64(params, "crash_roi_radius_m", 150.0).clamp(0.0, 5_000.0),
+        survey_agl_m: param_f64(params, "survey_agl_m", 60.0).clamp(5.0, 500.0) as f32,
+        reject_orders_in_geofences: matches!(
+            params.get("reject_orders_in_geofences"),
+            Some(Param::Bool(true))
+        ),
     }
 }

@@ -65,6 +65,18 @@ fn scenario(profile: Profile, walkers: i64) -> ScenarioBlob {
 }
 
 fn harness(profile: Profile, walkers: i64) -> Harness {
+    harness_for(scenario(profile, walkers))
+}
+
+/// A harness running a scenario pack from `scenarios/`.
+fn pack_harness(name: &str) -> Harness {
+    let pack = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scenarios")
+        .join(name);
+    harness_for(sim_engine::read_pack(&pack).unwrap())
+}
+
+fn harness_for(blob: ScenarioBlob) -> Harness {
     let dir = std::env::temp_dir().join(format!(
         "krabshell-api-{}-{}",
         std::process::id(),
@@ -75,7 +87,7 @@ fn harness(profile: Profile, walkers: i64) -> Harness {
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let driver = Driver::spawn(ModelRegistry::with_builtins(), scenario(profile, walkers)).unwrap();
+    let driver = Driver::spawn(ModelRegistry::with_builtins(), blob).unwrap();
     let state = AppState::new(
         driver.handle(),
         ScenarioStore::new(&dir),
@@ -113,6 +125,15 @@ fn post(path: &str, body: Value) -> Request<Body> {
         .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn delete(path: &str) -> Request<Body> {
+    Request::builder()
+        .method("DELETE")
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::empty())
         .unwrap()
 }
 
@@ -813,7 +834,15 @@ async fn logging_in_sets_the_cookie_the_pages_accept() {
 #[tokio::test]
 async fn every_dashboard_screen_renders() {
     let h = harness(Profile::Gold, 30);
-    for path in ["/run", "/scenarios", "/state", "/intents", "/io"] {
+    for path in [
+        "/run",
+        "/scenarios",
+        "/state",
+        "/geofences",
+        "/stations",
+        "/intents",
+        "/io",
+    ] {
         let (status, _, html) = call(&h, page(path)).await;
         assert_eq!(status, StatusCode::OK, "{path} did not render");
         assert!(html.contains("krab"), "{path} is missing the layout");
@@ -936,7 +965,9 @@ async fn dashboard_assets_are_served_from_the_binary() {
         ("/assets/app.css", "krabshell operator console"),
         ("/assets/map.js", "Occupancy map"),
         ("/assets/live.js", "WebSocket"),
+        ("/assets/stations.js", "/api/v1/rois"),
         ("/assets/htmx.min.js", "htmx"),
+        ("/assets/milsymbol-3.0.4.js", "Måns Beckman"),
     ] {
         let request = Request::builder().uri(path).body(Body::empty()).unwrap();
         let (status, _, text) = call(&h, request).await;
@@ -1004,4 +1035,450 @@ async fn the_state_page_offers_basemaps_with_none_as_the_default() {
     assert!(html.contains("id=\"map-basemap\""));
     assert!(html.contains("<option value=\"\">None</option>"));
     assert!(html.contains("tile.openstreetmap.org"));
+}
+
+#[tokio::test]
+async fn both_maps_load_the_symbols_first_and_offer_every_layer() {
+    let h = harness(Profile::Fast, 0);
+    for path in ["/state", "/geofences", "/stations"] {
+        let (status, _, html) = call(&h, page(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let symbols = html.find("/assets/milsymbol-3.0.4.js").expect(path);
+        let map = html.find("/assets/map.js").expect(path);
+        assert!(symbols < map, "{path} must load milsymbol before the map");
+        for layer in [
+            "drones",
+            "deliveries",
+            "people",
+            "fences",
+            "stations",
+            "rois",
+            "grid",
+        ] {
+            assert!(
+                html.contains(&format!("data-layer=\"{layer}\"")),
+                "{path} has no {layer} layer"
+            );
+        }
+    }
+}
+
+// ------------------------------------------------------------ geofences
+
+#[tokio::test]
+async fn a_model_without_geofences_lists_none() {
+    let h = harness(Profile::Fast, 10);
+    let (status, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["fences"], json!([]));
+    assert_eq!(body["margin_m"], 0.0);
+}
+
+#[tokio::test]
+async fn geofences_open_and_close_over_the_api_and_the_page_shows_them() {
+    let h = pack_harness("london-patrol");
+    let (status, page_body, _) = call(&h, page("/geofences")).await;
+    assert_eq!(status, StatusCode::OK);
+    let _ = page_body;
+    let (_, _, html) = call(&h, page("/geofences")).await;
+    assert!(html.contains("Current fences") && html.contains("Previous fences"));
+    assert!(html.contains("/assets/geofences.js"));
+    let (status, _, js) = call(&h, page("/assets/geofences.js")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(js.contains("krabshell:geofences"));
+
+    // Over Regent's Park, clear of every pad. The world is paused, so it
+    // queues and opens on the next step.
+    let circle =
+        json!({ "circle": { "lat": 51.5313, "lon": -0.1527, "radius_m": 150 }, "minutes": 30 });
+    let (status, body, text) = call(&h, post("/api/v1/geofences", circle)).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(body["status"], "queued");
+    let (status, _, _) = call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    let fences = body["fences"].as_array().unwrap();
+    assert_eq!(fences.len(), 1, "{body}");
+    assert_eq!(fences[0]["source"], "dashboard");
+    assert_eq!(fences[0]["shape"], "circle");
+    assert_eq!(fences[0]["breaches"], 0);
+    assert!(fences[0]["closes_tick"].as_u64().is_some());
+    assert_eq!(body["margin_m"], 30.0);
+    let id = fences[0]["id"].as_u64().unwrap();
+
+    // One over HAWK-1's pad is refused, with the reason. Paused, it is only
+    // queued; the refusal comes when the world steps, and the list says so.
+    let pad = json!({ "polygon": [[-0.1285, 51.5035], [-0.1275, 51.5035], [-0.1275, 51.5045], [-0.1285, 51.5045]] });
+    let (status, body, _) = call(&h, post("/api/v1/geofences", pad.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "queued");
+    let queued = body["id"].clone();
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    let refused = body["refused"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == queued)
+        .expect("the refusal is listed");
+    assert!(
+        refused["detail"].as_str().unwrap().contains("pad"),
+        "{refused}"
+    );
+    assert_eq!(body["fences"].as_array().unwrap().len(), 1);
+    // Running, the refusal comes straight back.
+    call(&h, post("/api/v1/run/start", json!({ "target_tps": 50 }))).await;
+    let (status, body, _) = call(&h, post("/api/v1/geofences", pad)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("pad"), "{body}");
+    call(&h, post("/api/v1/run/pause", json!({}))).await;
+    let (status, _, _) = call(&h, post("/api/v1/geofences", json!({ "square": 1 }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Renamed.
+    let rename = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/v1/geofences/{id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Regent's Park" }).to_string()))
+        .unwrap();
+    let (status, _, text) = call(&h, rename).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"][0]["name"], "Regent's Park");
+    let missing = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/geofences/999")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "x" }).to_string()))
+        .unwrap();
+    assert_eq!(call(&h, missing).await.0, StatusCode::NOT_FOUND);
+
+    // Kept open until closed instead of 30 minutes.
+    let (status, _, text) = call(
+        &h,
+        post(
+            &format!("/api/v1/geofences/{id}/extend"),
+            json!({ "minutes": -1 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert!(body["fences"][0]["closes_tick"].is_null(), "{body}");
+    let (status, _, _) = call(
+        &h,
+        post("/api/v1/geofences/999/extend", json!({ "minutes": 5 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _, text) = call(&h, delete(&format!("/api/v1/geofences/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"], json!([]));
+    assert_eq!(body["previous"][0]["id"], id);
+    assert_eq!(body["previous"][0]["closed"], "closed");
+
+    // Reopened as it was, in a minute, until closed: it waits, scheduled,
+    // with a new number, and can be cancelled before it opens.
+    let previous = body["previous"][0].clone();
+    let again = json!({
+        "circle": { "lat": previous["lat_e7"].as_f64().unwrap() * 1e-7, "lon": previous["lon_e7"].as_f64().unwrap() * 1e-7, "radius_m": previous["radius_m"] },
+        "after_minutes": 1, "minutes": -1,
+    });
+    let (status, _, text) = call(&h, post("/api/v1/geofences", again)).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["fences"], json!([]));
+    let waiting = &body["scheduled"][0];
+    assert!(waiting["id"].as_u64().unwrap() > id);
+    assert!(waiting["closes_tick"].is_null());
+    let waiting = waiting["id"].as_u64().unwrap();
+    let (status, _, _) = call(&h, delete(&format!("/api/v1/geofences/{waiting}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    let (_, body, _) = call(&h, get("/api/v1/geofences")).await;
+    assert_eq!(body["scheduled"], json!([]));
+    assert_eq!(body["previous"][0]["closed"], "cancelled");
+
+    let (status, _, _) = call(&h, delete("/api/v1/geofences/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_geofence_altitude_band_is_checked_before_it_is_sent() {
+    let h = pack_harness("london-patrol");
+    let circle = json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": 150 });
+    for (band, why) in [
+        (json!({ "floor_m": -5 }), "a negative floor"),
+        (json!({ "floor_m": "high" }), "a floor that is not a number"),
+        (json!({ "ceiling_m": 0 }), "a ceiling at the surface"),
+        (
+            json!({ "floor_m": 80, "ceiling_m": 50 }),
+            "a ceiling below the floor",
+        ),
+        (
+            json!({ "floor_m": 60, "ceiling_m": 60 }),
+            "a ceiling at the floor",
+        ),
+    ] {
+        let mut body = band;
+        body["circle"] = circle.clone();
+        let (status, problem, _) = call(&h, post("/api/v1/geofences", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+
+    // A raised floor with no ceiling, and a band with both, are queued for
+    // the model; null is the same as leaving a bound out.
+    for band in [
+        json!({ "floor_m": 60, "ceiling_m": null }),
+        json!({ "floor_m": 0, "ceiling_m": 120.5 }),
+        json!({ "floor_m": null }),
+    ] {
+        let mut body = band.clone();
+        body["circle"] = circle.clone();
+        let (status, accepted, text) = call(&h, post("/api/v1/geofences", body)).await;
+        assert_eq!(status, StatusCode::OK, "{band}: {text}");
+        assert_eq!(accepted["status"], "queued", "{band}");
+    }
+}
+
+// ------------------------------------- stations and regions of interest
+
+/// The verb the driver recorded for intent `id`, once it has been handled.
+async fn handled_verb(h: &Harness, id: &Value) -> Option<String> {
+    let (_, run, _) = call(h, get("/api/v1/run")).await;
+    run["recent_intents"]
+        .as_array()?
+        .iter()
+        .find(|r| &r["id"] == id)
+        .and_then(|r| r["verb"].as_str())
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn a_model_without_stations_or_regions_lists_none() {
+    let h = harness(Profile::Fast, 10);
+    let (status, body, _) = call(&h, get("/api/v1/stations")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stations"], json!([]));
+    assert_eq!(body["available"], false);
+    let (status, body, _) = call(&h, get("/api/v1/rois")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rois"], json!([]));
+    assert_eq!(body["available"], false);
+    assert_eq!(body["recent"], json!([]));
+}
+
+#[tokio::test]
+async fn stations_are_checked_and_sent_to_the_model_and_the_page_shows_them() {
+    let h = pack_harness("london-patrol");
+    let (status, _, html) = call(&h, page("/stations")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Launch and recovery stations") && html.contains("Regions of interest"));
+    assert!(html.contains("/assets/stations.js"));
+    assert!(html.contains("href=\"/stations\" class=\"on\""));
+
+    for (body, why) in [
+        (json!({ "lat": 51.5313, "name": "x" }), "no lon"),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "slots": 2 }),
+            "no name",
+        ),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "x" }),
+            "no slots",
+        ),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "  " }),
+            "a blank name",
+        ),
+        (
+            json!({ "lat": 95, "lon": -0.1527, "name": "x" }),
+            "a latitude past the pole",
+        ),
+    ] {
+        let (status, problem, _) = call(&h, post("/api/v1/stations", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+    // Somewhere on Earth but outside this world.
+    let (status, problem, _) = call(
+        &h,
+        post(
+            "/api/v1/stations",
+            json!({ "lat": 54.93, "lon": 23.85, "name": "Kaunas", "slots": 2 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "cell_out_of_bounds");
+
+    // In Regent's Park. The world is paused, so it queues; once the world
+    // steps the driver has handed it to the model as STATION_ADD, whatever
+    // the model makes of it.
+    let (status, accepted, text) = call(
+        &h,
+        post(
+            "/api/v1/stations",
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "Regent's Park", "slots": 3 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(accepted["status"], "queued");
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    assert_eq!(
+        handled_verb(&h, &accepted["id"]).await.as_deref(),
+        Some("Custom(120)")
+    );
+    // And the model has it, with its slots.
+    let (_, listed, _) = call(&h, get("/api/v1/stations")).await;
+    assert_eq!(listed["stations"][0]["name"], "Regent's Park");
+    assert_eq!(listed["stations"][0]["slots"], 3);
+    assert_eq!(listed["stations"][0]["occupied"], 0);
+
+    // Only a station the model lists can be removed.
+    let (status, problem, _) = call(&h, delete("/api/v1/stations/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "not_found");
+}
+
+#[tokio::test]
+async fn regions_of_interest_are_checked_and_sent_to_the_model() {
+    let h = pack_harness("london-patrol");
+    let park = |radius: Value| json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": radius, "name": "Regent's Park" });
+    for (body, why) in [
+        (park(json!(9)), "too small"),
+        (park(json!(5001)), "too big"),
+        (park(json!("wide")), "not a number"),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "name": "x" }),
+            "no radius",
+        ),
+        (
+            json!({ "lat": 51.5313, "lon": -0.1527, "radius_m": 100 }),
+            "no name",
+        ),
+    ] {
+        let (status, problem, _) = call(&h, post("/api/v1/rois", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {problem}");
+        assert_eq!(problem["code"], "bad_request", "{why}");
+    }
+
+    // Both ends of the range are allowed.
+    let mut ids = Vec::new();
+    for radius in [10, 5000] {
+        let (status, accepted, text) = call(&h, post("/api/v1/rois", park(json!(radius)))).await;
+        assert_eq!(status, StatusCode::OK, "{radius} m: {text}");
+        assert_eq!(accepted["status"], "queued");
+        ids.push(accepted["id"].clone());
+    }
+    call(&h, post("/api/v1/run/step", json!({ "n": 1 }))).await;
+    for id in &ids {
+        assert_eq!(handled_verb(&h, id).await.as_deref(), Some("Custom(130)"));
+    }
+
+    let (status, problem, _) = call(&h, delete("/api/v1/rois/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "not_found");
+    let (status, _, _) = call(&h, get("/api/v1/rois")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn another_site_cannot_drive_the_dashboard_with_its_cookie() {
+    let h = harness(Profile::Fast, 10);
+    // A form on another site posting to the dashboard: the browser adds the
+    // cookie and its own Origin.
+    let mut forged = form("/actions/reset", "");
+    forged
+        .headers_mut()
+        .insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+    forged
+        .headers_mut()
+        .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+    let (status, body, _) = call(&h, forged).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "forbidden");
+
+    // The dashboard's own page posting the same form is fine.
+    let mut own = form("/actions/pause", "");
+    own.headers_mut()
+        .insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+    own.headers_mut()
+        .insert(header::ORIGIN, "http://127.0.0.1:8080".parse().unwrap());
+    let (status, _, _) = call(&h, own).await;
+    assert!(status.is_success(), "{status}");
+}
+
+#[tokio::test]
+async fn a_reset_after_a_restore_starts_the_scenario_over_with_its_drones() {
+    let h = pack_harness("london-patrol");
+    let drones = |h: &Harness| {
+        let h = h.router.clone();
+        async move {
+            let response = h
+                .oneshot(get("/api/v1/state/entities?kind=drone"))
+                .await
+                .unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<Value>(&bytes)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    let seeded = drones(&h).await;
+    assert!(seeded > 0);
+
+    call(&h, post("/api/v1/run/step", json!({"n": 5}))).await;
+    let response = h
+        .router
+        .clone()
+        .oneshot(get("/api/v1/state/download"))
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let upload = Request::builder()
+        .method("POST")
+        .uri("/api/v1/state/upload")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::from(bytes.to_vec()))
+        .unwrap();
+    let (status, _, text) = call(&h, upload).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    let (status, _, text) = call(&h, post("/api/v1/run/reset", json!({}))).await;
+    assert!(status.is_success(), "{text}");
+    assert_eq!(call(&h, get("/api/v1/run")).await.1["tick"], 0);
+    assert_eq!(drones(&h).await, seeded, "the reset world has its drones");
+}
+
+#[tokio::test]
+async fn a_checkpoint_over_two_mebibytes_reaches_the_handler() {
+    // Axum's own 2 MiB extractor limit must not undercut the server's 64 MiB.
+    let h = harness(Profile::Fast, 5);
+    let big = vec![b' '; 3 * 1024 * 1024];
+    let upload = Request::builder()
+        .method("POST")
+        .uri("/api/v1/state/upload")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::from(big))
+        .unwrap();
+    let (status, body, text) = call(&h, upload).await;
+    assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE, "{text}");
+    // Whitespace is not a checkpoint: the handler says so, as a problem.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(body["code"].is_string(), "{text}");
 }

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Conflicts &middot; krabshell{% endblock %}
+{% block content %}
+<h1>Conflicts</h1>
+<p class="lede">
+  Where the drones and intruders in the air could meet over the next minute.
+  Each is predicted as a cloud of possible paths under its performance model
+  and counted into A5 cells and altitude layers; a cell where two or more
+  aircraft's probabilities add up to the threshold is a conflict, and the
+  advisories below would resolve it.
+</p>
+
+{% include "fragments/control.html" %}
+
+<section class="panel">
+  <div class="map-head">
+    <h2>Conflict heatmap</h2>
+    <div class="map-controls">
+      <form class="inline" hx-post="/actions/conflicts/resolution" hx-trigger="change"
+            hx-target="#conflict-tables" hx-swap="outerHTML">
+        <label title="A5 resolution of the cells conflicts are counted in. Finer cells see aircraft apart that coarser ones lump together.">Cells
+          <select id="conflict-resolution" name="resolution">
+            {% for r in resolutions %}
+            <option value="{{ r.value }}" {% if r.selected %}selected{% endif %}>{{ r.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      <label>Shade by
+        <select id="conflict-metric">
+          <option value="summed" selected>Aircraft expected</option>
+          <option value="collision">P(two or more)</option>
+        </select>
+      </label>
+      <label>Basemap
+        <select id="map-basemap">
+          <option value="">None</option>
+          {% for b in basemaps %}
+          <option value="{{ b.id }}" data-url="{{ b.url }}"
+                  data-max-zoom="{{ b.max_zoom }}" data-attribution="{{ b.attribution }}"
+                  data-attribution-url="{{ b.attribution_url }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label><input id="map-follow" type="checkbox" checked> Live</label>
+      <button id="map-fit" type="button">Fit</button>
+    </div>
+  </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input id="conflict-layer" type="checkbox" checked> Conflict heatmap</label>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label title="Hubs and landmarks: the depots couriers fly from and the named places in the pack"><input type="checkbox" data-layer="pois" checked> Hubs and landmarks</label>
+    <label title="Every address in the pack's address book, coloured by the hub that serves it"><input type="checkbox" data-layer="addresses"> Delivery addresses</label>
+    <label title="The addresses of open orders (a ring while waiting, filled once a drone is on its way) and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Orders and drop-offs</label>
+    <label title="Where people and vehicles on the ground really are"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label title="What the drones' cameras have seen lately: people, vehicles and intruders, fading as they age"><input type="checkbox" data-layer="detections" checked> Detections</label>
+    <label><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed, or the wind changes; in wind it is what holds flying into the worst of it"><input type="checkbox" data-layer="range" checked> Delivery range</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid"> A5 occupancy grid</label>
+  </fieldset>
+  <p class="dim small">Every cell any aircraft could be in over the next minute is shaded at its highest, at any height: one aircraft alone gives up to 1, overlaps more. Cells in conflict are outlined in red and the ten worst numbered. Click a cell, or a row of the table, to pick it out.</p>
+
+  <div class="map-wrap">
+    <canvas id="map" width="1200" height="560" data-layers-off="grid" aria-label="Collision probability by A5 cell"></canvas>
+    <div id="map-legend" class="legend" hidden></div>
+    <div id="conflict-legend" class="legend" aria-label="Collision probability scale"></div>
+    <div id="map-attribution" class="attribution" hidden></div>
+    <noscript><p class="dim">The map needs JavaScript; the tables below do not.</p></noscript>
+  </div>
+  <p class="dim small" id="map-status">Loading the map&hellip;</p>
+</section>
+
+{% include "fragments/conflicts.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
+<script src="/assets/map.js" defer></script>
+<script src="/assets/conflicts.js" defer></script>
+{% endblock %}

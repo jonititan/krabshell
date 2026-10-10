@@ -27,11 +27,24 @@
           {% endfor %}
         </select>
       </label>
-      <label><input id="map-entities" type="checkbox" checked> Drones</label>
       <label><input id="map-follow" type="checkbox" checked> Live</label>
       <button id="map-fit" type="button">Fit</button>
     </div>
   </div>
+  <fieldset class="layers">
+    <legend>Layers</legend>
+    <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label title="Hubs and landmarks: the depots couriers fly from and the named places in the pack"><input type="checkbox" data-layer="pois" checked> Hubs and landmarks</label>
+    <label title="Every address in the pack's address book, coloured by the hub that serves it"><input type="checkbox" data-layer="addresses"> Delivery addresses</label>
+    <label title="The addresses of open orders (a ring while waiting, filled once a drone is on its way) and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Orders and drop-offs</label>
+    <label title="Where people and vehicles on the ground really are"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label title="What the drones' cameras have seen lately: people, vehicles and intruders, fading as they age"><input type="checkbox" data-layer="detections" checked> Detections</label>
+    <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
+    <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed, or the wind changes; in wind it is what holds flying into the worst of it"><input type="checkbox" data-layer="range" checked> Delivery range</label>
+    <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
+  </fieldset>
   <div class="map-wrap">
     <canvas id="map" width="1200" height="560" aria-label="Occupancy by A5 cell"></canvas>
     <div id="map-legend" class="legend"></div>
@@ -39,29 +52,57 @@
     <noscript><p class="dim">The map needs JavaScript. Cell inspection below works without it.</p></noscript>
   </div>
   <ul class="map-key" aria-label="Map key">
+    <li><span class="swatch range" aria-hidden="true"></span>Delivery range: where couriers can deliver and get back, by way of stations</li>
     <li>
-      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-drone" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
-      Drone, pointing along its heading; named while moving
+      <canvas class="sym moving" data-sidc="SFAPMHQ--------" data-heading="45" aria-hidden="true"></canvas>
+      Friendly drone (air), with its direction of movement; named while moving, with what it is doing
     </li>
     <li>
-      <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-intruder" d="M0 -9 L5.4 6 L0 2 L-5.4 6 Z"/></svg>
-      Intruder drone
+      <canvas class="sym" data-sidc="SUAPMHQ--------" aria-hidden="true"></canvas>
+      Unknown air (intruder)
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="10011100001103000000" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="10011500001601000000" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="10011500001604000000" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="10011500001602000000" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="10011500001603000000" aria-hidden="true"></canvas>
+      <canvas class="sym" data-sidc="10011500001606000000" aria-hidden="true"></canvas>
+      Sightings, unknown ground: civilian individual; civilian car, van, pickup, bus, lorry; fades over 30&nbsp;s
+    </li>
+    <li>
+      <canvas class="sym" data-sidc="SFGPIBA---H----" aria-hidden="true"></canvas>
+      Launch and recovery station
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true"><ellipse class="k-nai" cx="20" cy="10" rx="18" ry="8.5"/><text class="k-nai-text" x="20" y="12.5">NAI</text></svg>
+      Region of interest (NAI); heavier and blue while drones are tasked to survey it, red where a drone crashed
+      (manage them on the <a href="/stations">Stations &amp; regions</a> page)
     </li>
     <li>
       <svg viewBox="-10 -10 20 20" aria-hidden="true"><path class="k-poi" d="M0 -5 L4 0 L0 5 L-4 0 Z"/></svg>
       Point of interest (hub, landmark); named when zoomed in
     </li>
-    <li>
-      <svg viewBox="0 0 40 20" aria-hidden="true">
-        <circle class="k-person" cx="7" cy="10" r="4"/>
-        <circle class="k-vehicle" cx="20" cy="10" r="4"/>
-        <circle class="k-intruder" cx="33" cy="10" r="4"/>
-      </svg>
-      Camera sighting of a person, vehicle or intruder; fades over 30&nbsp;s
-    </li>
+    <li><span class="swatch fence" aria-hidden="true"></span>Geofence (manage them on the <a href="/geofences">Geofences</a> page)</li>
+    <li><span class="swatch fence raised" aria-hidden="true"></span>Geofence with a raised floor: drones may pass beneath</li>
     <li>
       <span class="ramp" aria-hidden="true"></span>
       Cell shading: agents per cell, mostly people and vehicles (scale bottom right)
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true">
+        <circle class="k-order" cx="7" cy="10" r="4"/>
+        <circle class="k-order flying" cx="20" cy="10" r="4"/>
+        <path class="k-drop" d="M29 10 L32 13 L37 7"/>
+      </svg>
+      Order waiting, order on its way, parcel just delivered
+    </li>
+    <li>
+      <svg viewBox="0 0 40 20" aria-hidden="true">
+        <circle class="k-person" cx="12" cy="10" r="2"/>
+        <rect class="k-vehicle" x="24" y="8" width="4" height="4"/>
+      </svg>
+      Person, vehicle
     </li>
   </ul>
   <p class="dim small" id="map-status">Loading the map&hellip;</p>
@@ -85,6 +126,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/assets/milsymbol-3.0.4.js" defer></script>
 <script src="/assets/map.js" defer></script>
 <script src="/assets/live.js" defer></script>
 {% endblock %}

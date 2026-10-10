@@ -7,12 +7,15 @@ members = [
     "crates/sim-mavlink",
     "crates/sim-cot",
     "crates/sim-axum",
+    "crates/sim-weather",
+    "crates/sim-conflict",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+# openmeteo-rs (sim-weather) needs 1.95.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/jonititan/krabshell"
 
@@ -22,6 +25,8 @@ sim-drones = { path = "crates/sim-drones" }
 sim-engine = { path = "crates/sim-engine" }
 sim-mavlink = { path = "crates/sim-mavlink" }
 sim-cot = { path = "crates/sim-cot" }
+sim-weather = { path = "crates/sim-weather" }
+sim-conflict = { path = "crates/sim-conflict" }
 
 # A5 cell maths. Pinned to the same major as `bevy_a5` 0.1 so that cell ids
 # produced here are byte-identical to the ones krABMaga's SparseA5Grid stores.
@@ -33,6 +38,9 @@ libm = "0.2.16"
 # without it the generated messages lack `mission_type`, and QGroundControl
 # drops mission replies that do not echo it.
 mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions", "serde"] }
+
+# Behaviour trees for the drones (sim-drones/behaviour), read from JSON.
+bonsai-bt = { version = "0.14", features = ["serde"] }
 
 anyhow = "1"
 arc-swap = "1.9"

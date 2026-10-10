@@ -87,6 +87,24 @@ impl GeoCell {
             .map_err(CellError::A5)
     }
 
+    /// How many cells [`children`](Self::children) at `resolution` would
+    /// return, without making them: a resolution-0 cell has five children,
+    /// every other cell four. Saturates rather than overflowing, so a caller
+    /// can check a budget before asking for millions.
+    pub fn children_count(self, resolution: i32) -> u64 {
+        let from = self.resolution();
+        if resolution <= from {
+            return 1;
+        }
+        let mut depth = (resolution - from) as u32;
+        let mut count: u64 = 1;
+        if from == 0 {
+            count = 5;
+            depth -= 1;
+        }
+        count.saturating_mul(4u64.saturating_pow(depth))
+    }
+
     /// Edge-adjacent cells, excluding `self`.
     pub fn neighbors(self) -> Result<Vec<Self>, CellError> {
         let mut cells = self.grid_disk(1)?;
@@ -169,17 +187,20 @@ impl GeoCell {
     }
 }
 
-/// Cells at `resolution` whose boundary overlaps the bounding box.
+/// Cells at `resolution` that the bounding box reaches into.
 ///
 /// A convenience only: storage and subscriptions are cell sets (spec §7.2).
-/// The walk descends the A5 hierarchy from resolution 0, so cost scales with
-/// the *answer*, not with the resolution — but a wide box at a fine resolution
-/// is still unbounded, hence `limit`.
+/// The box is sampled on a lattice a third of a cell's edge apart, and every
+/// cell a sample falls in is returned. Sampling rather than walking down the
+/// hierarchy, because A5's hierarchy is not spatially nested at coarse
+/// levels: a cell can lie outside its own ancestor's boundary, so a walk that
+/// prunes ancestors by where they are loses real cells.
 ///
-/// Two documented approximations: the overlap test uses each cell's
-/// axis-aligned vertex bounds, so a few cells just outside the box may be
-/// returned; and boxes crossing the antimeridian are rejected rather than
-/// split.
+/// Two documented approximations: a cell the box only clips by a sliver
+/// thinner than the lattice may be missed; and boxes crossing the
+/// antimeridian are rejected rather than split. A box needing more than
+/// `limit` cells is refused, before any are worked out if its area alone
+/// says so.
 pub fn cells_in_bbox(
     min_lon: f64,
     min_lat: f64,
@@ -192,56 +213,36 @@ pub fn cells_in_bbox(
     if !(min_lon < max_lon && min_lat < max_lat) {
         return Err(CellError::BadBbox);
     }
+    const METRES_PER_DEGREE: f64 = 111_320.0;
+    let mid = ((min_lat + max_lat) / 2.0).to_radians().cos().max(0.01);
+    let width_m = (max_lon - min_lon) * METRES_PER_DEGREE * mid;
+    let height_m = (max_lat - min_lat) * METRES_PER_DEGREE;
+    let edge = nominal_cell_edge_meters(resolution);
+    if width_m * height_m / (edge * edge) > limit as f64 * 2.0 {
+        return Err(CellError::TooManyCells { limit });
+    }
 
-    let mut out = Vec::new();
-    let mut frontier: Vec<GeoCell> = a5::get_res0_cells().map(wrap_all).map_err(CellError::A5)?;
-
-    while let Some(cell) = frontier.pop() {
-        if !cell_overlaps(cell, min_lon, min_lat, max_lon, max_lat)? {
-            continue;
-        }
-        if cell.resolution() >= resolution {
-            out.push(cell);
+    let step = edge / 3.0;
+    let rows = (height_m / step).ceil().max(1.0) as usize;
+    let cols = (width_m / step).ceil().max(1.0) as usize;
+    let mut out = std::collections::BTreeSet::new();
+    for r in 0..=rows {
+        let lat = min_lat + (max_lat - min_lat) * r as f64 / rows as f64;
+        for c in 0..=cols {
+            let lon = min_lon + (max_lon - min_lon) * c as f64 / cols as f64;
+            out.insert(GeoCell::from_lonlat(lon, lat, resolution)?);
             if out.len() > limit {
                 return Err(CellError::TooManyCells { limit });
             }
-            continue;
         }
-        frontier.extend(cell.children(None)?);
     }
-
-    out.sort_unstable();
-    out.dedup();
-    Ok(out)
+    Ok(out.into_iter().collect())
 }
 
 /// Nominal edge length of a cell at `resolution`, in metres. Used by the
 /// dashboard to pick a display resolution for the current viewport.
 pub fn nominal_cell_edge_meters(resolution: i32) -> f64 {
     a5::cell_area(resolution).sqrt()
-}
-
-fn cell_overlaps(
-    cell: GeoCell,
-    min_lon: f64,
-    min_lat: f64,
-    max_lon: f64,
-    max_lat: f64,
-) -> Result<bool, CellError> {
-    let ring = cell.boundary()?;
-    if ring.is_empty() {
-        // WORLD_CELL is unbounded and reports an empty ring.
-        return Ok(true);
-    }
-    let (mut lo_lon, mut hi_lon) = (f64::MAX, f64::MIN);
-    let (mut lo_lat, mut hi_lat) = (f64::MAX, f64::MIN);
-    for (lon, lat) in ring {
-        lo_lon = lo_lon.min(lon);
-        hi_lon = hi_lon.max(lon);
-        lo_lat = lo_lat.min(lat);
-        hi_lat = hi_lat.max(lat);
-    }
-    Ok(lo_lon <= max_lon && hi_lon >= min_lon && lo_lat <= max_lat && hi_lat >= min_lat)
 }
 
 fn check_resolution(resolution: i32) -> Result<(), CellError> {
@@ -309,6 +310,19 @@ impl<'de> Deserialize<'de> for GeoCell {
 mod tests {
     use super::*;
 
+    #[test]
+    fn children_count_matches_the_children() {
+        let fine = GeoCell::from_lonlat(-0.1276, 51.5072, 6).unwrap();
+        for from in 0..=3 {
+            let cell = fine.parent(Some(from)).unwrap();
+            for to in from..=6 {
+                let made = cell.children(Some(to)).unwrap().len() as u64;
+                assert_eq!(cell.children_count(to), made, "{from} -> {to}");
+            }
+        }
+        assert_eq!(fine.parent(Some(0)).unwrap().children_count(60), u64::MAX);
+    }
+
     const LONDON: (f64, f64) = (-0.1276, 51.5072);
 
     #[test]
@@ -362,6 +376,22 @@ mod tests {
             disk.len() >= centre.grid_disk_compact(3).unwrap().len(),
             "expanding a compacted cover can only add cells"
         );
+    }
+
+    #[test]
+    fn a_box_whose_cells_lie_outside_their_coarse_ancestors_still_finds_them() {
+        // Kaunas's resolution-5 ancestor does not cover Kaunas: a walk down
+        // the hierarchy that pruned by position once found nothing here.
+        let (w, s, e, n) = (23.85, 54.88, 23.95, 54.94);
+        for r in [9, 11, 12, 13] {
+            let cells = cells_in_bbox(w, s, e, n, r, 100_000).unwrap();
+            let centre = GeoCell::from_lonlat(23.9, 54.91, 15).unwrap();
+            assert!(!cells.is_empty(), "nothing at resolution {r}");
+            assert!(
+                cells.contains(&centre.parent(Some(r)).unwrap()),
+                "resolution {r} misses the centre's cell"
+            );
+        }
     }
 
     #[test]

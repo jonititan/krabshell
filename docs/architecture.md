@@ -10,10 +10,12 @@ did not know.
 |---|---|---|
 | `sim-core` | `GeoCell` and A5 queries, intents, snapshots, checkpoints, config, scenario manifests and reading pack directories, WebSocket messages, problem codes, the deterministic RNG | depend on Bevy, Axum, Tokio or krABMaga |
 | `sim-drones` | the drones model as krABMaga agents and a krABMaga `State`; flight, missions, sensor, dispatch; the standalone `krab-drones` runner | depend on the driver, Axum or Tokio |
-| `sim-engine` | the driver thread, the `Model` trait and the `drones` adapter, the built-in grid, the walker models, the scenario store, checkpoint encoding, `simctl` | await, open sockets, or do file I/O inside a tick |
+| `sim-engine` | the driver thread, the `Model` trait and the `drones` adapter, the built-in grid, the walker models, the scenario store, checkpoint encoding, the shared edge checks, the run log, `simctl` | await, open sockets, or do file I/O inside a tick |
 | `sim-mavlink` | the MAVLink gateway: one UDP socket presenting every drone as a vehicle, the mission handshake, command acks | step the schedule or touch model state; block on the driver |
 | `sim-cot` | the Cursor-on-Target emitter: drone tracks, sightings and POIs as XML over UDP | step the schedule or touch model state |
-| `sim-axum` | REST, WebSocket, auth, the dashboard, the `krabshell` binary | step the schedule or touch model state directly |
+| `sim-weather` | wind per A5 cell from Open-Meteo, recorded or live, and its on-disk cache | know about the driver or the model |
+| `sim-conflict` | conflict detection and resolution advisories: trajectory prediction under an energy model, summed probabilities per cell and altitude layer, trial manoeuvres | know about the driver, the model or the wire |
+| `sim-axum` | REST, WebSocket, auth, the OpenAPI document, the dashboard and guides, the weather, conflict and run-log services, the `krabshell` binary | step the schedule or touch model state directly |
 | `sim-dashboard` | Askama templates and static assets, compiled into `sim-axum` | contain a build step |
 
 ## The driver
@@ -60,7 +62,10 @@ Every way into the driver shares `sim_engine::edge`: the cell check (right
 resolution, inside the root) and the per-actor rate limiter. REST, WebSocket,
 the dashboard form and the MAVLink gateway all use it, so they cannot drift
 apart. (Before this they were three copies, and the dashboard's had lost the
-root check.)
+root check.) The geofence, station and region routes do not reach into the
+model either: they build the same `Custom` intents a client could send, as the
+actor `operator`, and submit them through the same path. How a client uses all
+this is in [`api-guide.md`](api-guide.md).
 
 The drone gateways follow the same rules as HTTP (operator guide:
 [`connecting.md`](connecting.md)). They read `DriverHandle::view()`
@@ -122,7 +127,30 @@ that applies it instead of walking off it.
     which drops them from the grid at commit, and leave the schedule.
   - **Missions.** They execute MAVLink commands (see `sim-drones/src/mission.rs`) and
     arrive as `Custom` intents 100–103 carrying `MISSION_ITEM_INT` /
-    `COMMAND_LONG` fields. An intent addressed to a drone's old cell is still
+    `COMMAND_LONG` fields. Intents 110–114 open, close, replace (a ground
+    station's whole plan), extend and rename geofences
+    (`sim-drones/src/airspace.rs`), which the dispatcher applies at the start
+    of a step; a pack's own fences (`world/geofences.json`) open with the
+    run. The operator
+    (`sim-drones/src/operator.rs`) then reroutes the drones the simulation
+    flies by queuing the same mission uploads and commands a ground station's
+    intents would. Intents 120/121 and 130/131 add and remove stations and
+    regions of interest, applied the same way. Intent 140 replaces the wind
+    field.
+  - **Wind.** The world holds the wind field its drones fly in, one series
+    per weather cell, by height and hour. It arrives in the pack's fields
+    when the scenario loads, and later as intent 140, and is checkpointed with
+    the rest of the world. Because a change of wind is an intent, it is in the
+    gold intent log, and a replay flies the same air.
+  - **Behaviour trees.** A drone's step is one tick of a bonsai-bt tree
+    (`sim-drones/src/behaviour.rs`, `behaviour/drone.json`), shared by every
+    drone and ticked afresh from its root each step, so it holds no state a
+    checkpoint would have to keep. The operator's rerouting is the tree's
+    `AvoidGeofences` act, run as each drone steps and planned from its own
+    committed state; its messages join the mail after the intents', as
+    they did when the dispatcher ran it for every drone first. Porting the
+    old step to the default tree left every gold hash unchanged. The fences reach gateways through `Model::overlays`, a
+    small JSON value each published view carries beside the cells. An intent addressed to a drone's old cell is still
     accepted: the drone moves between publish and apply, and only the world
     bounds are checked.
   - **Gold determinism.** Poses are integers in MAVLink's `_INT` units, trig
@@ -132,6 +160,39 @@ that applies it instead of walking off it.
     fixed ~4.5 m square, not after "distance since the last lookup". That
     keeps it a pure function of state, so a restored checkpoint follows the
     same path as an uninterrupted run (a test checks this).
+
+## Services beside the driver
+
+Three tasks in `sim-axum` work from the published view, as the gateways do.
+None of them steps the schedule or holds up a tick.
+
+- **Weather** (`sim-axum/src/weather.rs`, with `sim-weather` doing the
+  fetching). Before a scenario loads, the service fetches the wind its
+  `params.toml` asks for (or reads it from the cache, or takes the pack's own
+  `world/weather.json`) and puts it in the blob's fields, where the model reads
+  it. A `recorded` load whose weather cannot be fetched is refused
+  (`weather_unavailable`): the point of recorded weather is a reproducible run,
+  and quietly flying it in still air would not be one. A `live` load goes ahead
+  in still air and the refresher keeps trying; while a live run goes on, it
+  fetches again on the pack's interval and hands the new field to the world as
+  a `WEATHER_SET` intent. The service keeps a copy of what it last gave the
+  world, so the weather API can answer about the whole field without asking
+  the tick thread; the world publishes its field's fingerprint and the status
+  says whether the two agree. A restored checkpoint's field replaces the copy.
+- **Conflicts** (`sim-axum/src/conflicts.rs`, with `sim-conflict` doing the
+  work). The drones and intruders in the air are read out of the published
+  view and assessed with the run's wind: where two or more could meet in the
+  next minute, and which manoeuvre would clear each one. An assessment is made
+  at most once per published tick, and in the background only while someone
+  has asked in the last 30 seconds, so a run nobody watches pays nothing for
+  it. The advisories are advice: nothing feeds them back into the
+  simulation. The cell resolution is the operator's choice, else the pack's
+  `conflict_resolution`, else the world's.
+- **Run logs** (`sim-axum/src/runlog.rs`). A drones pack that sets
+  `heatmap_resolution` or `order_rate_per_address_day` has its run sampled
+  from the published view into a folder of files under `--log-dir`, rewritten
+  every `--log-every` seconds and once more on shutdown. A reset, a restore or
+  another scenario starts a new folder.
 
 ## Things the spec did not know
 
@@ -190,7 +251,13 @@ that applies it instead of walking off it.
 - WebSocket deltas are computed per connection, off the tick thread, by
   diffing the connection's area of interest against the last frame it sent.
 - `/health` is deliberately unauthenticated so a process monitor needs no
-  secret. Everything else needs the token.
+  secret, and so are `/openapi.json` and the guides under `/docs`, which
+  describe the API rather than the world. Everything else needs the token.
+- The OpenAPI document (`crates/sim-axum/openapi.json`) is written by hand,
+  not generated. `tests/openapi.rs` keeps it honest: it fails if a route is
+  missing from it or a response has a field it does not describe.
+- The gold `hash` in snapshot headers is a `u64` sent as a JSON number, unlike
+  cell ids. A browser reading it loses the low bits; compare it as text.
 - Intents are rate-limited per claimed actor id at the edge (token bucket,
   `run.intent_rate_per_actor`, bursts of twice the rate), before they can take
   a slot in the driver's queue. With one shared token the actor id is
@@ -202,7 +269,6 @@ that applies it instead of walking off it.
 - Intra-step parallelism and parent-cell partitioning (Phases 6+). `run.parallel`
   and `run.threads` are accepted and shown but nothing reads them yet.
 - MAVLink is unsigned and CoT is plain UDP; neither is authenticated.
-- The dashboard map shows occupancy, not individual drones or sightings.
 - Tested against pymavlink and a CoT listener, not yet against QGroundControl
   or ATAK themselves.
 - CORS allowlist (§13): the dashboard is same-origin, so none is configured.

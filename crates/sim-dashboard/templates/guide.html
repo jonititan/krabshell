@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} &middot; krabshell docs{% endblock %}
+
+{% block content %}
+<div class="guide-layout">
+  <nav class="guide-nav" aria-label="Documentation">
+    {% for group in docs.groups %}
+    <h2>{{ group.name }}</h2>
+    <ul>
+      {% for (slug, title) in group.pages %}
+      <li><a href="/docs/{{ slug }}"{% if *slug == page.slug %} class="on" aria-current="page"{% endif %}>{{ title }}</a></li>
+      {% endfor %}
+      {% if group.name == "Integration" %}
+      <li><a href="/docs/api">API reference</a></li>
+      {% endif %}
+    </ul>
+    {% endfor %}
+  </nav>
+
+  <article class="panel guide prose">
+    {{ page.html|safe }}
+  </article>
+
+  {% if page.toc.len() > 1 %}
+  <nav class="guide-toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      {% for h in page.toc %}
+      <li class="l{{ h.level }}"><a href="#{{ h.id }}">{{ h.text }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  {% endif %}
+</div>
+{% endblock %}

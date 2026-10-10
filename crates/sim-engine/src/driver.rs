@@ -152,6 +152,8 @@ pub struct Published {
     pub recent_intents: Vec<IntentRecord>,
     /// The most recent model reports, oldest first, by ascending `seq`.
     pub reports: Vec<Report>,
+    /// What the model publishes beside its agents; see [`Model::overlays`].
+    pub overlays: serde_json::Value,
 }
 
 impl Published {
@@ -178,6 +180,7 @@ impl Published {
             published_at_ms: now_ms(),
             recent_intents: Vec::new(),
             reports: Vec::new(),
+            overlays: serde_json::Value::Null,
         }
     }
 
@@ -590,7 +593,7 @@ impl DriverLoop {
         self.last_good_tick = 0;
         self.fault = None;
         self.steps_remaining = 0;
-        self.pending.clear();
+        self.discard_pending("the world was rebuilt: a reset, a scenario load or a config change");
         self.intent_log.clear();
         self.intent_log_overflowed = false;
         // The old world's events mean nothing in the new one. `report_seq`
@@ -629,10 +632,15 @@ impl DriverLoop {
         self.mode = RunMode::Loading;
         self.publish();
 
+        // The checkpoint's cells are the agents, so the world is built without
+        // the pack's seed. The stored scenario keeps its seed, though: a reset
+        // or a rebuild later starts the scenario over from it, under the
+        // restored config.
         let mut blob = self.blob.clone();
         blob.config = checkpoint.config.clone();
-        blob.agents.clear();
-        let mut model = self.registry.build(&blob)?;
+        let mut empty = blob.clone();
+        empty.agents.clear();
+        let mut model = self.registry.build(&empty)?;
         model.load_cells(checkpoint.cells.clone())?;
         model.restore_fields(&checkpoint.fields)?;
         model.set_rng_state(checkpoint.rng);
@@ -644,12 +652,29 @@ impl DriverLoop {
         self.tick = checkpoint.meta.tick;
         self.last_good_tick = self.tick;
         self.fault = None;
-        self.pending.clear();
+        self.discard_pending("a checkpoint was restored");
         self.intent_log = checkpoint.intent_log.unwrap_or_default();
         self.reports.clear();
         self.mode = RunMode::Paused;
         self.publish();
         Ok(())
+    }
+
+    /// The world is being replaced: answer every queued intent, and every one
+    /// still on the channel, as discarded. Left alone they would vanish
+    /// unanswered (a ground station would think its mission was taken) or,
+    /// still on the channel, land in a world they were not meant for.
+    fn discard_pending(&mut self, why: &str) {
+        let reason = RejectReason::Discarded { why: why.to_owned() };
+        let mut gone: Vec<Submission> = self.pending.drain(..).collect();
+        while let Ok(submission) = self.intents.try_recv() {
+            gone.push(submission);
+        }
+        for submission in gone {
+            self.note_intent(&submission.intent, Err(&reason));
+            submission.resolve(IntentAck::Rejected(reason.clone()));
+        }
+        self.metrics.intent_queue_depth = 0;
     }
 
     /// Move submissions off the channel and into the pending queue, applying
@@ -917,6 +942,7 @@ impl DriverLoop {
             published_at_ms: now_ms(),
             recent_intents: self.recent.iter().cloned().collect(),
             reports: self.reports.iter().cloned().collect(),
+            overlays: self.model.overlays(),
         };
         (view, cells, limit)
     }

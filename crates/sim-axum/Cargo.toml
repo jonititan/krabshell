@@ -16,7 +16,10 @@ sim-core.workspace = true
 sim-engine.workspace = true
 sim-mavlink.workspace = true
 sim-cot.workspace = true
+sim-weather.workspace = true
+sim-conflict.workspace = true
 anyhow.workspace = true
+arc-swap.workspace = true
 askama = "0.16"
 axum.workspace = true
 clap.workspace = true
@@ -25,12 +28,14 @@ futures-util.workspace = true
 serde_urlencoded = "0.7"
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

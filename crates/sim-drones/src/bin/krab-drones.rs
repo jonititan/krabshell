@@ -62,6 +62,15 @@ fn main() -> anyhow::Result<()> {
         "running '{}' for {} steps × {} on krABMaga",
         blob.manifest.id, cli.steps, cli.reps
     );
+    println!(
+        "brain:         {} nodes ({})",
+        world.brain().size(),
+        if blob.fields.get("behaviour").is_some() {
+            "the pack's world/behaviour.json"
+        } else {
+            "the default behaviour tree"
+        }
+    );
     if cli.tui {
         #[cfg(not(feature = "parallel"))]
         {
@@ -99,6 +108,30 @@ fn main() -> anyhow::Result<()> {
             dispatch.placed,
             dispatch.delivered,
             dispatch.queued()
+        );
+    }
+    if !world.stations().is_empty() {
+        let slots: u32 = world.stations().list.iter().map(|s| s.slots).sum();
+        println!(
+            "stations:      {} ({slots} launch and recovery slots)",
+            world.stations().list.len()
+        );
+    }
+    let range = world.delivery_range();
+    for hub in range["hubs"].as_array().into_iter().flatten() {
+        let km = |k: &str| hub[k].as_f64().map(|m| format!("{:.1} km", m / 1000.0));
+        println!(
+            "range:         {} up to {} ({} on one charge)",
+            hub["depot"].as_str().unwrap_or("?"),
+            km("reach_m").unwrap_or_else(|| "anywhere".into()),
+            km("direct_m").unwrap_or_else(|| "anywhere".into()),
+        );
+    }
+    if !world.regions().is_empty() {
+        let surveys: u32 = world.regions().list.iter().map(|r| r.surveys).sum();
+        println!(
+            "regions:       {} of interest, {surveys} surveys",
+            world.regions().list.len()
         );
     }
     println!(

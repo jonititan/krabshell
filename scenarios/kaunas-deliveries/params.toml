@@ -27,6 +27,9 @@ rtl_alt_m = 90.0
 
 # Battery: 30 minutes of flight, 20 % reserve. The longest round trip (5 km
 # each way, a winch cycle, climbs and a landing) uses under half a charge.
+# A drone that reaches 0 % in the air crashes (see the manifest). At the
+# reserve it turns for home, so with these settings that should not happen;
+# lower battery_reserve_pct or launch_battery_pct to see crashes.
 battery_drain_pct_s = 0.0556
 battery_reserve_pct = 20.0
 # Each pad charges at 0.0333 %/s (empty to full in 50 minutes). A drone takes
@@ -46,6 +49,22 @@ winch_release_s = 5.0
 winch_reel_ms = 2.5
 winch_lock_s = 3.0
 
+# Geofences. The scenario starts with the keep-out zones in
+# world/geofences.json (circles and polygons, at every altitude); the
+# dashboard's Geofences tab, the API (intents 110 and 111) and ground
+# stations' fence plans open and close more while it runs. The operator
+# flying the couriers keeps them geofence_margin_m clear of every fence by
+# MAVLink: re-uploading missions with detour waypoints, DO_REPOSITION out of
+# a fence opened round a drone, and RTL for a courier whose address is
+# fenced. Breaches are logged.
+geofence_margin_m = 30.0
+# An order whose address is inside a geofence is turned away, not queued:
+# as it is placed, when a fence opens over it while it waits, or when its
+# drone comes back without it because a fence opened on the way. An
+# order_rejected report (and rejected-orders.csv in the run log) says which
+# fence, and when.
+reject_orders_in_geofences = true
+
 # Camera
 hfov_deg = 80.0
 max_range_m = 250.0
@@ -64,6 +83,13 @@ vehicle_speed_ms = 8.0
 
 # Run log: krabshell writes a folder under var/logs/ while this scenario runs,
 # with drone-seconds of flight per A5 cell of this resolution (15: about
-# 180 m), every delivery, and a histogram of time from order to delivery.
+# 180 m), every delivery, a histogram of time from order to delivery, and
+# one of the battery each flight landed with (a crash counts as -1), and
+# every geofence, breach and reroute.
 # `simctl fly kaunas-deliveries --hours 8` makes one offline.
 heatmap_resolution = 15
+
+
+weather = "recorded"
+weather_start_utc = "2026-03-14T09:00:00Z"
+weather_hours = 6

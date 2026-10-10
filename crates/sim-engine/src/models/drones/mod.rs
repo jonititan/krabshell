@@ -20,11 +20,14 @@
 //! run to the wall clock — krabshell's gateways keep real-time protocols happy
 //! while the simulation runs as fast as it can.
 
+mod chart;
 pub mod deliveries;
+pub mod geofences;
 pub mod heatmap;
+pub mod landings;
 pub mod runlog;
 
-pub use sim_drones::{codes, dispatch, flight, mission, sensor, targets, terrain};
+pub use sim_drones::{airspace, codes, dispatch, flight, mission, sensor, targets, terrain};
 
 use std::collections::BTreeMap;
 
@@ -118,6 +121,15 @@ pub fn drones_in(cells: &[CellBag]) -> BTreeMap<u8, DroneStatus> {
     out
 }
 
+/// The geofences in a published view's overlays: the airspace revision
+/// (bumped on every change) and the fences open.
+pub fn geofences_in(overlays: &serde_json::Value) -> (u64, Vec<airspace::Fence>) {
+    let g = &overlays["geofences"];
+    let rev = g["rev"].as_u64().unwrap_or(0);
+    let fences = serde_json::from_value(g["fences"].clone()).unwrap_or_default();
+    (rev, fences)
+}
+
 /// What the drones committed at the end of a step, for the publisher.
 struct DronesFrame(Committed);
 
@@ -159,6 +171,10 @@ impl Model for Drones {
 
     fn agent_count(&self) -> u64 {
         self.world.agent_count()
+    }
+
+    fn overlays(&self) -> serde_json::Value {
+        self.world.overlays()
     }
 
     fn occupied_cells(&self) -> u64 {

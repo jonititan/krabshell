@@ -105,6 +105,10 @@ pub enum RejectReason {
     /// Actor exceeded its submission rate.
     #[error("actor is submitting too fast")]
     RateLimited,
+    /// Queued, but the world was replaced (reset, scenario load, checkpoint
+    /// restore, or a config change that rebuilds it) before its tick came.
+    #[error("discarded before it was applied: {why}")]
+    Discarded { why: String },
 }
 
 impl RejectReason {
@@ -118,6 +122,7 @@ impl RejectReason {
             RejectReason::OutOfBounds => "cell_out_of_bounds",
             RejectReason::Rejected { .. } => "intent_rejected",
             RejectReason::RateLimited => "rate_limited",
+            RejectReason::Discarded { .. } => "intent_discarded",
         }
     }
 }

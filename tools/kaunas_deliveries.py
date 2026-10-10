@@ -293,12 +293,13 @@ def main() -> None:
             sysid += 1
 
         # One spare per hub, on its roof pad for a ground station to take. No
-        # depot, so dispatch leaves it alone.
+        # depot, so dispatch leaves it alone until a courier from this hub
+        # crashes; then it takes over that courier's duty.
         pad = pad_at(DRONES_PER_HUB)
         agents.append(
             {"id": sysid, "kind": "drone", "lon": pad[1], "lat": pad[0],
              "state": {"sysid": sysid, "callsign": f"{hub['callsign']}-SPARE",
-                       "elevation_m": roof}}
+                       "elevation_m": roof, "spare": hub["callsign"]}}
         )
         sysid += 1
 

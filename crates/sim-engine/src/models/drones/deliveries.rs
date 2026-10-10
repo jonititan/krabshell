@@ -7,6 +7,8 @@
 
 use sim_core::{Report, ReportKind};
 
+use super::chart::{self, csv_field, Bar, Chart};
+
 /// One delivered order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delivery {
@@ -26,9 +28,27 @@ pub struct Delivery {
     pub total_s: f64,
 }
 
+/// An order turned away when it was placed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rejected {
+    pub order: u64,
+    pub depot: String,
+    pub address: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub ordered_tick: u64,
+    pub fence: Option<u64>,
+    pub fence_name: String,
+    /// When it was turned away: as it was `placed`, while `queued`, or when
+    /// its drone `returned` without delivering it.
+    pub stage: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryLog {
     pub deliveries: Vec<Delivery>,
+    pub rejected: Vec<Rejected>,
 }
 
 /// Bin widths a histogram picks from, seconds: whole, readable minutes.
@@ -40,10 +60,32 @@ const MAX_BINS: f64 = 30.0;
 impl DeliveryLog {
     /// Keep a report if it is a delivery. True if it was.
     pub fn add(&mut self, report: &Report) -> bool {
+        let d = &report.detail;
+        if report.kind == ReportKind::OrderRejected {
+            let text = |k: &str| {
+                d.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let int = |k: &str| d.get(k).and_then(serde_json::Value::as_u64);
+            self.rejected.push(Rejected {
+                order: int("order").unwrap_or(0),
+                depot: text("depot"),
+                address: text("label"),
+                lat: report.lat(),
+                lon: report.lon(),
+                ordered_tick: int("ordered_tick").unwrap_or(report.tick),
+                fence: int("fence"),
+                fence_name: text("fence_name"),
+                stage: text("stage"),
+                reason: text("reason"),
+            });
+            return true;
+        }
         if report.kind != ReportKind::Delivery {
             return false;
         }
-        let d = &report.detail;
         let text = |k: &str| {
             d.get(k)
                 .and_then(|v| v.as_str())
@@ -95,6 +137,29 @@ impl DeliveryLog {
                 d.wait_s,
                 d.flight_s,
                 d.total_s
+            ));
+        }
+        out
+    }
+
+    /// Every order turned away, one row each, with why.
+    pub fn rejected_csv(&self) -> String {
+        let mut out = String::from(
+            "order,depot,address,lat,lon,ordered_tick,fence,fence_name,stage,reason\n",
+        );
+        for r in &self.rejected {
+            out.push_str(&format!(
+                "{},{},{},{:.7},{:.7},{},{},{},{},{}\n",
+                r.order,
+                csv_field(&r.depot),
+                csv_field(&r.address),
+                r.lat,
+                r.lon,
+                r.ordered_tick,
+                r.fence.map(|f| f.to_string()).unwrap_or_default(),
+                csv_field(&r.fence_name),
+                csv_field(&r.stage),
+                csv_field(&r.reason),
             ));
         }
         out
@@ -162,95 +227,52 @@ impl DeliveryLog {
     /// The histogram as a standalone SVG bar chart, minutes along the bottom.
     pub fn histogram_svg(&self, title: &str) -> String {
         let bins = self.histogram();
-        let (w, h) = (760.0, 420.0);
-        let (left, right, top, bottom) = (64.0, 24.0, 92.0, 56.0);
-        let plot_w = w - left - right;
-        let plot_h = h - top - bottom;
-        let peak = bins.iter().map(|b| b.2).max().unwrap_or(0).max(1);
-        let step = nice_step(peak as f64 / 5.0);
-        let y_max = (peak as f64 / step).ceil() * step;
-        let mut svg = format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" font-family="system-ui, sans-serif" font-size="12">
-<rect width="100%" height="100%" fill="#ffffff"/>
-<text x="{left}" y="28" font-size="16" font-weight="600" fill="#16181d">{}</text>
-"##,
-            xml(title)
-        );
-        if let Some(s) = self.summary() {
-            svg.push_str(&format!(
-                r##"<text x="{left}" y="50" fill="#666e7a">{} deliveries · mean {} · median {} · 90% within {} · slowest {}</text>
-<text x="{left}" y="68" fill="#666e7a">of which, on average: waiting for a drone {} · flying to the address and winching {}</text>
-"##,
-                s.count,
-                minutes(s.mean_s),
-                minutes(s.median_s),
-                minutes(s.p90_s),
-                minutes(s.max_s),
-                minutes(s.mean_wait_s),
-                minutes(s.mean_flight_s)
-            ));
+        let notes = self
+            .summary()
+            .map(|s| {
+                vec![
+                    format!(
+                        "{} deliveries · mean {} · median {} · 90% within {} · slowest {}",
+                        s.count,
+                        minutes(s.mean_s),
+                        minutes(s.median_s),
+                        minutes(s.p90_s),
+                        minutes(s.max_s)
+                    ),
+                    format!(
+                        "of which, on average: waiting for a drone {} · flying to the address and winching {}",
+                        minutes(s.mean_wait_s),
+                        minutes(s.mean_flight_s)
+                    ),
+                ]
+            })
+            .unwrap_or_default();
+        let label_every = (bins.len() as f64 / 10.0).ceil().max(1.0) as usize;
+        let mut ticks: Vec<(f64, String)> = bins
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % label_every == 0)
+            .map(|(i, (from, _, _))| (i as f64, format!("{}", from / 60.0)))
+            .collect();
+        if let Some(last) = bins.last() {
+            ticks.push((bins.len() as f64, format!("{}", last.1 / 60.0)));
         }
-        // Gridlines and y labels.
-        let mut y = 0.0;
-        while y <= y_max + 1e-9 {
-            let py = top + plot_h - y / y_max * plot_h;
-            svg.push_str(&format!(
-                r##"<line x1="{left}" x2="{}" y1="{py:.1}" y2="{py:.1}" stroke="#dfe3e9"/>
-<text x="{}" y="{:.1}" text-anchor="end" fill="#666e7a">{}</text>
-"##,
-                left + plot_w,
-                left - 8.0,
-                py + 4.0,
-                y as u64
-            ));
-            y += step;
+        Chart {
+            title,
+            notes,
+            bars: bins
+                .iter()
+                .map(|(from, _, n)| Bar {
+                    count: *n,
+                    fill: chart::BAR,
+                    tooltip: format!("{}–{} min: {n}", from / 60.0, (from + bins[0].1) / 60.0),
+                })
+                .collect(),
+            ticks,
+            x_label: "minutes from order to delivery",
+            y_label: "deliveries",
         }
-        if !bins.is_empty() {
-            let bar = plot_w / bins.len() as f64;
-            let label_every = (bins.len() as f64 / 10.0).ceil().max(1.0) as usize;
-            for (i, (from, _, n)) in bins.iter().enumerate() {
-                let bh = *n as f64 / y_max * plot_h;
-                let x = left + i as f64 * bar;
-                svg.push_str(&format!(
-                    r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{bh:.1}" fill="#2b6cb0"><title>{}–{} min: {n}</title></rect>
-"##,
-                    x + 1.0,
-                    top + plot_h - bh,
-                    (bar - 2.0).max(1.0),
-                    from / 60.0,
-                    (from + bins[0].1) / 60.0
-                ));
-                if i % label_every == 0 {
-                    svg.push_str(&format!(
-                        r##"<text x="{x:.1}" y="{:.1}" text-anchor="middle" fill="#666e7a">{}</text>
-"##,
-                        top + plot_h + 18.0,
-                        from / 60.0
-                    ));
-                }
-            }
-            let last = bins[bins.len() - 1].1;
-            svg.push_str(&format!(
-                r##"<text x="{:.1}" y="{:.1}" text-anchor="middle" fill="#666e7a">{}</text>
-"##,
-                left + plot_w,
-                top + plot_h + 18.0,
-                last / 60.0
-            ));
-        }
-        svg.push_str(&format!(
-            r##"<line x1="{left}" x2="{}" y1="{y0:.1}" y2="{y0:.1}" stroke="#16181d"/>
-<text x="{:.1}" y="{:.1}" text-anchor="middle" fill="#16181d">minutes from order to delivery</text>
-<text transform="translate(18 {:.1}) rotate(-90)" text-anchor="middle" fill="#16181d">deliveries</text>
-</svg>
-"##,
-            left + plot_w,
-            left + plot_w / 2.0,
-            h - 16.0,
-            top + plot_h / 2.0,
-            y0 = top + plot_h
-        ));
-        svg
+        .svg()
     }
 }
 
@@ -267,30 +289,6 @@ pub struct Summary {
 
 fn minutes(s: f64) -> String {
     format!("{:.1} min", s / 60.0)
-}
-
-fn nice_step(raw: f64) -> f64 {
-    let raw = raw.max(1.0);
-    let mag = 10f64.powf(raw.log10().floor());
-    [1.0, 2.0, 5.0, 10.0]
-        .iter()
-        .map(|m| m * mag)
-        .find(|s| *s >= raw)
-        .unwrap_or(10.0 * mag)
-}
-
-fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_owned()
-    }
-}
-
-fn xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

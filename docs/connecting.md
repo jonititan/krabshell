@@ -47,6 +47,9 @@ flowchart LR
 - **CoT is one-way.** krabshell sends to TAK clients and does not listen for
   anything they send back.
 
+Every message, command, rate and timeout on both links is listed in
+[protocols.md](protocols.md).
+
 ## Start krabshell
 
 ```sh
@@ -201,13 +204,17 @@ Commands that work from the Fly view:
 | Set mission item | `DO_SET_MISSION_CURRENT` (224), `MISSION_SET_CURRENT` |
 | Mode change | `DO_SET_MODE` (176), `SET_MODE`. Auto starts the mission; anything else holds position. |
 
-Anything else is answered with `MAV_RESULT_UNSUPPORTED`.
+krabshell also answers the requests QGroundControl makes when it connects
+(`REQUEST_MESSAGE` for `AUTOPILOT_VERSION` and `HOME_POSITION`,
+`REQUEST_AUTOPILOT_CAPABILITIES`, `SET_MESSAGE_INTERVAL`). Anything else is
+answered with `MAV_RESULT_UNSUPPORTED`. The parameters each command takes, and
+when it is refused, are in [protocols.md](protocols.md#commands).
 
 The drone flies these mission items:
 
 | Item | Id | Notes |
 |---|---:|---|
-| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude. On the ground, waits (charging on its home pad) until the battery reaches `launch_battery_pct` |
+| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude. On the ground, waits (charging on its home pad) until the battery reaches `launch_battery_pct`, or param2 percent if that is higher and it is on a charger (a krabshell extension) |
 | `NAV_WAYPOINT` | 16 | param1 hold time (s), param2 acceptance radius (m) |
 | `NAV_LOITER_UNLIM` | 17 | Holds until you change mode or item |
 | `NAV_LOITER_TIME` | 19 | param1 seconds |
@@ -219,8 +226,26 @@ The drone flies these mission items:
 | `DO_WINCH` | 42600 | Holds position while the winch runs. param2 `WINCH_DELIVER` (4) lowers from the drone's height, releases, reels up and locks, timed by the `winch_*` params; `WINCH_RELATIVE_LENGTH_CONTROL` (1) takes \|param3\| m at \|param4\| m/s. Other actions complete instantly |
 
 Other items (camera, gimbal, servo) complete instantly, so a mission containing
-them still runs. Geofences and rally points are not simulated: uploading an
-empty one succeeds, and a non-empty one is refused.
+them still runs. Rally points are not simulated: uploading an empty rally
+plan succeeds, and a non-empty one is refused.
+
+Geofences are simulated, and the fence plan works both ways. In the **Plan**
+view, the **Fence** tab shows every geofence open (each circle a
+`NAV_FENCE_CIRCLE_EXCLUSION`, each polygon corner a
+`NAV_FENCE_POLYGON_VERTEX_EXCLUSION`); `MISSION_CURRENT.fence_id` changes
+whenever one opens or closes. Draw circular or polygon **exclusion** fences
+there and **Upload**: they open at once, and the drones the simulation flies
+route round them. The upload is the whole set of fences ground stations set:
+a fence you delete and re-upload without closes, and clearing the fence plan
+closes all of yours. The scenario's fences, and those drawn on the
+dashboard, come down with the plan and go back up unchanged; deleting one in
+QGroundControl does not close it (the dashboard's Geofences tab does). Inclusion fences are not simulated, and
+a plan with one is refused with a message saying so. A fence over a drone's
+pad is refused too. Fences apply to every drone, not just the vehicle the
+plan was uploaded to.
+
+A drone you fly is not rerouted for you: fly it into a fence and the breach
+is logged.
 
 Altitudes are above mean sea level. A pack can carry terrain (see the README);
 without it the ground is flat at 0 m. A drone's home is the pad it starts on,
@@ -250,6 +275,11 @@ than names:
 | 6 | RTL |
 | 7 | Land |
 
+The numbers are for display only. A mode change from QGroundControl only
+looks at whether the Auto flag is set: with it, the drone starts its mission;
+without it, a drone in the air holds position. Use **Return** or **Land** to
+bring a drone down. See [protocols.md](protocols.md#modes).
+
 ## ATAK, WinTAK and iTAK
 
 ### What arrives
@@ -262,11 +292,13 @@ than names:
 | The intruder drone | `a-u-A-M-H-Q` | As above |
 | Landmarks | `b-m-p-s-m` spot markers | Every 15 s |
 
-Every uid starts with `krabshell-`. Sightings are `krabshell-det-<id>`, and
+Every uid starts with `krabshell-`. Drones are `krabshell-uav-<sysid>`,
+landmarks `krabshell-poi-<id>` and sightings `krabshell-det-<id>`, and
 each links to the drone that made it. The remarks say who saw it, at what
 range, and the simulation tick. Events are stamped with real time, so a
-sighting stays on the map for 30 s after the last report (landmarks for 10
-minutes).
+sighting stays on the map for 30 s after the last report, a drone for 10 s
+and a landmark for 10 minutes. The full event format is in
+[protocols.md](protocols.md#cursor-on-target).
 
 ### Option A: the default multicast (same network, no setup)
 
@@ -305,9 +337,9 @@ two hundred times faster than real time, so in QGroundControl and ATAK the
 drones fly very fast, and a mission finishes in seconds. Telemetry always shows
 where the simulation is now; nothing is queued or replayed.
 
-To watch at real speed, go to the dashboard's **Run** page and **Start at
-10** tps. The packs use 0.1 s per tick, so 10 ticks a second is real time. You
-can also use the rate API:
+To watch at real speed, go to the dashboard's **Run** page and set **Speed**
+to **Real time**. The packs use 0.1 s per tick, so real time is 10 ticks a
+second. You can also use the rate API:
 
 ```sh
 curl -X POST localhost:8080/api/v1/run/rate -H 'content-type: application/json' -d '{"target_tps": 10}'
@@ -318,7 +350,10 @@ While the simulation is **paused**:
 - Commands are refused with `MAV_RESULT_TEMPORARILY_REJECTED` and the message
   "Simulation is paused".
 - A mission upload is accepted, with the message "Mission queued: simulation
-  paused", and takes effect on the next tick.
+  paused", and takes effect on the next tick. A fence plan upload is treated
+  the same way ("Fence plan queued: simulation paused"). Resetting,
+  reloading or restoring before the next tick throws a queued plan away; the
+  ground station then gets the error "Mission not applied: world reset".
 
 ## Checking without QGroundControl or ATAK
 

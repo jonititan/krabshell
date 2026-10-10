@@ -307,3 +307,120 @@ async fn ping_is_answered_and_garbage_is_an_error_not_a_disconnect() {
     send(&mut socket, json!({"type": "ping"})).await;
     expect(&mut socket, "a second pong", |m| m["type"] == "pong").await;
 }
+
+#[tokio::test]
+async fn intents_waiting_on_a_paused_world_do_not_starve_the_controls() {
+    // Each intent waits for a tick to be answered, and a paused world has
+    // none. They must not each hold one of the blocking threads that every
+    // control route needs (Tokio keeps 512).
+    let server = serve(0).await;
+    let mut socket = connect(&server).await;
+    let cell = london().to_hex();
+    let sent = 600;
+    for i in 0..sent {
+        send(
+            &mut socket,
+            json!({
+                "type": "intent",
+                "intent": {
+                    "id": uuid::Uuid::new_v4(),
+                    "cell": cell,
+                    // Many actors, so the per-actor rate limit does not bite.
+                    "actor": format!("flood-{i}"),
+                    "verb": "spawn",
+                    "payload": { "count": 1, "kind": "probe" }
+                }
+            }),
+        )
+        .await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let driver = server.handle.clone();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || driver.command(Control::Step { n: 1 })),
+    )
+    .await
+    .expect("a control still gets a thread")
+    .unwrap()
+    .unwrap();
+
+    // And every intent is answered once the tick runs.
+    let mut accepted = 0;
+    while accepted < sent {
+        expect(&mut socket, "the acceptances", |m| m["type"] == "accepted").await;
+        accepted += 1;
+    }
+}
+
+#[tokio::test]
+async fn an_intent_thrown_away_by_a_reset_is_answered_as_discarded() {
+    let server = serve(0).await;
+    let mut socket = connect(&server).await;
+    let intent_id = "7c9e6679-7425-40de-944b-e07fc1f90ae9";
+    send(
+        &mut socket,
+        json!({
+            "type": "intent",
+            "intent": { "id": intent_id, "cell": london().to_hex(), "actor": "ws-client",
+                        "verb": "spawn", "payload": { "count": 1 } }
+        }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let driver = server.handle.clone();
+    tokio::task::spawn_blocking(move || driver.command(Control::Reset))
+        .await
+        .unwrap()
+        .unwrap();
+    let rejected = expect(&mut socket, "the discard", |m| m["type"] == "rejected").await;
+    assert_eq!(rejected["intent_id"], intent_id);
+    assert_eq!(rejected["reason"], "discarded");
+}
+
+#[tokio::test]
+async fn subscribing_to_a_continent_is_refused_without_enumerating_it() {
+    let server = serve(0).await;
+    let mut socket = connect(&server).await;
+    // Four of the twelve resolution-0 faces: 4 × 5 120 cells at the test
+    // world's resolution 6, over the 20 000 cap. (At the packs' resolution 15
+    // one face alone is about 1.3 billion.)
+    let faces: std::collections::BTreeSet<String> = [
+        (-0.13, 51.5),
+        (151.2, -33.9),
+        (-74.0, 40.7),
+        (37.6, 55.8),
+        (116.4, 39.9),
+        (-46.6, -23.5),
+    ]
+    .iter()
+    .map(|&(lon, lat)| GeoCell::from_lonlat(lon, lat, 0).unwrap().to_hex())
+    .collect();
+    assert!(faces.len() >= 4, "{faces:?}");
+    send(
+        &mut socket,
+        json!({"type": "subscribe", "cells": faces.iter().take(4).collect::<Vec<_>>(), "res": 0}),
+    )
+    .await;
+    let error = expect(&mut socket, "the refusal", |m| m["type"] == "error").await;
+    assert_eq!(error["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn an_intent_over_the_rest_size_cap_is_refused_here_too() {
+    let server = serve(0).await;
+    let mut socket = connect(&server).await;
+    send(
+        &mut socket,
+        json!({
+            "type": "intent",
+            "intent": { "id": "7c9e6679-7425-40de-944b-e07fc1f90aea", "cell": london().to_hex(),
+                        "actor": "ws-client", "verb": "spawn",
+                        "payload": { "blob": "x".repeat(20_000) } }
+        }),
+    )
+    .await;
+    let error = expect(&mut socket, "the refusal", |m| m["type"] == "error").await;
+    assert_eq!(error["code"], "payload_too_large");
+}

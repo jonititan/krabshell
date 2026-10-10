@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::flight::Point;
 use crate::mission::{MissionItem, DO_WINCH, NAV_LAND, NAV_TAKEOFF, NAV_WAYPOINT, WINCH_DELIVER};
+use crate::stations::{self, Trip};
 
 const FRAME_MISSION: u8 = 2;
 const FRAME_RELATIVE: u8 = 3;
@@ -108,6 +109,19 @@ pub struct Order {
     pub ordered_tick: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatched_tick: Option<u64>,
+    /// Trips flown with it that came back without delivering it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failed_trips: u8,
+}
+
+/// Trips an order may come back from undelivered before it is turned away
+/// as out of the couriers' reach. Without a limit, an order no courier can
+/// reach goes back to the front of the queue every time, and every courier
+/// at its depot takes it in turn and never anything behind it.
+pub const MAX_FAILED_TRIPS: u8 = 3;
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 /// A drone that delivers from a depot. Lives in the drone's published state.
@@ -133,6 +147,9 @@ pub struct Dispatch {
     /// Orders placed so far; also the last order's id (ids start at 1).
     pub placed: u64,
     pub delivered: u64,
+    /// Orders turned away when placed (see [`Dispatch::place_orders`]).
+    #[serde(default)]
+    pub rejected: u64,
     /// When the next order comes. None until the first draw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_order_tick: Option<u64>,
@@ -162,16 +179,21 @@ impl Dispatch {
 
     /// Place every order due at or before `tick`. `draw(n)` gives two
     /// uniform numbers for order `n`: the gap after it, and which address
-    /// places it. Draw 0 only sets when the first order comes.
+    /// places it. Draw 0 only sets when the first order comes. An order
+    /// `accept` turns down (by address index) joins no queue; those are
+    /// returned. The draws are the same either way, so turning orders away
+    /// changes no other order.
     pub fn place_orders(
         &mut self,
         tick: u64,
         book: &AddressBook,
         settings: &DispatchSettings,
         draw: impl Fn(u64) -> (f64, f64),
-    ) {
+        mut accept: impl FnMut(u32) -> bool,
+    ) -> Vec<Order> {
+        let mut rejected = Vec::new();
         if settings.orders_per_tick <= 0.0 || book.addresses.is_empty() {
-            return;
+            return rejected;
         }
         let gap =
             |u: f64| libm::round(-libm::log(1.0 - u) / settings.orders_per_tick).max(0.0) as u64;
@@ -183,15 +205,23 @@ impl Dispatch {
             let (after, pick) = draw(self.placed);
             let address =
                 ((pick * book.addresses.len() as f64) as usize).min(book.addresses.len() - 1);
-            self.queues[usize::from(book.addresses[address].depot)].push_back(Order {
+            let order = Order {
                 id: self.placed,
                 address: address as u32,
                 ordered_tick: next,
                 dispatched_tick: None,
-            });
+                failed_trips: 0,
+            };
+            if accept(order.address) {
+                self.queues[usize::from(book.addresses[address].depot)].push_back(order);
+            } else {
+                self.rejected += 1;
+                rejected.push(order);
+            }
             next += gap(after);
         }
         self.next_order_tick = Some(next);
+        rejected
     }
 }
 
@@ -211,6 +241,18 @@ fn item(seq: usize, command: u16, frame: u8) -> MissionItem {
     }
 }
 
+/// What a delivery does at the far end: fly to the address at the cruise
+/// height and winch the parcel down.
+pub fn delivery_work(to: &Address, cruise_agl_m: f32) -> Vec<MissionItem> {
+    let mut out = item(0, NAV_WAYPOINT, FRAME_TERRAIN);
+    (out.x, out.y, out.z) = (to.lat_e7, to.lon_e7, cruise_agl_m);
+    let mut winch = item(0, DO_WINCH, FRAME_MISSION);
+    winch.param1 = 1.0;
+    winch.param2 = f32::from(WINCH_DELIVER);
+    winch.param4 = 0.0;
+    vec![out, winch]
+}
+
 /// The mission for one delivery from `home` to `to`.
 pub fn delivery_mission(
     home: &Point,
@@ -218,34 +260,58 @@ pub fn delivery_mission(
     cruise_agl_m: f32,
     settings: &DispatchSettings,
 ) -> Vec<MissionItem> {
-    let mut items = Vec::with_capacity(6);
+    trip_mission(
+        home,
+        &Trip::direct(),
+        delivery_work(to, cruise_agl_m),
+        cruise_agl_m,
+        settings,
+    )
+}
+
+/// A trip from home and back: take off, stop at each station on the way
+/// out, do `work`, stop at each on the way back, fly home at the cruise
+/// height, descend to the approach height and land.
+pub fn trip_mission(
+    home: &Point,
+    trip: &Trip,
+    work: Vec<MissionItem>,
+    cruise_agl_m: f32,
+    settings: &DispatchSettings,
+) -> Vec<MissionItem> {
+    let mut items = Vec::with_capacity(work.len() + 4 + 3 * (trip.out.len() + trip.back.len()));
     let mut takeoff = item(0, NAV_TAKEOFF, FRAME_RELATIVE);
     takeoff.z = settings.takeoff_m;
     items.push(takeoff);
+    for (at, pct) in &trip.out {
+        items.extend(stations::stop(at, *pct, cruise_agl_m, settings));
+    }
+    items.extend(work);
+    for (at, pct) in &trip.back {
+        items.extend(stations::stop(at, *pct, cruise_agl_m, settings));
+    }
+    items.extend(home_items(home, cruise_agl_m, settings));
+    stations::renumber(&mut items);
+    items
+}
 
-    let mut out = item(1, NAV_WAYPOINT, FRAME_TERRAIN);
-    (out.x, out.y, out.z) = (to.lat_e7, to.lon_e7, cruise_agl_m);
-    items.push(out);
-
-    let mut winch = item(2, DO_WINCH, FRAME_MISSION);
-    winch.param1 = 1.0;
-    winch.param2 = f32::from(WINCH_DELIVER);
-    winch.param4 = 0.0;
-    items.push(winch);
-
-    let mut back = item(3, NAV_WAYPOINT, FRAME_TERRAIN);
+/// The end of every trip: home at the cruise height, down to the approach
+/// height over the pad, and land.
+pub fn home_items(
+    home: &Point,
+    cruise_agl_m: f32,
+    settings: &DispatchSettings,
+) -> [MissionItem; 3] {
+    let mut back = item(0, NAV_WAYPOINT, FRAME_TERRAIN);
     (back.x, back.y, back.z) = (home.lat_e7, home.lon_e7, cruise_agl_m);
     back.param2 = 5.0;
-    items.push(back);
 
-    let mut approach = item(4, NAV_WAYPOINT, FRAME_RELATIVE);
+    let mut approach = item(0, NAV_WAYPOINT, FRAME_RELATIVE);
     (approach.x, approach.y, approach.z) = (home.lat_e7, home.lon_e7, settings.approach_m);
-    items.push(approach);
 
-    let mut land = item(5, NAV_LAND, FRAME_RELATIVE);
+    let mut land = item(0, NAV_LAND, FRAME_RELATIVE);
     (land.x, land.y) = (home.lat_e7, home.lon_e7);
-    items.push(land);
-    items
+    [back, approach, land]
 }
 
 #[cfg(test)]
@@ -279,10 +345,20 @@ mod tests {
         let mut rng = sim_core::rng::Rng::new(3);
         let draws: Vec<(f64, f64)> = (0..10_000).map(|_| (rng.unit(), rng.unit())).collect();
         // The first call schedules the first order from tick 0.
-        d.place_orders(0, &book, &settings, |n| draws[n as usize]);
-        d.place_orders(100_000, &book, &settings, |n| draws[n as usize]);
+        d.place_orders(0, &book, &settings, |n| draws[n as usize], |_| true);
+        // Every tenth address turned away: the rest are placed as before.
+        let rejected = d.place_orders(
+            100_000,
+            &book,
+            &settings,
+            |n| draws[n as usize],
+            |a| a % 10 != 0,
+        );
+        assert!(!rejected.is_empty() && rejected.iter().all(|o| o.address % 10 == 0));
+        assert_eq!(d.rejected as usize, rejected.len());
+        assert_eq!(d.placed as usize, d.queued() + rejected.len());
         // About 1000 expected; Poisson spread is about ±32.
-        let placed = d.queued() as f64;
+        let placed = d.placed as f64;
         assert!((850.0..1150.0).contains(&placed), "{placed}");
         assert!(d.queues[0].len() > 300 && d.queues[1].len() > 300);
         // Each queue is oldest first.

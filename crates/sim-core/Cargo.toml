@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 a5.workspace = true
+libm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

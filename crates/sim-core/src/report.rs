@@ -24,6 +24,32 @@ pub enum ReportKind {
     /// `observer` delivered an order at the given position. `detail` carries
     /// the order and when it was placed, dispatched and delivered.
     Delivery,
+    /// `observer` touched down at the end of a flight. `detail.battery_pct`
+    /// is the charge it landed with.
+    Landing,
+    /// `observer` ran out of battery in the air and fell at the given
+    /// position. `detail` says what replaced it, if anything.
+    Crash,
+    /// A geofence opened or closed. `detail` carries its id, shape and who
+    /// asked for it; the position is its centre.
+    Geofence,
+    /// `observer` was inside geofence `detail.fence` in the air: it flew in,
+    /// or the fence opened round it.
+    Breach,
+    /// The operator sent `observer` MAVLink messages to take it round a
+    /// geofence: `detail.messages` lists them.
+    Reroute,
+    /// An order was turned away when it was placed, at the given address:
+    /// `detail.reason` says why (inside a geofence, say).
+    OrderRejected,
+    /// A launch and recovery station was added or removed. `detail` carries
+    /// the station and `action`; the position is the station.
+    Station,
+    /// A region of interest was designated or removed (`detail.action`), or
+    /// added by itself where a drone crashed. The position is its centre.
+    Roi,
+    /// `observer` finished surveying region of interest `detail.roi`.
+    Survey,
 }
 
 /// One model-generated event.

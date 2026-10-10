@@ -1,0 +1,75 @@
+{#
+  The weather status. Polls itself every five seconds; the refresh button
+  swaps this same fragment.
+#}
+<section id="weather-status"
+         class="panel"
+         hx-get="/fragments/weather"
+         hx-trigger="every 5s"
+         hx-swap="outerHTML"
+         data-available="{{ weather.available }}"
+         data-frames="{{ weather.frames }}">
+  <div class="map-head">
+    <h2>Status</h2>
+    {% if weather.live %}
+    <form class="map-controls" hx-post="/actions/weather/refresh" hx-target="#weather-status" hx-swap="outerHTML">
+      <button type="submit">Refresh now</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% match weather.flash %}
+  {% when Some with (f) %}
+  <div class="banner {{ f.kind }}">{{ f.message }}</div>
+  {% when None %}
+  {% endmatch %}
+
+  {% match weather.error %}
+  {% when Some with (err) %}
+  <div class="banner {% if weather.live %}warn{% else %}bad{% endif %}">
+    <strong>The last fetch failed.</strong> <span class="mono">{{ err }}</span>
+    {% if weather.live %}The drones fly in still air until a fetch succeeds; it is tried again every minute.{% endif %}
+  </div>
+  {% when None %}
+  {% endmatch %}
+
+  {% if !weather.in_sync %}
+  <div class="banner warn">
+    The world is not flying in the field shown here (it was reset, or a
+    checkpoint brought other weather).
+    {% if weather.live %}It is sent again within half a minute.{% endif %}
+  </div>
+  {% endif %}
+
+  {% if weather.available || weather.error.is_some() %}
+  <dl class="readout weather-readout">
+    <div><dt>Mode</dt><dd>{{ weather.mode }}</dd></div>
+    <div><dt>Simulation time</dt><dd class="mono">{{ weather.sim_utc }}</dd></div>
+    <div><dt>Tick 0</dt><dd class="mono">{{ weather.start_utc }}</dd></div>
+    <div><dt>From</dt><dd>{{ weather.origin }}</dd></div>
+    <div><dt>Source</dt><dd>{{ weather.source }}</dd></div>
+    <div><dt>Window</dt><dd class="mono small">{{ weather.window }}</dd></div>
+    <div><dt>Weather cells</dt><dd>{{ weather.cells }}</dd></div>
+    <div><dt>Heights</dt><dd>{{ weather.levels }}</dd></div>
+    <div><dt>Area</dt><dd class="small">{{ weather.area }}</dd></div>
+    <div><dt>Last fetch</dt><dd class="mono small">{{ weather.fetched }}</dd></div>
+    <div><dt>Cost</dt><dd class="small">{{ weather.fetch }}</dd></div>
+    <div><dt>Cache</dt><dd class="small">{{ weather.cache }}</dd></div>
+    <div><dt>Launch limits</dt><dd class="small">{{ weather.limits }}</dd></div>
+  </dl>
+  {% if !weather.attribution.is_empty() %}
+  <p class="dim small">{{ weather.attribution }}</p>
+  {% endif %}
+  {% else %}
+  <p>This run has no weather: the drones fly in still air.</p>
+  <p class="dim">
+    To fly in real wind, ask for it in the scenario's <span class="mono">params.toml</span>
+    and load it again:
+  </p>
+<pre class="mono small">weather = "recorded"                       # or "live"
+weather_start_utc = "2026-03-14T06:00:00Z"  # recorded: when tick 0 is
+weather_hours = 24
+weather_resolution = 12                    # A5 resolution of the weather cells</pre>
+  <p class="dim small">Cache: {{ weather.cache }}</p>
+  {% endif %}
+</section>

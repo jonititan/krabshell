@@ -5,15 +5,19 @@
 //! wedged browser cannot cost the simulation a tick.
 
 pub mod auth;
+pub mod conflicts;
+pub mod docs;
+pub mod openapi;
 pub mod problem;
 pub mod ratelimit;
 pub mod routes;
 pub mod runlog;
+pub mod weather;
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use sim_engine::{DriverHandle, ScenarioStore};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -40,6 +44,9 @@ pub struct AppState {
     /// Models this build can instantiate, for the scenario screen.
     pub model_kinds: Arc<Vec<String>>,
     pub limiter: Arc<ratelimit::ActorLimiter>,
+    pub weather: Arc<weather::WeatherService>,
+    pub conflicts: Arc<conflicts::ConflictService>,
+    pub addresses: Arc<routes::api::AddressCache>,
 }
 
 impl AppState {
@@ -57,7 +64,15 @@ impl AppState {
                     .collect(),
             ),
             limiter: Arc::new(ratelimit::ActorLimiter::new()),
+            weather: Arc::new(weather::WeatherService::offline()),
+            conflicts: Arc::new(conflicts::ConflictService::default()),
+            addresses: Arc::default(),
         }
+    }
+
+    /// The same state, with a weather service that can fetch.
+    pub fn with_weather(self, weather: Arc<weather::WeatherService>) -> Self {
+        AppState { weather, ..self }
     }
 }
 
@@ -67,7 +82,10 @@ pub fn router(state: AppState) -> Router {
 
     // `/health` sits outside the token wall on purpose: a process monitor
     // should be able to see that the driver is alive without holding a secret.
-    let public_api = Router::new().route("/health", get(routes::api::health));
+    // The API's description is no secret either, and tools fetch it bare.
+    let public_api = Router::new()
+        .route("/health", get(routes::api::health))
+        .route("/openapi.json", get(openapi::spec));
 
     let guarded_api = Router::new()
         .route("/run", get(routes::api::run_status))
@@ -85,6 +103,8 @@ pub fn router(state: AppState) -> Router {
         .route("/state", get(routes::api::state_get))
         .route("/state/map", get(routes::api::state_map))
         .route("/state/entities", get(routes::api::state_entities))
+        .route("/state/overlays", get(routes::api::state_overlays))
+        .route("/state/addresses", get(routes::api::state_addresses))
         .route("/state/download", get(routes::api::state_download))
         .route("/state/upload", post(routes::api::state_upload))
         .route("/state/cells/{cell}", get(routes::api::state_cell))
@@ -93,6 +113,37 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(routes::api::metrics))
         .route("/reports", get(routes::api::reports))
         .route("/cells/lookup", get(routes::api::cells_lookup))
+        .route(
+            "/geofences",
+            get(routes::api::geofences_list).post(routes::api::geofences_open),
+        )
+        .route(
+            "/geofences/{id}",
+            delete(routes::api::geofences_close).patch(routes::api::geofences_rename),
+        )
+        .route(
+            "/geofences/{id}/extend",
+            post(routes::api::geofences_extend),
+        )
+        .route(
+            "/stations",
+            get(routes::api::stations_list).post(routes::api::stations_add),
+        )
+        .route("/stations/{id}", delete(routes::api::stations_remove))
+        .route(
+            "/rois",
+            get(routes::api::rois_list).post(routes::api::rois_add),
+        )
+        .route("/rois/{id}", delete(routes::api::rois_remove))
+        .route("/conflicts", get(routes::api::conflicts))
+        .route(
+            "/conflicts/settings",
+            get(routes::api::conflict_settings).put(routes::api::conflict_settings_put),
+        )
+        .route("/weather", get(routes::weather::weather_status))
+        .route("/weather/refresh", post(routes::weather::weather_refresh))
+        .route("/weather/cells", get(routes::weather::weather_cells))
+        .route("/weather/cells/{cell}", get(routes::weather::weather_cell))
         .route("/ws", get(routes::ws::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),
@@ -104,6 +155,14 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .nest(API_PREFIX, public_api.merge(guarded_api))
         .merge(pages)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.auth),
+            auth::same_site_only,
+        ))
+        // Axum's extractors bring their own 2 MiB cap, which would quietly
+        // win over ours and refuse a large checkpoint or scenario pack. This
+        // layer is the one limit; intents are capped lower in their handler.
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

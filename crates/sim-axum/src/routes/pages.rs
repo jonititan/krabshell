@@ -29,19 +29,60 @@ use crate::AppState;
 /// cannot drift from the server that serves it.
 const APP_CSS: &str = include_str!("../../../sim-dashboard/assets/app.css");
 const MAP_JS: &str = include_str!("../../../sim-dashboard/assets/map.js");
+const GEOFENCES_JS: &str = include_str!("../../../sim-dashboard/assets/geofences.js");
+const STATIONS_JS: &str = include_str!("../../../sim-dashboard/assets/stations.js");
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
+const WEATHER_JS: &str = include_str!("../../../sim-dashboard/assets/weather.js");
+const CONFLICTS_JS: &str = include_str!("../../../sim-dashboard/assets/conflicts.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
+/// milsymbol 3.0.4 (MIT), which draws the maps' APP-6 / MIL-STD-2525 symbols.
+/// Vendored so the dashboard works offline. Its path carries the version, so
+/// browsers may keep it for good; a new version gets a new path.
+const MILSYMBOL_JS: &str = include_str!("../../../sim-dashboard/assets/milsymbol.js");
 
 pub fn router(auth: Arc<Auth>) -> Router<AppState> {
     let public = Router::new()
         .route("/login", get(login_form).post(login_submit))
         .route("/logout", post(logout))
+        .route("/docs", get(guide_index))
+        .route("/docs/api", get(docs_page))
+        .route("/docs/{slug}", get(guide_page))
+        .route("/docs/figures/{name}", get(guide_figure))
         .route("/assets/app.css", get(|| asset(APP_CSS, "text/css")))
         .route("/assets/map.js", get(|| asset(MAP_JS, "text/javascript")))
+        .route(
+            "/assets/geofences.js",
+            get(|| asset(GEOFENCES_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/stations.js",
+            get(|| asset(STATIONS_JS, "text/javascript")),
+        )
         .route("/assets/live.js", get(|| asset(LIVE_JS, "text/javascript")))
+        .route(
+            "/assets/weather.js",
+            get(|| asset(WEATHER_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/conflicts.js",
+            get(|| asset(CONFLICTS_JS, "text/javascript")),
+        )
         .route(
             "/assets/htmx.min.js",
             get(|| asset(HTMX_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/milsymbol-3.0.4.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript"),
+                        (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    ],
+                    MILSYMBOL_JS,
+                )
+                    .into_response()
+            }),
         );
 
     let guarded = Router::new()
@@ -49,8 +90,19 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/run", get(run_page))
         .route("/scenarios", get(scenarios_page))
         .route("/state", get(state_page))
+        .route("/geofences", get(geofences_page))
+        .route("/stations", get(stations_page))
         .route("/intents", get(intents_page))
         .route("/io", get(io_page))
+        .route("/weather", get(weather_page))
+        .route("/conflicts", get(conflicts_page))
+        .route("/fragments/conflicts", get(conflicts_fragment))
+        .route(
+            "/actions/conflicts/resolution",
+            post(action_conflict_resolution),
+        )
+        .route("/fragments/weather", get(weather_fragment))
+        .route("/actions/weather/refresh", post(action_weather_refresh))
         .route("/fragments/control", get(control_fragment))
         .route("/fragments/scenarios", get(scenarios_fragment))
         .route("/fragments/cell", get(cell_fragment))
@@ -281,6 +333,371 @@ struct LoginTemplate {
     open: bool,
 }
 
+/// The weather status, as the Weather screen shows it.
+pub struct WeatherView {
+    pub available: bool,
+    pub mode: String,
+    pub live: bool,
+    pub origin: String,
+    pub source: String,
+    pub attribution: String,
+    pub start_utc: String,
+    pub sim_utc: String,
+    pub window: String,
+    pub frames: usize,
+    pub cells: String,
+    pub levels: String,
+    pub area: String,
+    pub fetched: String,
+    pub fetch: String,
+    pub cache: String,
+    pub in_sync: bool,
+    pub error: Option<String>,
+    pub limits: String,
+    pub flash: Option<Flash>,
+}
+
+impl WeatherView {
+    fn build(state: &AppState, flash: Option<Flash>) -> WeatherView {
+        let s = crate::routes::weather::status_of(state);
+        let dash = || "—".to_owned();
+        let pretty = |utc: &Option<String>| {
+            utc.as_deref()
+                .map_or_else(dash, |t| t.replacen('T', " ", 1).replace('Z', " UTC"))
+        };
+        let origin = match s.origin {
+            Some(crate::weather::Origin::OpenMeteo) => "Open-Meteo",
+            Some(crate::weather::Origin::Pack) => "the pack's world/weather.json",
+            Some(crate::weather::Origin::Checkpoint) => "a restored checkpoint",
+            None => "—",
+        };
+        WeatherView {
+            available: s.available,
+            mode: match s.mode {
+                Some(sim_core::WeatherMode::Live) => "live".into(),
+                Some(sim_core::WeatherMode::Recorded) => "recorded".into(),
+                None => "off".into(),
+            },
+            live: s.mode == Some(sim_core::WeatherMode::Live),
+            origin: origin.into(),
+            source: s.source.clone().unwrap_or_else(dash),
+            attribution: s.attribution.clone().unwrap_or_default(),
+            start_utc: pretty(&s.start_utc),
+            sim_utc: pretty(&s.sim_utc),
+            window: s.window.as_ref().map_or_else(dash, |w| {
+                format!(
+                    "{} to {}, {} frames {} min apart",
+                    pretty(&Some(w.first_utc.clone())),
+                    pretty(&Some(w.last_utc.clone())),
+                    w.frames,
+                    w.step_s / 60
+                )
+            }),
+            frames: s.window.as_ref().map_or(0, |w| w.frames),
+            cells: match s.resolution {
+                Some(r) => format!("{} at resolution {r}", s.cells),
+                None => dash(),
+            },
+            levels: if s.levels_m.is_empty() {
+                dash()
+            } else {
+                s.levels_m
+                    .iter()
+                    .map(|m| format!("{m} m"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+            area: s.area.map_or_else(dash, |[w, so, e, n]| {
+                format!("{so:.3}°N {w:.3}°E to {n:.3}°N {e:.3}°E")
+            }),
+            fetched: pretty(&s.fetched_utc),
+            fetch: if s.origin == Some(crate::weather::Origin::OpenMeteo) {
+                if s.cache_hit {
+                    "from the cache: no Open-Meteo calls".into()
+                } else {
+                    format!("{} Open-Meteo locations", s.locations)
+                }
+            } else {
+                dash()
+            },
+            cache: s.cache.as_ref().map_or_else(
+                || "fetching is off (--no-weather)".into(),
+                |c| {
+                    format!(
+                        "{} entries, {:.1} MB in {}",
+                        c.entries,
+                        c.bytes as f64 / 1e6,
+                        c.dir
+                    )
+                },
+            ),
+            in_sync: s.in_sync,
+            error: s.error.clone(),
+            limits: format!(
+                "wind {} m/s, gusts {} m/s at takeoff height",
+                s.limits.max_wind_ms, s.limits.max_gust_ms
+            ),
+            flash,
+        }
+    }
+}
+
+/// A row of the resolution requests table.
+pub struct RequestRow {
+    pub callsign: String,
+    pub action: String,
+    pub against: String,
+    pub in_s: String,
+    pub risk: String,
+    pub status: &'static str,
+    pub status_kind: &'static str,
+}
+
+/// A row of the top cells table.
+pub struct CellRow {
+    pub rank: usize,
+    pub cell: String,
+    pub lon: f64,
+    pub lat: f64,
+    pub altitude: String,
+    pub in_s: String,
+    pub summed: String,
+    pub collision: String,
+    pub conflict: bool,
+    pub aircraft: Vec<(String, String)>,
+}
+
+/// The Conflicts screen's tables.
+pub struct ConflictsView {
+    pub ready: bool,
+    pub error: Option<String>,
+    pub summary: String,
+    pub requests: Vec<RequestRow>,
+    pub cells: Vec<CellRow>,
+    pub more_cells: usize,
+}
+
+fn action_text(m: sim_conflict::Manoeuvre, t: &sim_conflict::Targets) -> String {
+    use sim_conflict::Manoeuvre as M;
+    let ms = |v: f64| format!("{:.1} m/s", v.abs());
+    match m {
+        M::Maintain => "Maintain".into(),
+        M::Climb => format!("Climb at {}", t.vs_ms.map_or_else(String::new, ms)),
+        M::Descend => format!("Descend at {}", t.vs_ms.map_or_else(String::new, ms)),
+        M::LevelOff => "Level off".into(),
+        M::TurnLeft | M::TurnRight => format!(
+            "Turn {} to {:03.0}°",
+            if m == M::TurnLeft { "left" } else { "right" },
+            t.heading_deg.unwrap_or(0.0)
+        ),
+        M::SpeedUp | M::SlowDown => format!(
+            "{} to {}",
+            if m == M::SpeedUp {
+                "Speed up"
+            } else {
+                "Slow down"
+            },
+            t.tas_ms.map_or_else(String::new, ms)
+        ),
+    }
+}
+
+impl ConflictsView {
+    async fn build(state: &AppState) -> ConflictsView {
+        let report = match state.conflicts.report(&state.driver, &state.weather).await {
+            Ok(r) => r,
+            Err(err) => {
+                return ConflictsView {
+                    ready: false,
+                    error: Some(format!("{err:#}")),
+                    summary: String::new(),
+                    requests: Vec::new(),
+                    cells: Vec::new(),
+                    more_cells: 0,
+                }
+            }
+        };
+        let secs = |t: f64| {
+            if t.is_finite() {
+                format!("{t:.0} s")
+            } else {
+                "—".into()
+            }
+        };
+        let mut requests: Vec<RequestRow> = report
+            .advisories
+            .iter()
+            .map(|a| RequestRow {
+                callsign: a.callsign.clone(),
+                action: action_text(a.manoeuvre, &a.targets),
+                against: a
+                    .against
+                    .iter()
+                    .map(|c| c.callsign.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                in_s: secs(a.first_conflict_s),
+                risk: format!("{:.1} → {:.1}", a.risk_before, a.risk_after),
+                status: if a.clear {
+                    "clears it"
+                } else {
+                    "still in conflict"
+                },
+                status_kind: if a.clear { "ok" } else { "warn" },
+            })
+            .collect();
+        requests.extend(report.unresolved.iter().map(|u| RequestRow {
+            callsign: format!("{} and {}", u.a.callsign, u.b.callsign),
+            action: "No advisory resolves it".into(),
+            against: String::new(),
+            in_s: secs(u.first_s),
+            risk: format!("peak {:.2} aircraft", u.peak_total),
+            status: "unresolved",
+            status_kind: "bad",
+        }));
+        let cells: Vec<CellRow> = report
+            .cells
+            .iter()
+            .take(10)
+            .enumerate()
+            .map(|(i, c)| {
+                let (lon, lat) = c.cell.centroid().unwrap_or((0.0, 0.0));
+                CellRow {
+                    rank: i + 1,
+                    cell: c.cell.to_hex(),
+                    lon,
+                    lat,
+                    altitude: format!("{:.0}–{:.0} m", c.alt_from_m, c.alt_to_m),
+                    in_s: secs(c.t_s),
+                    summed: format!("{:.2}", c.summed),
+                    collision: format!("{:.0}%", c.collision * 100.0),
+                    conflict: c.conflict,
+                    aircraft: c
+                        .aircraft
+                        .iter()
+                        .map(|a| (a.callsign.clone(), format!("{:.0}%", a.probability * 100.0)))
+                        .collect(),
+                }
+            })
+            .collect();
+        ConflictsView {
+            ready: true,
+            error: None,
+            summary: format!(
+                "Tick {} · {} aircraft in the air · resolution {} cells (~{:.0} m, the {}'s) · {:.0} s ahead in {:.0} s steps · conflict at {:.1} aircraft expected in a cell · assessed in {:.0} ms",
+                thousands(report.tick),
+                report.aircraft,
+                report.resolution,
+                sim_core::cell::nominal_cell_edge_meters(report.resolution),
+                report.resolution_from,
+                report.horizon_s,
+                report.step_s,
+                report.threshold,
+                report.took_ms
+            ),
+            requests,
+            more_cells: report.cells.len().saturating_sub(cells.len()),
+            cells,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "conflicts.html")]
+struct ConflictsTemplate {
+    nav: &'static str,
+    control: ControlView,
+    conflicts: ConflictsView,
+    basemaps: &'static [Basemap],
+    resolutions: Vec<ResolutionOption>,
+}
+
+/// An entry of the cell resolution menu.
+pub struct ResolutionOption {
+    /// Empty for the pack's or world's.
+    pub value: String,
+    pub label: String,
+    pub selected: bool,
+}
+
+fn resolution_options(state: &AppState) -> Vec<ResolutionOption> {
+    let settings = crate::routes::api::conflict_settings_of(state);
+    let size = |r: i32| {
+        let m = sim_core::cell::nominal_cell_edge_meters(r);
+        if m >= 1_000.0 {
+            format!("{:.1} km", m / 1_000.0)
+        } else {
+            format!("{:.0} m", m)
+        }
+    };
+    let chosen = settings.from == "operator";
+    let fallback = crate::conflicts::ConflictService::default_resolution(&state.driver.view());
+    let mut out = vec![ResolutionOption {
+        value: String::new(),
+        label: format!(
+            "{} ({}, ~{})",
+            if fallback.from == "pack" {
+                "Pack's"
+            } else {
+                "World's"
+            },
+            fallback.resolution,
+            size(fallback.resolution)
+        ),
+        selected: !chosen,
+    }];
+    for r in settings.min_resolution..=settings.max_resolution {
+        out.push(ResolutionOption {
+            value: r.to_string(),
+            label: format!("{r} (~{})", size(r)),
+            selected: chosen && r == settings.resolution,
+        });
+    }
+    out
+}
+
+#[derive(Deserialize)]
+pub struct ResolutionForm {
+    #[serde(default)]
+    resolution: String,
+}
+
+#[derive(Template)]
+#[template(path = "fragments/conflicts.html")]
+struct ConflictsFragment {
+    conflicts: ConflictsView,
+}
+
+#[derive(Template)]
+#[template(path = "weather.html")]
+struct WeatherTemplate {
+    nav: &'static str,
+    control: ControlView,
+    weather: WeatherView,
+    basemaps: &'static [Basemap],
+}
+
+#[derive(Template)]
+#[template(path = "fragments/weather.html")]
+struct WeatherFragment {
+    weather: WeatherView,
+}
+
+#[derive(Template)]
+#[template(path = "guide.html")]
+struct GuideTemplate {
+    nav: &'static str,
+    docs: &'static crate::docs::Docs,
+    page: &'static crate::docs::Page,
+}
+
+#[derive(Template)]
+#[template(path = "docs.html")]
+struct DocsTemplate {
+    nav: &'static str,
+    docs: &'static crate::openapi::DocsView,
+}
+
 #[derive(Template)]
 #[template(path = "run.html")]
 struct RunTemplate {
@@ -305,6 +722,22 @@ struct StateTemplate {
     cell: CellView,
     view_resolution: String,
     resolution: String,
+    basemaps: &'static [Basemap],
+}
+
+#[derive(Template)]
+#[template(path = "geofences.html")]
+struct GeofencesTemplate {
+    nav: &'static str,
+    control: ControlView,
+    basemaps: &'static [Basemap],
+}
+
+#[derive(Template)]
+#[template(path = "stations.html")]
+struct StationsTemplate {
+    nav: &'static str,
+    control: ControlView,
     basemaps: &'static [Basemap],
 }
 
@@ -458,6 +891,119 @@ async fn logout() -> Response {
 
 // ------------------------------------------------------------------ pages
 
+async fn conflicts_page(State(state): State<AppState>) -> Response {
+    render(ConflictsTemplate {
+        nav: "conflicts",
+        control: ControlView::build(&state, None),
+        conflicts: ConflictsView::build(&state).await,
+        basemaps: BASEMAPS,
+        resolutions: resolution_options(&state),
+    })
+}
+
+async fn action_conflict_resolution(
+    State(state): State<AppState>,
+    Form(form): Form<ResolutionForm>,
+) -> Response {
+    let chosen = form.resolution.trim().parse::<i32>().ok();
+    let mut view = match state.conflicts.choose_resolution(chosen) {
+        Ok(()) => ConflictsView::build(&state).await,
+        Err(err) => {
+            let mut v = ConflictsView::build(&state).await;
+            v.error = Some(err);
+            v
+        }
+    };
+    if view.error.is_none() {
+        view.ready = true;
+    }
+    render(ConflictsFragment { conflicts: view })
+}
+
+async fn conflicts_fragment(State(state): State<AppState>) -> Response {
+    render(ConflictsFragment {
+        conflicts: ConflictsView::build(&state).await,
+    })
+}
+
+async fn weather_page(State(state): State<AppState>) -> Response {
+    render(WeatherTemplate {
+        nav: "weather",
+        control: ControlView::build(&state, None),
+        weather: WeatherView::build(&state, None),
+        basemaps: BASEMAPS,
+    })
+}
+
+async fn weather_fragment(State(state): State<AppState>) -> Response {
+    render(WeatherFragment {
+        weather: WeatherView::build(&state, None),
+    })
+}
+
+async fn action_weather_refresh(State(state): State<AppState>) -> Response {
+    let flash = match state.weather.refresh(&state.driver).await {
+        Ok(s) => match &s.error {
+            Some(err) => Flash::bad(format!("Refresh failed: {err}")),
+            None if s.cache_hit => {
+                Flash::ok("Refreshed from the cache: the forecast has not moved this hour.")
+            }
+            None => Flash::ok(format!("Refreshed: {} Open-Meteo locations.", s.locations)),
+        },
+        Err(err) => Flash::warn(format!("{err:#}")),
+    };
+    render(WeatherFragment {
+        weather: WeatherView::build(&state, Some(flash)),
+    })
+}
+
+/// The API reference, rendered from the OpenAPI document. Outside the token
+/// wall, like the document itself: it says how to use the API, not what is in
+/// the world.
+async fn docs_page() -> Response {
+    render(DocsTemplate {
+        nav: "docs",
+        docs: &crate::openapi::VIEW,
+    })
+}
+
+/// The guides (`docs/*.md`, compiled in). Public for the same reason as the
+/// API reference.
+async fn guide_index() -> Response {
+    let docs = &*crate::docs::DOCS;
+    render_guide(docs, &docs.pages[0])
+}
+
+async fn guide_page(Path(slug): Path<String>) -> Response {
+    let docs = &*crate::docs::DOCS;
+    match docs.page(&slug) {
+        Some(page) => render_guide(docs, page),
+        None => (StatusCode::NOT_FOUND, "no such page in the docs").into_response(),
+    }
+}
+
+async fn guide_figure(Path(name): Path<String>) -> Response {
+    match crate::docs::figure(&name) {
+        Some(svg) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                (header::CACHE_CONTROL, "public, max-age=60"),
+            ],
+            svg,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such figure in the docs").into_response(),
+    }
+}
+
+fn render_guide(docs: &'static crate::docs::Docs, page: &'static crate::docs::Page) -> Response {
+    render(GuideTemplate {
+        nav: "docs",
+        docs,
+        page,
+    })
+}
+
 async fn run_page(State(state): State<AppState>) -> Response {
     render(RunTemplate {
         nav: "run",
@@ -483,6 +1029,22 @@ async fn state_page(State(state): State<AppState>, Query(query): Query<CellQuery
         cell: cell_view(&view, query.cell.as_deref()),
         view_resolution: view.config.grid.view_resolution.to_string(),
         resolution: view.meta.resolution.to_string(),
+        basemaps: BASEMAPS,
+    })
+}
+
+async fn geofences_page(State(state): State<AppState>) -> Response {
+    render(GeofencesTemplate {
+        nav: "geofences",
+        control: ControlView::build(&state, None),
+        basemaps: BASEMAPS,
+    })
+}
+
+async fn stations_page(State(state): State<AppState>) -> Response {
+    render(StationsTemplate {
+        nav: "stations",
+        control: ControlView::build(&state, None),
         basemaps: BASEMAPS,
     })
 }
@@ -661,7 +1223,10 @@ async fn action_load(State(state): State<AppState>, Path(id): Path<String>) -> R
     let wanted = id.clone();
     let blob = tokio::task::spawn_blocking(move || store.load(&wanted)).await;
     match blob {
-        Ok(Ok(blob)) => {
+        Ok(Ok(mut blob)) => {
+            if let Err(err) = state.weather.prepare(&mut blob).await {
+                return control_with(&state, Flash::bad(err.to_string()));
+            }
             act(
                 &state,
                 Control::Load(Box::new(blob)),
@@ -930,7 +1495,12 @@ fn tick_seconds(config: &Config) -> Option<f64> {
 fn format_sim_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor() as u64;
     let (days, rest) = (total / 86_400, total % 86_400);
-    let clock = format!("{:02}:{:02}:{:02}", rest / 3600, rest % 3600 / 60, rest % 60);
+    let clock = format!(
+        "{:02}:{:02}:{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    );
     if days > 0 {
         format!("{days} d {clock}")
     } else {
