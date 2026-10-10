@@ -2075,6 +2075,14 @@ fn a_checkpoint_in_wind_replays_exactly_and_keeps_an_updated_wind() {
     restored.load_cells(cells).unwrap();
     restored.restore_fields(&original.fields()).unwrap();
     restored.set_rng_state(original.rng_state());
+    restored.set_tick(700);
+    // Before stepping again, the restored world is at the saved tick: the
+    // weather overlay's time (what conflict prediction reads) included.
+    assert_eq!(
+        restored.overlays()["weather"],
+        original.overlays()["weather"]
+    );
+    assert!(original.overlays()["weather"]["utc"].is_number());
     run(&mut original, 701, 3_000);
     run(&mut restored, 701, 3_000);
     assert_eq!(hash(&original), hash(&restored));

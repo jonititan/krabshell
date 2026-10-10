@@ -155,7 +155,12 @@ pub struct ConflictService {
     /// Unix seconds of the last look.
     looked: AtomicI64,
     started: Instant,
+    /// Reports of rewound ticks, most recent last.
+    past: std::sync::Mutex<std::collections::VecDeque<Arc<ConflictReport>>>,
 }
+
+/// Reports of rewound ticks kept for a replay that asks again.
+const PAST_REPORTS: usize = 16;
 
 impl Default for ConflictService {
     fn default() -> Self {
@@ -165,6 +170,7 @@ impl Default for ConflictService {
             busy: Mutex::new(()),
             looked: AtomicI64::new(i64::MIN),
             started: Instant::now(),
+            past: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 }
@@ -252,6 +258,35 @@ impl ConflictService {
                 .await??;
         let report = Arc::new(report);
         self.latest.store(Some(Arc::clone(&report)));
+        Ok(report)
+    }
+
+    /// The report for a rewound view: the tick as it was, with the weather
+    /// field the run has now (the same field, unless it was refreshed since).
+    pub async fn report_at(
+        &self,
+        view: Arc<Published>,
+        weather: &WeatherService,
+    ) -> anyhow::Result<Arc<ConflictReport>> {
+        let resolution = self.resolution(&view);
+        let found = |past: &std::collections::VecDeque<Arc<ConflictReport>>| {
+            past.iter()
+                .find(|r| r.tick == view.meta.tick && r.resolution == resolution.resolution)
+                .cloned()
+        };
+        if let Some(r) = found(&self.past.lock().unwrap_or_else(|e| e.into_inner())) {
+            return Ok(r);
+        }
+        let field = weather.current().and_then(|w| w.field.clone());
+        let report = Arc::new(
+            tokio::task::spawn_blocking(move || compute(&view, field.as_deref(), resolution))
+                .await??,
+        );
+        let mut past = self.past.lock().unwrap_or_else(|e| e.into_inner());
+        if past.len() >= PAST_REPORTS {
+            past.pop_front();
+        }
+        past.push_back(Arc::clone(&report));
         Ok(report)
     }
 

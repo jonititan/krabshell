@@ -1555,6 +1555,13 @@ impl World {
         self.refresh_range();
     }
 
+    /// Set the clock of a restored world to the tick it was saved at, so
+    /// what reads it before the next step (intents, the weather time) sees
+    /// that tick rather than 0.
+    pub fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+
     /// Step once as `tick`. For embedders that keep their own clock.
     pub fn step_at(&mut self, schedule: &mut Schedule, tick: u64) {
         self.pinned = Some(tick);

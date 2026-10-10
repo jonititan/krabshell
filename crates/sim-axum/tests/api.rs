@@ -1584,3 +1584,46 @@ async fn a_manned_aircraft_is_drawn_and_assessed_only_while_it_flies() {
     let (_, body, _) = call(&h, get("/api/v1/conflicts")).await;
     assert_eq!(count(&body), 1);
 }
+
+#[tokio::test]
+async fn the_dashboard_reads_can_be_rewound_within_the_history() {
+    let h = pack_harness("london-patrol");
+    call(&h, post("/api/v1/run/step", json!({"n": 150}))).await;
+    let (status, body, _) = call(&h, get("/api/v1/history")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["available"], true);
+    assert_eq!(body["live_tick"], 150);
+    assert_eq!(body["every_ticks"], 100);
+
+    // The history thread takes its keyframes a moment after the ticks.
+    let mut first = Value::Null;
+    for _ in 0..100 {
+        let (_, body, _) = call(&h, get("/api/v1/history")).await;
+        first = body["first_tick"].clone();
+        if first == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(first, 0);
+
+    let response = h
+        .router
+        .clone()
+        .oneshot(get("/api/v1/state/entities?kind=drone&at=40"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-sim-tick"], "40");
+    for path in [
+        "/api/v1/state/overlays?at=40",
+        "/api/v1/state/map?at=40",
+        "/api/v1/reports?at=40",
+        "/api/v1/conflicts?at=40&outlines=false",
+    ] {
+        let (status, body, _) = call(&h, get(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+    let (status, body, _) = call(&h, get("/api/v1/state/entities?at=151")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}

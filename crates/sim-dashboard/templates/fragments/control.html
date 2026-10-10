@@ -15,6 +15,32 @@
   {% endmatch %}
 </div>
 {% endif %}
+{% if control.timeline %}
+{# Rewind. Hidden until timeline.js finds out what the history holds. #}
+<div id="timeline" class="panel timeline" hidden>
+  <div class="timeline-row">
+    <button type="button" data-act="rewind" class="primary" title="Pause the run and step back through what just happened">⏪ Rewind</button>
+    <span class="timeline-review">
+      <button type="button" data-act="back-big" title="Back 10 s">−10 s</button>
+      <button type="button" data-act="back" title="Back one tick">◀</button>
+      <button type="button" data-act="play" title="Play forward from here; the run carries on when it reaches now">▶ Replay</button>
+      <button type="button" data-act="fwd" title="Forward one tick">▶</button>
+      <button type="button" data-act="fwd-big" title="Forward 10 s">+10 s</button>
+      <label class="choice">Replay speed
+        <select data-act="rate">
+          <option value="1">×1</option>
+          <option value="4">×4</option>
+          <option value="16">×16</option>
+          <option value="64">×64</option>
+        </select>
+      </label>
+      <button type="button" data-act="live" title="Back to now, still paused">⏭ Now</button>
+    </span>
+    <span class="timeline-status mono" aria-live="polite"></span>
+  </div>
+  <input class="timeline-scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Tick to show">
+</div>
+{% endif %}
 <section id="control"
          class="panel control"
          hx-get="/fragments/control"

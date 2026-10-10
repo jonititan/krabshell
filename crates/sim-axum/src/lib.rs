@@ -144,6 +144,7 @@ pub fn router(state: AppState) -> Router {
         .route("/weather/refresh", post(routes::weather::weather_refresh))
         .route("/weather/cells", get(routes::weather::weather_cells))
         .route("/weather/cells/{cell}", get(routes::weather::weather_cell))
+        .route("/history", get(routes::api::history))
         .route("/ws", get(routes::ws::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),

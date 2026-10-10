@@ -376,6 +376,24 @@ The `hash` is an unsigned 64-bit integer sent as a JSON number. JavaScript
 cannot hold it exactly; compare hashes in a language with 64-bit integers, or
 as the raw text.
 
+### Rewinding
+
+In the `gold` profile the driver keeps the recent past and rebuilds any tick
+in it on request. `GET /history` says what it covers:
+
+```json
+{"available": true, "first_tick": 1800, "live_tick": 7800, "every_ticks": 100, "tick_seconds": 0.1}
+```
+
+Add `at=<tick>` to `GET /state/map`, `/state/entities`, `/state/overlays`,
+`/state/cells/{cell}`, `/reports` or `/conflicts` to read the world as it was
+at that tick, anywhere from `first_tick` to `live_tick`. A tick outside that is
+`404`. The answer is rebuilt from a keyframe (one every `run.history_every_ticks`
+ticks, the last `run.history_keyframes` kept) by replaying the logged intents
+and steps, so it is the world exactly as it was; it costs up to
+`history_every_ticks` steps the first time, and nothing for a tick asked for
+again. In the `fast` profile `available` is false and `reason` says why.
+
 ### Looking up a cell
 
 `GET /cells/lookup?lon=-0.1276&lat=51.5072` compiles a coordinate to its cell

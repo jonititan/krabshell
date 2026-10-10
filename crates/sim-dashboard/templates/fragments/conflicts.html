@@ -4,7 +4,7 @@
 #}
 <div id="conflict-tables"
      hx-get="/fragments/conflicts"
-     hx-trigger="every 2s"
+     hx-trigger="every 2s, krabshell:at from:document"
      hx-swap="outerHTML">
   {% match conflicts.error %}
   {% when Some with (err) %}

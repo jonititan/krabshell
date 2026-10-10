@@ -34,6 +34,7 @@ const STATIONS_JS: &str = include_str!("../../../sim-dashboard/assets/stations.j
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
 const WEATHER_JS: &str = include_str!("../../../sim-dashboard/assets/weather.js");
 const CONFLICTS_JS: &str = include_str!("../../../sim-dashboard/assets/conflicts.js");
+const TIMELINE_JS: &str = include_str!("../../../sim-dashboard/assets/timeline.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
 /// milsymbol 3.0.4 (MIT), which draws the maps' APP-6 / MIL-STD-2525 symbols.
 /// Vendored so the dashboard works offline. Its path carries the version, so
@@ -66,6 +67,10 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route(
             "/assets/conflicts.js",
             get(|| asset(CONFLICTS_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/timeline.js",
+            get(|| asset(TIMELINE_JS, "text/javascript")),
         )
         .route(
             "/assets/htmx.min.js",
@@ -209,6 +214,10 @@ pub struct ControlView {
     /// action's reply (out of band). The once-a-second poll leaves it out, so
     /// it never wipes the outcome of the last action.
     pub flash_slot: bool,
+    /// Render the rewind timeline beside the panel: on a page only. Script
+    /// drives it from then on (timeline.js), so neither the poll nor an
+    /// action's reply touches it.
+    pub timeline: bool,
 }
 
 impl ControlView {
@@ -271,6 +280,7 @@ impl ControlView {
             truncated: view.truncated,
             fault: health.fault.clone(),
             last_good_tick: thousands(health.last_good_tick),
+            timeline: flash.is_none(),
             flash,
             flash_slot: true,
         }
@@ -508,8 +518,15 @@ fn action_text(m: sim_conflict::Manoeuvre, t: &sim_conflict::Targets) -> String 
 }
 
 impl ConflictsView {
-    async fn build(state: &AppState) -> ConflictsView {
-        let report = match state.conflicts.report(&state.driver, &state.weather).await {
+    async fn build(state: &AppState, at: Option<u64>) -> ConflictsView {
+        let report = match at {
+            None => state.conflicts.report(&state.driver, &state.weather).await,
+            Some(_) => match crate::routes::api::view_for(state, at).await {
+                Ok(view) => state.conflicts.report_at(view, &state.weather).await,
+                Err(err) => Err(anyhow::anyhow!("{}", err.0.detail)),
+            },
+        };
+        let report = match report {
             Ok(r) => r,
             Err(err) => {
                 return ConflictsView {
@@ -904,7 +921,7 @@ async fn conflicts_page(State(state): State<AppState>) -> Response {
     render(ConflictsTemplate {
         nav: "conflicts",
         control: ControlView::build(&state, None),
-        conflicts: ConflictsView::build(&state).await,
+        conflicts: ConflictsView::build(&state, None).await,
         basemaps: BASEMAPS,
         resolutions: resolution_options(&state),
     })
@@ -916,9 +933,9 @@ async fn action_conflict_resolution(
 ) -> Response {
     let chosen = form.resolution.trim().parse::<i32>().ok();
     let mut view = match state.conflicts.choose_resolution(chosen) {
-        Ok(()) => ConflictsView::build(&state).await,
+        Ok(()) => ConflictsView::build(&state, None).await,
         Err(err) => {
-            let mut v = ConflictsView::build(&state).await;
+            let mut v = ConflictsView::build(&state, None).await;
             v.error = Some(err);
             v
         }
@@ -929,9 +946,12 @@ async fn action_conflict_resolution(
     render(ConflictsFragment { conflicts: view })
 }
 
-async fn conflicts_fragment(State(state): State<AppState>) -> Response {
+async fn conflicts_fragment(
+    State(state): State<AppState>,
+    Query(q): Query<crate::routes::api::AtQuery>,
+) -> Response {
     render(ConflictsFragment {
-        conflicts: ConflictsView::build(&state).await,
+        conflicts: ConflictsView::build(&state, q.at).await,
     })
 }
 
@@ -1084,6 +1104,7 @@ async fn io_page(State(state): State<AppState>) -> Response {
 async fn control_fragment(State(state): State<AppState>) -> Response {
     let mut control = ControlView::build(&state, None);
     control.flash_slot = false;
+    control.timeline = false;
     render(ControlFragment { control })
 }
 
@@ -1097,10 +1118,16 @@ async fn scenarios_fragment(State(state): State<AppState>) -> Response {
 pub struct CellQuery {
     #[serde(default)]
     cell: Option<String>,
+    /// Rewound to this tick.
+    #[serde(default)]
+    at: Option<u64>,
 }
 
 async fn cell_fragment(State(state): State<AppState>, Query(query): Query<CellQuery>) -> Response {
-    let view = state.driver.view();
+    // A tick that has left the history shows the live cell rather than nothing.
+    let view = crate::routes::api::view_for(&state, query.at)
+        .await
+        .unwrap_or_else(|_| state.driver.view());
     render(CellFragment {
         cell: cell_view(&view, query.cell.as_deref()),
     })

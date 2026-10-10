@@ -94,6 +94,39 @@ The panel also raises banners for three faults:
 - the published view hit `run.max_published_cells`, so some cells are missing
   from the map and from lookups.
 
+## Rewind
+
+Above the control panel, **⏪ Rewind** pauses the run and lets you step back
+through what just happened, then replay it and carry on.
+
+- **⏪ Rewind** pauses the run (so the past stops growing) and puts you in
+  review at the current tick. The strip turns amber and reads
+  `REVIEW · tick 2 470 · 00:04:07 · 30.1 s behind now`.
+- **◀ / ▶** step one tick; **−10 s / +10 s** ten simulated seconds; the slider
+  drags to any tick in the history.
+- **▶ Replay** plays forward from the cursor at the chosen speed (×1 is real
+  time, up to ×64). When it reaches now, review ends and the run starts again
+  at the speed it had: what already happened plays first, then the simulation
+  picks up where it left off. Press it again to pause the replay.
+- **⏭ Now** leaves review without starting the run. Pressing Start or Step on
+  the control panel also ends review.
+
+While reviewing, the maps (drones, aircraft and their rings, people and
+vehicles, occupancy, overlays), the cell inspector and the Conflicts screen's
+heatmap and tables show the cursor's tick. The control panel, the geofence and
+station lists and anything sent out (MAVLink, CoT, run logs) stay live.
+Sightings, which fade in as they are reported, are not replayed. Each browser
+tab has its own cursor, kept while you move between pages.
+
+The past is rebuilt, not recorded. Every `run.history_every_ticks` ticks (100)
+the driver hands a keyframe of the world to a history thread, which keeps the
+last `run.history_keyframes` (60: ten minutes at 0.1 s a tick), and every intent
+applied since the oldest. To show a tick it restores the keyframe before and
+replays the intents and steps up to it, so what you see is the world exactly
+as it was, conflicts included. That needs the `gold` profile, which replays to
+the bit; with `fast` the strip says rewind is unavailable. A load, reset or
+checkpoint restore starts the history again.
+
 ## Run
 
 The control panel and a glossary: sim time, sim time per tick, sim rate,
@@ -245,6 +278,7 @@ need more say so with a `<noscript>` note.
 | Intents form and activity | Live cell view over the WebSocket |
 | Weather status and refresh | Wind map and wind query |
 | Conflict resolution choice and tables | Conflict heatmap |
+| | Rewind ([timeline.js](../crates/sim-dashboard/assets/timeline.js)) |
 | Downloads | Checkpoint restore |
 
 htmx itself is a script, so "without JavaScript" here means without anything

@@ -28,7 +28,7 @@ Each layer has a checkbox under the map.
 
 | Layer | Key | Shows | Source |
 |---|---|---|---|
-| Drones | `drones` | Delivery drones and intruders | `/api/v1/state/entities?kind=drone,intruder` |
+| Drones & aircraft | `drones` | Drones, intruders and manned aircraft | `/api/v1/state/entities?kind=drone,intruder,aircraft` |
 | Hubs and landmarks | `pois` | The model's points of interest: depots and named places | `/api/v1/state/entities?kind=poi` |
 | Delivery addresses | `addresses` | Every address in the pack's address book, coloured by the hub that serves it. Off until ticked | `/api/v1/state/addresses` |
 | Orders and drop-offs | `deliveries` | Open orders' addresses (a ring while waiting, filled once a drone is on its way) and recent drop-offs | `/api/v1/state/overlays` (`orders`), `/api/v1/reports` |
@@ -67,14 +67,16 @@ the page's own tool (a fence being drawn, the wind, the heatmap).
 
 ## Symbology
 
-Drones, intruders, sightings and stations are NATO joint military symbols
+Drones, intruders, manned aircraft, sightings and stations are NATO joint military symbols
 (APP-6 / MIL-STD-2525), drawn by
 [milsymbol](https://github.com/spatialillusions/milsymbol) 3.0.4 (MIT). The
 library is compiled into the binary and served at
 `/assets/milsymbol-3.0.4.js`, so the dashboard needs no internet for symbols.
 
-Drones and intruders use the 2525 letter SIDCs of the CoT types krabshell
-sends TAK for them, so the dashboard and TAK show the same symbol. The rest
+Drones, intruders and manned aircraft use the 2525 letter SIDCs of the CoT
+types krabshell sends TAK for them (a manned aircraft is `SNAPCF`, CoT
+`a-n-A-C-F`, neutral civilian fixed-wing), so the dashboard and TAK show the
+same symbol. The rest
 use APP-6 D / MIL-STD-2525D 20-digit SIDCs, which have the civilian
 individuals and vehicles the letter codes lack.
 
@@ -117,10 +119,20 @@ The rest of the map is not military symbology:
 Sightings fade over 30 seconds. When the map opens it only learns where the
 report stream is, so it does not replay old sightings at once.
 
-Labels are kept off a crowded map. Moving drones and intruders are always
-named; a drone's label says what it is doing (`MEGA-3 · delivering`) or,
-failing that, its flight mode. Parked drones are named once zoomed in to
-street scale. Stations are named, with slots in use (`Roof 2 · 1/3 slots`),
+Labels are kept off a crowded map. Everything in the air (drones moving or
+hovering, intruders, manned aircraft) is always named; a drone's label says
+what it is doing (`MEGA-3 · delivering`) or, failing that, its flight mode.
+Labels of anything in the air end with its flight level: altitude above mean
+sea level in thousands of feet, rounded down, so `RELAY-4 · flying · FL3` is
+between 3 000 and 3 999 ft, FL1 is 1 000 ft and FL23 23 100 ft. Parked drones
+are named once zoomed in to street scale.
+
+A manned aircraft is drawn with a ring of 1 000 ft (304.8 m) radius round it.
+The ring is grey and dashed, and turns solid red, filled, while a drone or
+intruder is inside it and within 150 m above or below: a loss of separation
+you can see. The ring's size and the 150 m are fixed in the map; the conflict
+service's own minima are the pack's `manned_lateral_m` and `manned_vertical_m`
+(300 m and 150 m by default), see [Conflicts](conflicts.md). Stations are named, with slots in use (`Roof 2 · 1/3 slots`),
 once zoomed in a little; regions and fence numbers likewise.
 
 If milsymbol fails to load, the map falls back to plain shapes: arrows for

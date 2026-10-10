@@ -471,6 +471,9 @@ pub struct MapBody {
 pub struct MapQuery {
     #[serde(default)]
     pub res: Option<i32>,
+    /// Rewound to this tick.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 /// Occupancy rolled up to a display resolution, with polygons (spec §7.3).
@@ -482,7 +485,7 @@ pub async fn state_map(
     State(state): State<AppState>,
     Query(query): Query<MapQuery>,
 ) -> ApiResult<Json<MapBody>> {
-    let view = state.driver.view();
+    let view = view_for(&state, query.at).await?;
     let resolution = query
         .res
         .unwrap_or(view.config.grid.view_resolution)
@@ -526,9 +529,10 @@ pub async fn state_map(
 pub async fn state_cell(
     State(state): State<AppState>,
     Path(cell): Path<String>,
+    Query(q): Query<AtQuery>,
 ) -> ApiResult<Json<CellBag>> {
     let cell = GeoCell::parse(&cell).map_err(ApiError::from)?;
-    let view = state.driver.view();
+    let view = view_for(&state, q.at).await?;
     match view.bag(cell) {
         Some(bag) => Ok(Json(bag.clone())),
         None if view.truncated => Err(ApiError::new(
@@ -700,6 +704,63 @@ async fn submit_intent(state: &AppState, intent: Intent) -> ApiResult<Json<Inten
     }
 }
 
+// ------------------------------------------------------------- history
+
+/// `?at=<tick>` on the dashboard's read endpoints: the world as it was at
+/// that tick, rebuilt from the rewind history. Absent, the live world.
+#[derive(Deserialize, Default)]
+pub struct AtQuery {
+    #[serde(default)]
+    pub at: Option<u64>,
+}
+
+/// The live view, or with `at` the world at that tick.
+pub(crate) async fn view_for(state: &AppState, at: Option<u64>) -> ApiResult<Arc<Published>> {
+    let Some(tick) = at else {
+        return Ok(state.driver.view());
+    };
+    let driver = state.driver.clone();
+    tokio::task::spawn_blocking(move || driver.view_at(tick))
+        .await
+        .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))?
+        .map_err(|err| match err {
+            sim_engine::DriverError::Refused(message) => {
+                ApiError::new(ErrorCode::NotFound, message)
+            }
+            other => from_driver(other),
+        })
+}
+
+#[derive(Serialize)]
+pub struct HistoryBody {
+    /// Rewind is on for this world.
+    pub available: bool,
+    /// Why not, when it is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+    /// The oldest tick that can be shown.
+    pub first_tick: Option<u64>,
+    /// The live tick: the newest.
+    pub live_tick: u64,
+    pub every_ticks: u64,
+    pub tick_seconds: Option<f64>,
+}
+
+/// What rewind can show: every tick from `first_tick` to `live_tick`, each
+/// through `?at=` on the state, overlay, report, cell and conflict endpoints.
+pub async fn history(State(state): State<AppState>) -> Json<HistoryBody> {
+    let range = state.driver.history_range();
+    let view = state.driver.view();
+    Json(HistoryBody {
+        available: range.off.is_none(),
+        reason: range.off,
+        first_tick: range.first_tick,
+        live_tick: view.meta.tick,
+        every_ticks: range.every_ticks,
+        tick_seconds: tick_seconds(&view),
+    })
+}
+
 // ------------------------------------------------------------- overlays
 
 /// What the model publishes beside its agents, as it publishes it: for the
@@ -707,13 +768,14 @@ async fn submit_intent(state: &AppState, intent: Intent) -> ApiResult<Json<Inten
 /// with none. The tick is in `x-sim-tick`.
 pub async fn state_overlays(
     State(state): State<AppState>,
-) -> (axum::http::HeaderMap, Json<serde_json::Value>) {
-    let view = state.driver.view();
+    Query(q): Query<AtQuery>,
+) -> ApiResult<(axum::http::HeaderMap, Json<serde_json::Value>)> {
+    let view = view_for(&state, q.at).await?;
     let mut headers = axum::http::HeaderMap::new();
     if let Ok(tick) = axum::http::HeaderValue::from_str(&view.meta.tick.to_string()) {
         headers.insert("x-sim-tick", tick);
     }
-    (headers, Json(view.overlays.clone()))
+    Ok((headers, Json(view.overlays.clone())))
 }
 
 /// Every delivery address in the loaded pack's address book, for the map's
@@ -1300,6 +1362,9 @@ pub struct EntitiesQuery {
     /// a position.
     #[serde(default)]
     pub kind: Option<String>,
+    /// Rewound to this tick.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1335,8 +1400,8 @@ pub struct Entity {
 pub async fn state_entities(
     State(state): State<AppState>,
     Query(query): Query<EntitiesQuery>,
-) -> (axum::http::HeaderMap, Json<Vec<Entity>>) {
-    let view = state.driver.view();
+) -> ApiResult<(axum::http::HeaderMap, Json<Vec<Entity>>)> {
+    let view = view_for(&state, query.at).await?;
     let mut headers = axum::http::HeaderMap::new();
     let mut header = |name: &'static str, value: String| {
         if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
@@ -1401,7 +1466,7 @@ pub async fn state_entities(
             });
         }
     }
-    (headers, Json(out))
+    Ok((headers, Json(out)))
 }
 
 #[derive(Deserialize)]
@@ -1409,6 +1474,9 @@ pub struct ReportsQuery {
     /// Only reports with a larger `seq`. Omit for everything still held.
     #[serde(default)]
     pub since: u64,
+    /// Rewound to this tick: the reports up to it.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1426,13 +1494,13 @@ pub struct ReportsBody {
 pub async fn reports(
     State(state): State<AppState>,
     Query(query): Query<ReportsQuery>,
-) -> Json<ReportsBody> {
-    let view = state.driver.view();
-    Json(ReportsBody {
+) -> ApiResult<Json<ReportsBody>> {
+    let view = view_for(&state, query.at).await?;
+    Ok(Json(ReportsBody {
         tick: view.meta.tick,
         last_seq: view.reports.last().map_or(query.since, |r| r.seq),
         reports: view.reports_since(query.since).to_vec(),
-    })
+    }))
 }
 
 /// The replay log, available when the run is in the `gold` profile (spec §8.4).
@@ -1609,6 +1677,9 @@ pub struct ConflictsQuery {
     /// Leave out the cells' outlines.
     #[serde(default)]
     pub outlines: Option<bool>,
+    /// Rewound to this tick.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 /// Where the aircraft in the air could meet in the next minute, and what
@@ -1618,11 +1689,14 @@ pub async fn conflicts(
     State(state): State<AppState>,
     Query(q): Query<ConflictsQuery>,
 ) -> ApiResult<Json<crate::conflicts::ConflictReport>> {
-    let report = state
-        .conflicts
-        .report(&state.driver, &state.weather)
-        .await
-        .map_err(|err| ApiError::new(ErrorCode::Internal, format!("{err:#}")))?;
+    let report = match q.at {
+        None => state.conflicts.report(&state.driver, &state.weather).await,
+        Some(at) => {
+            let view = view_for(&state, Some(at)).await?;
+            state.conflicts.report_at(view, &state.weather).await
+        }
+    }
+    .map_err(|err| ApiError::new(ErrorCode::Internal, format!("{err:#}")))?;
     let mut report = (*report).clone();
     if q.outlines == Some(false) {
         for c in report.cells.iter_mut() {

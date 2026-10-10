@@ -127,6 +127,14 @@ pub struct RunConfig {
     /// Restart the driver automatically after a tick panic (spec §12).
     #[serde(default)]
     pub auto_recover: bool,
+    /// Ticks between rewind keyframes, in the gold profile. Stepping back
+    /// replays at most this many ticks from the keyframe before.
+    #[serde(default = "default_history_every_ticks")]
+    pub history_every_ticks: u64,
+    /// Rewind keyframes kept, oldest dropped first; 0 turns rewind off. With
+    /// the defaults that is the last 6 000 ticks: 10 minutes at 0.1 s a tick.
+    #[serde(default = "default_history_keyframes")]
+    pub history_keyframes: usize,
 }
 
 /// The address space this run occupies.
@@ -209,6 +217,13 @@ impl Config {
                 "run.intent_rate_per_actor",
                 "positive",
                 run.intent_rate_per_actor,
+            ));
+        }
+        if run.history_every_ticks == 0 {
+            return Err(out_of_range(
+                "run.history_every_ticks",
+                "at least 1",
+                run.history_every_ticks,
             ));
         }
         if run.max_published_cells == 0 {
@@ -326,6 +341,8 @@ impl Default for RunConfig {
             max_published_cells: default_max_published_cells(),
             intent_rate_per_actor: default_intent_rate_per_actor(),
             auto_recover: false,
+            history_every_ticks: default_history_every_ticks(),
+            history_keyframes: default_history_keyframes(),
         }
     }
 }
@@ -344,6 +361,12 @@ fn default_threads() -> u32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4)
+}
+fn default_history_every_ticks() -> u64 {
+    100
+}
+fn default_history_keyframes() -> usize {
+    60
 }
 fn default_publish_hz() -> f64 {
     20.0

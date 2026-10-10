@@ -73,6 +73,8 @@ The run configuration is everything about how the loop runs, as opposed to what 
 | `max_published_cells` | 50000 | Most cells in one published view. At least 1. |
 | `intent_rate_per_actor` | 200 | Intents per second one actor may submit, sustained; bursts of twice this are allowed. Positive. |
 | `auto_recover` | `false` | Restart the world automatically after a tick panics. |
+| `history_every_ticks` | 100 | Ticks between rewind keyframes, in the `gold` profile. Stepping back replays at most this many ticks. |
+| `history_keyframes` | 60 | Rewind keyframes kept; 0 turns rewind off. 60 × 100 ticks is ten minutes at 0.1 s a tick. |
 
 ### `[grid]`
 
