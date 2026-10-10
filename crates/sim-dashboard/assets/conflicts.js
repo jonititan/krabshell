@@ -1,12 +1,13 @@
-// The Conflicts page: a collision-probability heatmap over the shared map.
+// The Conflicts page: a conflict heatmap over the shared map.
 //
 // The map (map.js) does the projection, basemap, drones and panning; this
-// file hands it a tool that shades each A5 cell two or more aircraft could
-// share, at its worst moment in the next minute, by the chance of two or
-// more being there together (or by the summed probability), outlines the
-// cells in conflict, numbers the top ten, and links the map and the table
-// of top cells: a click on either picks the cell out in both. The tables
-// themselves are server-rendered and poll by htmx.
+// file hands it a tool that shades every A5 cell any aircraft could be in
+// over the next minute, at its highest: by the aircraft expected there (the
+// summed probability, up to 1 for one aircraft alone) or by the chance of two
+// or more together. It outlines the cells in conflict, numbers the top ten,
+// and links the map and the table of top cells: a click on either picks the
+// cell out in both. The tables themselves are server-rendered and poll by
+// htmx.
 
 (function () {
   'use strict';
@@ -43,9 +44,11 @@
     return metricSelect.value === 'summed' ? cell.summed : cell.collision;
   }
 
+  // The hot end of the ramp: at least two aircraft, so a lone aircraft's
+  // certainty is mid-scale and anything shared stands out.
   function scale() {
     if (metricSelect.value !== 'summed' || !report) return 1;
-    const most = Math.max(report.threshold, ...report.cells.map((c) => c.summed));
+    const most = report.heat.reduce((m, c) => Math.max(m, c.summed), 2 * report.threshold);
     return Math.ceil(most * 2) / 2;
   }
 
@@ -123,19 +126,23 @@
       const ink = style.getPropertyValue('--ink').trim() || '#000';
       const bad = style.getPropertyValue('--bad').trim() || '#a4232b';
       const accent = style.getPropertyValue('--accent').trim() || '#2b6cb0';
-      // Faintest first, so the worst are drawn on top.
-      const cells = report.cells.filter((c) => c.boundary.length > 2);
-      for (const c of [...cells].reverse()) {
+      // Every cell anyone could be in, faintest first so the worst are on
+      // top; then the conflicts outlined.
+      const heat = report.heat.filter((c) => c.boundary.length > 2);
+      for (const c of [...heat].reverse()) {
+        const t = Math.min(1, value(c) / top);
         trace(ctx, project, c.boundary);
-        ctx.fillStyle = colour(value(c) / top);
-        ctx.globalAlpha = 0.25 + 0.45 * Math.min(1, value(c) / top);
+        ctx.fillStyle = colour(t);
+        ctx.globalAlpha = 0.2 + 0.5 * t;
         ctx.fill();
         ctx.globalAlpha = 1;
-        if (c.conflict) {
-          ctx.strokeStyle = bad;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        }
+      }
+      const cells = report.cells.filter((c) => c.boundary.length > 2);
+      for (const c of cells.filter((x) => x.conflict)) {
+        trace(ctx, project, c.boundary);
+        ctx.strokeStyle = bad;
+        ctx.lineWidth = 2;
+        ctx.stroke();
       }
       // The top ten, numbered as in the table.
       ctx.font = '600 11px system-ui, sans-serif';
@@ -150,7 +157,7 @@
         ctx.fillStyle = ink;
         ctx.fillText(String(i + 1), x, y + 0.5);
       });
-      const chosen = picked && cells.find((c) => c.cell === picked);
+      const chosen = picked && heat.find((c) => c.cell === picked);
       if (chosen) {
         trace(ctx, project, chosen.boundary);
         ctx.setLineDash([6, 4]);
@@ -162,7 +169,7 @@
     },
     click(lon, lat) {
       if (!report) return false;
-      const hit = report.cells.find((c) => c.boundary.length > 2 && inside(c.boundary, lon, lat));
+      const hit = report.heat.find((c) => c.boundary.length > 2 && inside(c.boundary, lon, lat));
       picked = hit ? hit.cell : null;
       markRow();
       // Every click is this page's: there is no cell inspector here.
@@ -178,8 +185,15 @@
     markRow();
     map.showPlace(Number(row.dataset.lon), Number(row.dataset.lat), 400);
   });
-  // The tables are swapped every couple of seconds; keep the pick.
+  // The tables are swapped every couple of seconds; keep the pick. A new
+  // cell resolution means new cells: fetch them now.
   document.body.addEventListener('htmx:afterSwap', markRow);
+  document.body.addEventListener('htmx:afterRequest', (event) => {
+    if (event.detail.requestConfig && event.detail.requestConfig.path === '/actions/conflicts/resolution') {
+      picked = null;
+      refresh();
+    }
+  });
 
   metricSelect.addEventListener('change', () => {
     top = scale();

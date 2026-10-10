@@ -521,6 +521,11 @@
     const named = (fallback) => (d.name ? `“${d.name}”` : fallback);
     switch (r.kind) {
       case 'station':
+        if (d.action === 'divert') {
+          const who = d.callsign || (d.sysid ? `drone ${d.sysid}` : `drone ${r.observer}`);
+          const left = d.battery_pct != null ? ` on ${Math.round(Number(d.battery_pct))} %` : '';
+          return ['Diverted', `${who} diverts to ${named(`station ${d.station ?? ''}`)}${left}`, 'bad'];
+        }
         return [
           d.action === 'remove' ? 'Station removed' : 'Station added',
           `${named(`station ${d.id ?? ''}`)}` + (d.source ? ` · ${SOURCES[d.source] || d.source}` : ''),

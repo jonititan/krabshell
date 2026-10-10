@@ -72,6 +72,8 @@ fn harness_for(blob: sim_core::ScenarioBlob, weather: Arc<WeatherService>) -> Ha
 /// over every weather cell its agents' area needs.
 async fn weather_harness(name: &str) -> Harness {
     let mut blob = pack(name);
+    // This field stands in for whatever the pack asks to fetch.
+    blob.config.model.retain(|k, _| !k.starts_with("weather"));
     let (mut w, mut s, mut e, mut n) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for a in &blob.agents {
         let (lon, lat) = match (a.lon, a.lat, a.cell) {
@@ -234,7 +236,12 @@ async fn every_described_operation_reaches_a_handler() {
 #[tokio::test]
 async fn the_document_and_the_page_need_no_token() {
     let h = harness("london-patrol");
-    for uri in ["/api/v1/openapi.json", "/docs"] {
+    for uri in [
+        "/api/v1/openapi.json",
+        "/docs",
+        "/docs/api",
+        "/docs/operating",
+    ] {
         let response = h
             .router
             .clone()
@@ -248,12 +255,12 @@ async fn the_document_and_the_page_need_no_token() {
     let served: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(served["openapi"], "3.1.0");
 
-    let (_, _, page) = call(&h, "get", "/docs", None).await;
+    let (_, _, page) = call(&h, "get", "/docs/api", None).await;
     let page = String::from_utf8(page).unwrap();
     for (_, path) in operations(&DOC) {
         assert!(
             page.contains(&format!("/api/v1{path}")),
-            "/docs lacks {path}"
+            "/docs/api lacks {path}"
         );
     }
 }
@@ -492,11 +499,79 @@ async fn a_head_on_pair_is_reported_and_advised() {
     );
     assert!(r["risk_after"].as_f64().unwrap() < r["risk_before"].as_f64().unwrap());
 
+    // The heatmap has every cell either could be in, not only the shared
+    // ones: some only one of them reaches.
+    let heat = r["heat"].as_array().unwrap();
+    assert!(
+        heat.len() > cells.len(),
+        "{} heat, {} shared",
+        heat.len(),
+        cells.len()
+    );
+    assert!(heat
+        .iter()
+        .any(|c| c["collision"] == 0.0 && c["summed"].as_f64().unwrap() > 0.0));
+
     // The same tick again is the same report, not worked out afresh.
     let (_, _, again) = call(&h, "get", "/api/v1/conflicts?outlines=false", None).await;
     let again: Value = serde_json::from_slice(&again).unwrap();
     assert_eq!(again["took_ms"], r["took_ms"]);
     assert!(again["cells"][0]["boundary"].as_array().unwrap().is_empty());
+}
+
+/// The conflict cells' resolution can be chosen, refused out of range, and
+/// handed back to the world's; a new choice is a new report at once.
+#[tokio::test]
+async fn the_conflict_resolution_can_be_chosen() {
+    let h = head_on_harness();
+    call(&h, "post", "/api/v1/run/step", Some(json!({"n": 450}))).await;
+    let (status, _, bytes) = call(&h, "get", "/api/v1/conflicts/settings", None).await;
+    assert_eq!(status, StatusCode::OK);
+    check("london-patrol", "get", "/conflicts/settings", "200", &bytes);
+    let s: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        (s["resolution"].as_i64(), s["from"].as_str()),
+        (Some(15), Some("world"))
+    );
+
+    let (status, _, bytes) = call(
+        &h,
+        "put",
+        "/api/v1/conflicts/settings",
+        Some(json!({"resolution": 13})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    check("london-patrol", "put", "/conflicts/settings", "200", &bytes);
+    let (_, _, bytes) = call(&h, "get", "/api/v1/conflicts?outlines=false", None).await;
+    let r: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        (r["resolution"].as_i64(), r["resolution_from"].as_str()),
+        (Some(13), Some("operator"))
+    );
+    let cell = sim_core::GeoCell::parse(r["heat"][0]["cell"].as_str().unwrap()).unwrap();
+    assert_eq!(cell.resolution(), 13);
+
+    let (status, _, bytes) = call(
+        &h,
+        "put",
+        "/api/v1/conflicts/settings",
+        Some(json!({"resolution": 30})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    check("london-patrol", "put", "/conflicts/settings", "400", &bytes);
+
+    call(
+        &h,
+        "put",
+        "/api/v1/conflicts/settings",
+        Some(json!({"resolution": null})),
+    )
+    .await;
+    let (_, _, bytes) = call(&h, "get", "/api/v1/conflicts?outlines=false", None).await;
+    let r: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(r["resolution"].as_i64(), Some(15));
 }
 
 // ------------------------------------------------- a small schema checker

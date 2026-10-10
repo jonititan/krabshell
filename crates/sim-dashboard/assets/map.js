@@ -38,13 +38,16 @@
   const layerInputs = [...document.querySelectorAll('input[data-layer]')];
 
   // What the map shows, each switched by a `data-layer` checkbox and
-  // remembered across pages: drones and intruders; delivery locations
-  // (hubs and landmarks, open orders' addresses, recent drop-offs); people
-  // and vehicles (where they are, and camera sightings of them); geofences;
-  // launch and recovery stations; regions of interest; and the A5 occupancy
-  // grid.
+  // remembered across pages: drones and intruders; hubs and landmarks (the
+  // model's points of interest); every delivery address in the pack's
+  // address book (off until asked for: Kaunas has 34 502); orders and
+  // drop-offs (open orders' addresses and recent deliveries); people
+  // and vehicles on the ground (where they really are); detections (what
+  // the drones' cameras have seen lately: people, vehicles, intruders);
+  // geofences; launch and recovery stations; regions of interest; and the
+  // A5 occupancy grid.
   const layers = {
-    drones: true, deliveries: true, people: true, fences: true,
+    drones: true, pois: true, addresses: false, deliveries: true, people: true, detections: true, fences: true,
     stations: true, rois: true, range: true, grid: true,
   };
   try {
@@ -100,6 +103,10 @@
   let people = [];        // persons and vehicles, polled while their layer is on
   let orders = [];        // open orders' addresses: [lat_e7, lon_e7, in_flight]
   let drops = [];         // recent deliveries: { lat, lon, at }
+  // The address book, fetched once per scenario while its layer is on:
+  // world coordinates (x, y pairs) worked out once, so a redraw only
+  // scales them, and each address's depot for its colour.
+  let addressBook = { etag: null, xy: new Float64Array(0), depot: new Uint16Array(0) };
   // Launch and recovery stations and regions of interest, as the model
   // publishes them in its overlays. A model that publishes none leaves both
   // empty, and nothing is drawn.
@@ -816,18 +823,18 @@
 
   // The model publishes each hub's reach as ellipses: foci `a` and `b`
   // ([lat_e7, lon_e7]) and the most the distances to them may add up to.
-  // They are turned into rings of [lon, lat] once, when the range changes
-  // (a station added or removed, a fence changing which can be used).
+  // Every hub's and station's ellipses go into one shape, so the map shows
+  // a single delivery range: the outer edge of all the estimates together,
+  // not one outline per estimate. They are turned into rings of [lon, lat]
+  // once each time the range changes (a station added or removed, a fence,
+  // the wind).
   function setRange(published) {
     const hubs = (published && Array.isArray(published.hubs)) ? published.hubs : [];
     const key = JSON.stringify(hubs);
     if (key === rangeKey) return;
     rangeKey = key;
-    range = hubs.map((h) => ({
-      depot: h.depot,
-      reach_m: h.reach_m,
-      rings: (h.areas || []).map((a) => ellipseRing(a.a, a.b, a.sum_m)),
-    }));
+    const rings = hubs.flatMap((h) => (h.areas || []).map((a) => ellipseRing(a.a, a.b, a.sum_m)));
+    range = rings.length ? [{ rings }] : [];
   }
 
   function ellipseRing(a, b, sumM, sides = 72) {
@@ -851,7 +858,7 @@
     return ring;
   }
 
-  // Each hub's reach is the union of its ellipses: filled lightly, and
+  // The reach is the union of all the ellipses: filled lightly, and
   // outlined along the union's edge only. The outline comes from stroking
   // every ellipse on a scratch canvas and then cutting out their insides,
   // which leaves just the outer half of the strokes on the edge.
@@ -1028,9 +1035,10 @@
     return best;
   }
 
-  // People and vehicles (the truth) are faint dots; delivery locations go
-  // next; camera sightings are unknown ground (person, vehicle) or air
-  // (intruder) symbols fading over SIGHTING_MS; POIs are small diamonds, so
+  // People and vehicles on the ground (the truth) are faint dots; delivery
+  // locations go next; detections, the cameras' sightings, are unknown
+  // ground (person, vehicle) or air (intruder) symbols fading over
+  // SIGHTING_MS, on a layer of their own; POIs are small diamonds, so
   // a city full of addresses does not hide the drones; and drones go on
   // top, friendly air, intruders unknown air, drawn where they are
   // predicted to be now with a direction-of-movement line while they move.
@@ -1046,6 +1054,8 @@
     // Camera scale is pixels per Earth circumference (world units 0..1).
     const pxPerKm = camera.scale / 40_075;
     const size = symbolSize(pxPerKm);
+
+    if (layers.addresses) drawAddresses(style);
 
     if (layers.people) {
       for (const e of people) {
@@ -1096,7 +1106,7 @@
       ctx.globalAlpha = 1;
     }
 
-    for (const s of layers.people ? sightings : []) {
+    for (const s of layers.detections ? sightings : []) {
       const age = (now - s.at) / SIGHTING_MS;
       const sidc = sighted(s);
       if (age >= 1 || !sidc) continue;
@@ -1115,7 +1125,7 @@
     // POI names only once zoomed in to street scale; drone callsigns always.
     const namePois = pxPerKm > 400;
     // POIs first, so drones draw on top of them.
-    const shown = entities.filter((e) => (e.kind === 'poi' ? layers.deliveries : layers.drones));
+    const shown = entities.filter((e) => (e.kind === 'poi' ? layers.pois : layers.drones));
     const ordered = shown.sort((a, b) => (a.kind === 'poi' ? 0 : 1) - (b.kind === 'poi' ? 0 : 1));
     for (const e of ordered) {
       const at = e.kind === 'poi' ? null : predicted(e, now);
@@ -1156,11 +1166,73 @@
     }
   }
 
+  // Every address in the book as a small square, coloured by the depot
+  // that serves it, so each hub's catchment shows. Only those on screen
+  // are drawn.
+  function drawAddresses(style) {
+    const { xy, depot } = addressBook;
+    if (!xy.length) return;
+    const { w, h } = cssSize();
+    const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    const palette = [
+      token('--accent', '#2b6cb0'), token('--warn', '#8a6100'), token('--ok', '#1f7a4d'),
+      token('--bad', '#a4232b'), token('--dim', '#666e7a'),
+    ];
+    const pxPerKm = camera.scale / 40_075;
+    const side = pxPerKm > 400 ? 3 : 2;
+    const half = side / 2;
+    const ox = w / 2 - camera.cx * camera.scale;
+    const oy = h / 2 - camera.cy * camera.scale;
+    ctx.globalAlpha = 0.6;
+    for (let colour = 0; colour < palette.length; colour++) {
+      ctx.fillStyle = palette[colour];
+      ctx.beginPath();
+      for (let i = 0; i < depot.length; i++) {
+        if (depot[i] % palette.length !== colour) continue;
+        const x = ox + xy[2 * i] * camera.scale;
+        const y = oy + xy[2 * i + 1] * camera.scale;
+        if (x < -2 || y < -2 || x > w + 2 || y > h + 2) continue;
+        ctx.rect(x - half, y - half, side, side);
+      }
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // The address book changes only with the scenario, so ask with the last
+  // ETag and keep what we have on a 304.
+  let addressesInFlight = false;
+  async function refreshAddresses() {
+    if (!layers.addresses || addressesInFlight) return;
+    addressesInFlight = true;
+    try {
+      const headers = addressBook.etag ? { 'If-None-Match': addressBook.etag } : {};
+      const response = await fetch('/api/v1/state/addresses', { headers });
+      if (response.status === 304 || !response.ok) return;
+      const body = await response.json();
+      const items = Array.isArray(body.items) ? body.items : [];
+      const xy = new Float64Array(items.length * 2);
+      const depot = new Uint16Array(items.length);
+      items.forEach(([lat, lon, d], i) => {
+        const [x, y] = toWorld(lon * 1e-7, lat * 1e-7);
+        xy[2 * i] = x;
+        xy[2 * i + 1] = y;
+        depot[i] = d;
+      });
+      addressBook = { etag: response.headers.get('etag'), xy, depot };
+      if (camera) draw();
+    } catch {
+      // The map works without them.
+    } finally {
+      addressesInFlight = false;
+    }
+  }
+
   async function refreshEntities() {
     try {
       const kinds = [
         ...(layers.drones ? ['drone', 'intruder'] : []),
-        ...(layers.deliveries ? ['poi'] : []),
+        ...(layers.pois ? ['poi'] : []),
       ];
       const response = kinds.length
         ? await fetch(`/api/v1/state/entities?kind=${kinds.join(',')}`)
@@ -1462,6 +1534,7 @@
       if (!layers.grid) hover = null;
       refreshEntities();
       refreshSlow();
+      refreshAddresses();
       draw();
     });
   }
@@ -1538,6 +1611,7 @@
   refreshEntities();
   refreshFences();
   refreshSlow();
+  refreshAddresses();
   // Occupancy once a second; drones several times a second, so a correction
   // is never more than a quarter of a second of prediction.
   setInterval(() => {
@@ -1546,6 +1620,7 @@
     // list beside it stays true.
     refreshFences();
     if (!follow || follow.checked) refreshSlow();
+    refreshAddresses();
   }, 1000);
   let entitiesInFlight = false;
   setInterval(async () => {

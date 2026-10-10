@@ -316,6 +316,26 @@
         }
       }
     },
+    "/state/addresses": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateAddresses",
+        "summary": "Delivery addresses",
+        "description": "Every address in the loaded pack's address book, for the map's layer of them. Each item is `[lat_e7, lon_e7, depot, label]`, `depot` indexing `depots`. Empty for a pack without a book. The book does not change while a world runs, so the ETag is the scenario: send it back in `If-None-Match` and the answer is 304 until another scenario is loaded.",
+        "parameters": [
+          { "name": "If-None-Match", "in": "header", "required": false, "description": "The ETag of an earlier answer.", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The address book.",
+            "headers": { "ETag": { "description": "The loaded scenario, quoted.", "schema": { "type": "string" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AddressBook" } } }
+          },
+          "304": { "description": "The same scenario is loaded: the book has not changed." },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
     "/state/download": {
       "get": {
         "tags": ["state"],
@@ -631,6 +651,37 @@
         }
       }
     },
+    "/conflicts/settings": {
+      "get": {
+        "tags": ["conflicts"],
+        "operationId": "conflictSettings",
+        "summary": "Conflict cell resolution",
+        "description": "The A5 resolution conflicts are assessed at, and where it comes from: the operator's choice, the pack's `conflict_resolution` param, or the world's occupancy resolution.",
+        "responses": {
+          "200": { "description": "The settings.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConflictSettings" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "put": {
+        "tags": ["conflicts"],
+        "operationId": "conflictSettingsPut",
+        "summary": "Choose the conflict cell resolution",
+        "description": "Assess conflicts on cells of this resolution from now on, or with null go back to the pack's (or else the world's). Finer cells see aircraft apart that coarser ones lump together; the protected zone is one ring of neighbouring cells, so it shrinks with the cells. Kept until the server restarts.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "required": ["resolution"],
+            "properties": { "resolution": { "type": ["integer", "null"], "minimum": 8, "maximum": 18 } }
+          } } }
+        },
+        "responses": {
+          "200": { "description": "The settings now.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConflictSettings" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
     "/weather": {
       "get": {
         "tags": ["weather"],
@@ -740,6 +791,21 @@
       "WeatherUnavailable": { "description": "Open-Meteo (or the configured weather host) could not supply the weather: `weather_unavailable`.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
     },
     "schemas": {
+      "AddressBook": {
+        "type": "object",
+        "description": "A pack's delivery addresses.",
+        "additionalProperties": false,
+        "required": ["scenario_id", "depots", "items"],
+        "properties": {
+          "scenario_id": { "type": "string", "description": "The scenario the book belongs to." },
+          "depots": { "type": "array", "items": { "type": "string" }, "description": "The hubs that serve the addresses, by name." },
+          "items": {
+            "type": "array",
+            "description": "Each address as `[lat_e7, lon_e7, depot, label]`: degrees times 10^7, an index into `depots`, and the street address.",
+            "items": { "type": "array", "prefixItems": [{ "type": "integer" }, { "type": "integer" }, { "type": "integer", "minimum": 0 }, { "type": "string" }], "minItems": 4, "maxItems": 4 }
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "An RFC 7807-shaped error.",
@@ -1227,7 +1293,7 @@
           "mode": { "$ref": "#/components/schemas/RunMode" },
           "available": { "type": "boolean", "description": "The model publishes stations at all." },
           "stations": { "type": "array", "items": { "$ref": "#/components/schemas/Station" } },
-          "range": { "type": ["object", "null"], "additionalProperties": true, "description": "How far each hub's couriers can deliver by way of the stations, as the model publishes it." },
+          "range": { "type": ["object", "null"], "additionalProperties": true, "description": "How far each hub's couriers can deliver by way of the stations, as the model publishes it: per hub (`hubs`), with `reach_m` and the ellipse `areas` it is the union of. The map draws every hub's areas as one shape." },
           "recent": { "type": "array", "items": { "$ref": "#/components/schemas/Report" } },
           "refused": { "type": "array", "items": { "$ref": "#/components/schemas/Refused" } }
         }
@@ -1485,7 +1551,7 @@
       },
       "ConflictReport": {
         "type": "object",
-        "required": ["tick", "sim_utc", "took_ms", "aircraft", "resolution", "threshold", "step_s", "horizon_s", "layer_m", "risk_before", "risk_after", "advisories", "unresolved", "cells"],
+        "required": ["tick", "sim_utc", "took_ms", "aircraft", "resolution", "resolution_from", "threshold", "step_s", "horizon_s", "layer_m", "risk_before", "risk_after", "advisories", "unresolved", "cells", "heat"],
         "properties": {
           "tick": { "type": "integer", "description": "The tick assessed." },
           "sim_utc": { "type": ["string", "null"], "format": "date-time" },
@@ -1500,7 +1566,31 @@
           "risk_after": { "type": "number" },
           "advisories": { "type": "array", "items": { "$ref": "#/components/schemas/ConflictAdvisory" }, "description": "Requests for conflict resolution, in the order given." },
           "unresolved": { "type": "array", "items": { "$ref": "#/components/schemas/Unresolved" } },
-          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/ConflictCell" } }
+          "resolution_from": { "type": "string", "enum": ["operator", "pack", "world"] },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/ConflictCell" }, "description": "Cells two or more aircraft could share, most aircraft expected first." },
+          "heat": { "type": "array", "items": { "$ref": "#/components/schemas/HeatCell" }, "description": "Every cell any aircraft could be in over the minute ahead, at its highest: the heatmap." }
+        }
+      },
+      "HeatCell": {
+        "type": "object",
+        "required": ["cell", "boundary", "summed", "collision"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" } },
+          "summed": { "type": "number", "description": "The highest summed probability: one aircraft alone gives up to 1." },
+          "collision": { "type": "number", "description": "The highest chance of two or more there together; 0 where only one aircraft could be." }
+        }
+      },
+      "ConflictSettings": {
+        "type": "object",
+        "required": ["resolution", "from", "world_resolution", "min_resolution", "max_resolution", "edge_m"],
+        "properties": {
+          "resolution": { "type": "integer" },
+          "from": { "type": "string", "enum": ["operator", "pack", "world"] },
+          "world_resolution": { "type": "integer" },
+          "min_resolution": { "type": "integer" },
+          "max_resolution": { "type": "integer" },
+          "edge_m": { "type": "number", "description": "Nominal edge of a cell at the resolution in use." }
         }
       },
       "Removal": {

@@ -570,3 +570,37 @@ table.conflict-cells tr.in-conflict td:first-child { box-shadow: inset 3px 0 0 v
 .table-scroll.uncapped { max-height: none; }
 table.conflict-cells tr.picked td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .contributor { display: inline-block; margin-right: 10px; white-space: nowrap; }
+form.inline { display: inline-flex; margin: 0; }
+
+/* ------------------------------------------------------------ guides */
+.guide-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr) 220px; gap: 24px; align-items: start; }
+.guide-nav, .guide-toc { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; font-size: 14px; }
+.guide-nav h2, .guide-toc h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dim); margin: 16px 0 6px; }
+.guide-nav h2:first-child, .guide-toc h2:first-child { margin-top: 0; }
+.guide-nav ul, .guide-toc ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
+.guide-nav a, .guide-toc a { color: var(--ink); text-decoration: none; }
+.guide-nav a:hover, .guide-toc a:hover { color: var(--accent); }
+.guide-nav a.on { color: var(--accent); font-weight: 600; }
+.guide-toc li.l3 { padding-left: 12px; font-size: 13px; }
+.guide { padding: 20px 28px; line-height: 1.55; min-width: 0; }
+.guide h1 { margin-top: 0; }
+.guide h2 { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
+.guide h3 { margin-top: 20px; }
+.guide h2, .guide h3, .guide h4 { scroll-margin-top: 12px; }
+.guide p, .guide li { max-width: 80ch; }
+.guide ul, .guide ol { margin: 0 0 10px; padding-left: 22px; }
+.guide pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 13px; }
+.guide pre code { font-size: inherit; }
+.guide table { border-collapse: collapse; margin: 8px 0 14px; font-size: 14px; display: block; overflow-x: auto; }
+.guide th, .guide td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+.guide th { background: var(--bg); }
+.guide blockquote { margin: 0 0 10px; padding: 2px 14px; border-left: 3px solid var(--line); color: var(--dim); }
+@media (max-width: 1100px) {
+  .guide-layout { grid-template-columns: 190px minmax(0, 1fr); }
+  .guide-toc { display: none; }
+}
+@media (max-width: 720px) {
+  .guide-layout { grid-template-columns: minmax(0, 1fr); }
+  .guide-nav { position: static; max-height: none; }
+  .guide { padding: 14px 16px; }
+}

@@ -294,6 +294,8 @@ pub async fn scenarios_upload(
     let scenario = tokio::task::spawn_blocking(move || store.import_zip(&id, &archive))
         .await
         .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))??;
+    // A pack uploaded again under the same id may bring a new address book.
+    state.addresses.forget(&scenario.id);
     Ok(Json(UploadResult { scenario }))
 }
 
@@ -707,6 +709,80 @@ pub async fn state_overlays(
         headers.insert("x-sim-tick", tick);
     }
     (headers, Json(view.overlays.clone()))
+}
+
+/// Every delivery address in the loaded pack's address book, for the map's
+/// layer of them: `{"scenario_id", "depots", "items"}`, each item
+/// `[lat_e7, lon_e7, depot, label]` with `depot` an index into `depots`.
+/// Empty for a pack without a book. The book never changes while a world
+/// runs, so it is read from the pack once and the ETag is the scenario: a
+/// client sends it back in `If-None-Match` and gets 304 until another
+/// scenario is loaded.
+pub async fn state_addresses(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
+    let scenario = state.driver.view().scenario_id.clone();
+    let etag = format!("\"{}\"", scenario.replace(['"', '\\'], "_"));
+    let fresh = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
+    if fresh {
+        return Ok((axum::http::StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    }
+    let book = Arc::clone(&state.addresses);
+    let store = Arc::clone(&state.scenarios);
+    let body = tokio::task::spawn_blocking(move || book.get(&store, &scenario))
+        .await
+        .map_err(|err| ApiError::new(ErrorCode::Internal, err.to_string()))?;
+    Ok((
+        [
+            (header::ETAG, etag),
+            (header::CONTENT_TYPE, "application/json".to_owned()),
+        ],
+        body.to_vec(),
+    )
+        .into_response())
+}
+
+/// The loaded pack's address book, serialised once per scenario.
+#[derive(Default)]
+pub struct AddressCache {
+    held: std::sync::Mutex<Option<(String, Bytes)>>,
+}
+
+impl AddressCache {
+    fn get(&self, store: &sim_engine::ScenarioStore, scenario: &str) -> Bytes {
+        if let Some((id, body)) = &*self.held.lock().unwrap() {
+            if id == scenario {
+                return body.clone();
+            }
+        }
+        // A world with no pack on disk (reset to empty, or a pack since
+        // removed) has no book to show.
+        let book = store
+            .load(scenario)
+            .ok()
+            .and_then(|blob| blob.fields.get("addresses").cloned());
+        let depots = book.as_ref().and_then(|b| b.get("depots")).cloned();
+        let items = book.as_ref().and_then(|b| b.get("items")).cloned();
+        let body = serde_json::json!({
+            "scenario_id": scenario,
+            "depots": depots.unwrap_or_else(|| serde_json::json!([])),
+            "items": items.unwrap_or_else(|| serde_json::json!([])),
+        });
+        let body = Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
+        *self.held.lock().unwrap() = Some((scenario.to_owned(), body.clone()));
+        body
+    }
+
+    fn forget(&self, scenario: &str) {
+        let mut held = self.held.lock().unwrap();
+        if held.as_ref().is_some_and(|(id, _)| id == scenario) {
+            *held = None;
+        }
+    }
 }
 
 // ------------------------------------------------------------- geofences
@@ -1553,8 +1629,61 @@ pub async fn conflicts(
         for c in report.cells.iter_mut() {
             c.boundary.clear();
         }
+        for c in report.heat.iter_mut() {
+            c.boundary.clear();
+        }
     }
     Ok(Json(report))
+}
+
+#[derive(Serialize)]
+pub struct ConflictSettings {
+    pub resolution: i32,
+    /// `operator`, `pack` or `world`.
+    pub from: &'static str,
+    /// The world's occupancy resolution.
+    pub world_resolution: i32,
+    /// What may be chosen.
+    pub min_resolution: i32,
+    pub max_resolution: i32,
+    /// Nominal edge of a cell at the resolution in use, metres.
+    pub edge_m: f64,
+}
+
+pub fn conflict_settings_of(state: &AppState) -> ConflictSettings {
+    let view = state.driver.view();
+    let r = state.conflicts.resolution(&view);
+    ConflictSettings {
+        resolution: r.resolution,
+        from: r.from,
+        world_resolution: view.meta.resolution,
+        min_resolution: *crate::conflicts::RESOLUTIONS.start(),
+        max_resolution: *crate::conflicts::RESOLUTIONS.end(),
+        edge_m: cell::nominal_cell_edge_meters(r.resolution).round(),
+    }
+}
+
+/// The cell resolution conflicts are assessed at.
+pub async fn conflict_settings(State(state): State<AppState>) -> Json<ConflictSettings> {
+    Json(conflict_settings_of(&state))
+}
+
+#[derive(Deserialize)]
+pub struct ConflictSettingsBody {
+    /// A resolution, or null for the pack's (or else the world's).
+    pub resolution: Option<i32>,
+}
+
+/// Choose the cell resolution conflicts are assessed at.
+pub async fn conflict_settings_put(
+    State(state): State<AppState>,
+    Json(body): Json<ConflictSettingsBody>,
+) -> ApiResult<Json<ConflictSettings>> {
+    state
+        .conflicts
+        .choose_resolution(body.resolution)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(conflict_settings_of(&state)))
 }
 
 #[cfg(test)]

@@ -159,6 +159,55 @@ pub fn hotspots(predictions: &[&Prediction], cfg: &Config) -> Vec<Hotspot> {
     out
 }
 
+/// One A5 cell of the heatmap: the most any aircraft could be there.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct HeatCell {
+    pub cell: GeoCell,
+    /// The highest summed probability over its layers and steps: one
+    /// aircraft alone gives up to 1.
+    pub summed: f64,
+    /// The highest chance of two or more there together.
+    pub collision: f64,
+}
+
+/// Every A5 cell any aircraft could be in, each at its highest, most
+/// expected first. Unlike [`hotspots`], a cell only one aircraft could reach
+/// is here too, so the map shows where everyone may go, not only where they
+/// may meet.
+pub fn heat(predictions: &[&Prediction]) -> Vec<HeatCell> {
+    let steps = predictions.iter().map(|p| p.cells.len()).max().unwrap_or(0);
+    let mut out: BTreeMap<GeoCell, HeatCell> = BTreeMap::new();
+    for step in 0..steps {
+        let mut sums: BTreeMap<Key, Vec<f64>> = BTreeMap::new();
+        for p in predictions {
+            let Some(cells) = p.cells.get(step) else {
+                continue;
+            };
+            for (key, prob) in cells {
+                sums.entry(*key).or_default().push(*prob);
+            }
+        }
+        for (key, probs) in sums {
+            let summed: f64 = probs.iter().sum();
+            let collision = if probs.len() > 1 {
+                two_or_more(probs.iter().copied())
+            } else {
+                0.0
+            };
+            let e = out.entry(key.cell).or_insert(HeatCell {
+                cell: key.cell,
+                summed: 0.0,
+                collision: 0.0,
+            });
+            e.summed = e.summed.max(summed);
+            e.collision = e.collision.max(collision);
+        }
+    }
+    let mut cells: Vec<HeatCell> = out.into_values().collect();
+    cells.sort_by(|a, b| b.summed.total_cmp(&a.summed).then(a.cell.cmp(&b.cell)));
+    cells
+}
+
 /// How bad a set of conflicts is: each one's excess over a single aircraft,
 /// weighted toward the near ones, which leave less time to act.
 pub fn risk(conflicts: &[Conflict], cfg: &Config) -> f64 {
@@ -249,6 +298,11 @@ mod tests {
         assert!((c[0].total - 1.1).abs() < 1e-12);
         assert_eq!(c[0].aircraft, vec![(1, 0.6), (2, 0.5)]);
         // Below the threshold.
+        let lone = pred(4, GeoCell::from_lonlat(23.95, 54.9, 15).unwrap(), 0.4);
+        let map = heat(&[&a, &b, &lone]);
+        assert_eq!(map.len(), 2, "the lone aircraft's cell is on the map too");
+        assert!((map[0].summed - 1.1).abs() < 1e-12 && (map[0].collision - 0.3).abs() < 1e-12);
+        assert_eq!((map[1].summed, map[1].collision), (0.4, 0.0));
         let hot = hotspots(&[&a, &b], &cfg);
         assert_eq!(hot.len(), 1);
         assert!((hot[0].collision - 0.3).abs() < 1e-12);

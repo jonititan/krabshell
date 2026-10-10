@@ -44,7 +44,9 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
     let public = Router::new()
         .route("/login", get(login_form).post(login_submit))
         .route("/logout", post(logout))
-        .route("/docs", get(docs_page))
+        .route("/docs", get(guide_index))
+        .route("/docs/api", get(docs_page))
+        .route("/docs/{slug}", get(guide_page))
         .route("/assets/app.css", get(|| asset(APP_CSS, "text/css")))
         .route("/assets/map.js", get(|| asset(MAP_JS, "text/javascript")))
         .route(
@@ -94,6 +96,10 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route("/weather", get(weather_page))
         .route("/conflicts", get(conflicts_page))
         .route("/fragments/conflicts", get(conflicts_fragment))
+        .route(
+            "/actions/conflicts/resolution",
+            post(action_conflict_resolution),
+        )
         .route("/fragments/weather", get(weather_fragment))
         .route("/actions/weather/refresh", post(action_weather_refresh))
         .route("/fragments/control", get(control_fragment))
@@ -577,9 +583,12 @@ impl ConflictsView {
             ready: true,
             error: None,
             summary: format!(
-                "Tick {} · {} aircraft in the air · {:.0} s ahead in {:.0} s steps · conflict at {:.1} aircraft expected in a cell · assessed in {:.0} ms",
+                "Tick {} · {} aircraft in the air · resolution {} cells (~{:.0} m, the {}'s) · {:.0} s ahead in {:.0} s steps · conflict at {:.1} aircraft expected in a cell · assessed in {:.0} ms",
                 thousands(report.tick),
                 report.aircraft,
+                report.resolution,
+                sim_core::cell::nominal_cell_edge_meters(report.resolution),
+                report.resolution_from,
                 report.horizon_s,
                 report.step_s,
                 report.threshold,
@@ -599,6 +608,57 @@ struct ConflictsTemplate {
     control: ControlView,
     conflicts: ConflictsView,
     basemaps: &'static [Basemap],
+    resolutions: Vec<ResolutionOption>,
+}
+
+/// An entry of the cell resolution menu.
+pub struct ResolutionOption {
+    /// Empty for the pack's or world's.
+    pub value: String,
+    pub label: String,
+    pub selected: bool,
+}
+
+fn resolution_options(state: &AppState) -> Vec<ResolutionOption> {
+    let settings = crate::routes::api::conflict_settings_of(state);
+    let size = |r: i32| {
+        let m = sim_core::cell::nominal_cell_edge_meters(r);
+        if m >= 1_000.0 {
+            format!("{:.1} km", m / 1_000.0)
+        } else {
+            format!("{:.0} m", m)
+        }
+    };
+    let chosen = settings.from == "operator";
+    let fallback = crate::conflicts::ConflictService::default_resolution(&state.driver.view());
+    let mut out = vec![ResolutionOption {
+        value: String::new(),
+        label: format!(
+            "{} ({}, ~{})",
+            if fallback.from == "pack" {
+                "Pack's"
+            } else {
+                "World's"
+            },
+            fallback.resolution,
+            size(fallback.resolution)
+        ),
+        selected: !chosen,
+    }];
+    for r in settings.min_resolution..=settings.max_resolution {
+        out.push(ResolutionOption {
+            value: r.to_string(),
+            label: format!("{r} (~{})", size(r)),
+            selected: chosen && r == settings.resolution,
+        });
+    }
+    out
+}
+
+#[derive(Deserialize)]
+pub struct ResolutionForm {
+    #[serde(default)]
+    resolution: String,
 }
 
 #[derive(Template)]
@@ -620,6 +680,14 @@ struct WeatherTemplate {
 #[template(path = "fragments/weather.html")]
 struct WeatherFragment {
     weather: WeatherView,
+}
+
+#[derive(Template)]
+#[template(path = "guide.html")]
+struct GuideTemplate {
+    nav: &'static str,
+    docs: &'static crate::docs::Docs,
+    page: &'static crate::docs::Page,
 }
 
 #[derive(Template)]
@@ -828,7 +896,27 @@ async fn conflicts_page(State(state): State<AppState>) -> Response {
         control: ControlView::build(&state, None),
         conflicts: ConflictsView::build(&state).await,
         basemaps: BASEMAPS,
+        resolutions: resolution_options(&state),
     })
+}
+
+async fn action_conflict_resolution(
+    State(state): State<AppState>,
+    Form(form): Form<ResolutionForm>,
+) -> Response {
+    let chosen = form.resolution.trim().parse::<i32>().ok();
+    let mut view = match state.conflicts.choose_resolution(chosen) {
+        Ok(()) => ConflictsView::build(&state).await,
+        Err(err) => {
+            let mut v = ConflictsView::build(&state).await;
+            v.error = Some(err);
+            v
+        }
+    };
+    if view.error.is_none() {
+        view.ready = true;
+    }
+    render(ConflictsFragment { conflicts: view })
 }
 
 async fn conflicts_fragment(State(state): State<AppState>) -> Response {
@@ -875,6 +963,29 @@ async fn docs_page() -> Response {
     render(DocsTemplate {
         nav: "docs",
         docs: &crate::openapi::VIEW,
+    })
+}
+
+/// The guides (`docs/*.md`, compiled in). Public for the same reason as the
+/// API reference.
+async fn guide_index() -> Response {
+    let docs = &*crate::docs::DOCS;
+    render_guide(docs, &docs.pages[0])
+}
+
+async fn guide_page(Path(slug): Path<String>) -> Response {
+    let docs = &*crate::docs::DOCS;
+    match docs.page(&slug) {
+        Some(page) => render_guide(docs, page),
+        None => (StatusCode::NOT_FOUND, "no such page in the docs").into_response(),
+    }
+}
+
+fn render_guide(docs: &'static crate::docs::Docs, page: &'static crate::docs::Page) -> Response {
+    render(GuideTemplate {
+        nav: "docs",
+        docs,
+        page,
     })
 }
 

@@ -47,6 +47,9 @@ flowchart LR
 - **CoT is one-way.** krabshell sends to TAK clients and does not listen for
   anything they send back.
 
+Every message, command, rate and timeout on both links is listed in
+[protocols.md](protocols.md).
+
 ## Start krabshell
 
 ```sh
@@ -201,13 +204,17 @@ Commands that work from the Fly view:
 | Set mission item | `DO_SET_MISSION_CURRENT` (224), `MISSION_SET_CURRENT` |
 | Mode change | `DO_SET_MODE` (176), `SET_MODE`. Auto starts the mission; anything else holds position. |
 
-Anything else is answered with `MAV_RESULT_UNSUPPORTED`.
+krabshell also answers the requests QGroundControl makes when it connects
+(`REQUEST_MESSAGE` for `AUTOPILOT_VERSION` and `HOME_POSITION`,
+`REQUEST_AUTOPILOT_CAPABILITIES`, `SET_MESSAGE_INTERVAL`). Anything else is
+answered with `MAV_RESULT_UNSUPPORTED`. The parameters each command takes, and
+when it is refused, are in [protocols.md](protocols.md#commands).
 
 The drone flies these mission items:
 
 | Item | Id | Notes |
 |---|---:|---|
-| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude. On the ground, waits (charging on its home pad) until the battery reaches `launch_battery_pct` |
+| `NAV_TAKEOFF` | 22 | Climbs straight up to the item's altitude. On the ground, waits (charging on its home pad) until the battery reaches `launch_battery_pct`, or param2 percent if that is higher and it is on a charger (a krabshell extension) |
 | `NAV_WAYPOINT` | 16 | param1 hold time (s), param2 acceptance radius (m) |
 | `NAV_LOITER_UNLIM` | 17 | Holds until you change mode or item |
 | `NAV_LOITER_TIME` | 19 | param1 seconds |
@@ -268,6 +275,11 @@ than names:
 | 6 | RTL |
 | 7 | Land |
 
+The numbers are for display only. A mode change from QGroundControl only
+looks at whether the Auto flag is set: with it, the drone starts its mission;
+without it, a drone in the air holds position. Use **Return** or **Land** to
+bring a drone down. See [protocols.md](protocols.md#modes).
+
 ## ATAK, WinTAK and iTAK
 
 ### What arrives
@@ -280,11 +292,13 @@ than names:
 | The intruder drone | `a-u-A-M-H-Q` | As above |
 | Landmarks | `b-m-p-s-m` spot markers | Every 15 s |
 
-Every uid starts with `krabshell-`. Sightings are `krabshell-det-<id>`, and
+Every uid starts with `krabshell-`. Drones are `krabshell-uav-<sysid>`,
+landmarks `krabshell-poi-<id>` and sightings `krabshell-det-<id>`, and
 each links to the drone that made it. The remarks say who saw it, at what
 range, and the simulation tick. Events are stamped with real time, so a
-sighting stays on the map for 30 s after the last report (landmarks for 10
-minutes).
+sighting stays on the map for 30 s after the last report, a drone for 10 s
+and a landmark for 10 minutes. The full event format is in
+[protocols.md](protocols.md#cursor-on-target).
 
 ### Option A: the default multicast (same network, no setup)
 
@@ -323,9 +337,9 @@ two hundred times faster than real time, so in QGroundControl and ATAK the
 drones fly very fast, and a mission finishes in seconds. Telemetry always shows
 where the simulation is now; nothing is queued or replayed.
 
-To watch at real speed, go to the dashboard's **Run** page and **Start at
-10** tps. The packs use 0.1 s per tick, so 10 ticks a second is real time. You
-can also use the rate API:
+To watch at real speed, go to the dashboard's **Run** page and set **Speed**
+to **Real time**. The packs use 0.1 s per tick, so real time is 10 ticks a
+second. You can also use the rate API:
 
 ```sh
 curl -X POST localhost:8080/api/v1/run/rate -H 'content-type: application/json' -d '{"target_tps": 10}'
@@ -336,7 +350,8 @@ While the simulation is **paused**:
 - Commands are refused with `MAV_RESULT_TEMPORARILY_REJECTED` and the message
   "Simulation is paused".
 - A mission upload is accepted, with the message "Mission queued: simulation
-  paused", and takes effect on the next tick.
+  paused", and takes effect on the next tick. A fence plan upload is treated
+  the same way ("Fence plan queued: simulation paused").
 
 ## Checking without QGroundControl or ATAK
 

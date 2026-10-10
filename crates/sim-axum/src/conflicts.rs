@@ -101,12 +101,56 @@ pub struct ConflictReport {
     pub risk_after: f64,
     pub advisories: Vec<AdvisoryView>,
     pub unresolved: Vec<UnresolvedView>,
+    /// Where the resolution came from: `operator`, `pack` or `world`.
+    pub resolution_from: &'static str,
     /// Cells two or more aircraft could share, most aircraft expected first.
     pub cells: Vec<CellView>,
+    /// Every cell any aircraft could be in, at its highest, for the heatmap.
+    pub heat: Vec<HeatView>,
 }
+
+/// One cell of the heatmap.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeatView {
+    pub cell: GeoCell,
+    pub boundary: Vec<[f64; 2]>,
+    /// The highest summed probability over the minute ahead.
+    pub summed: f64,
+    /// The highest chance of two or more aircraft there together.
+    pub collision: f64,
+}
+
+/// Lowest and highest cell resolution an operator may choose: from about
+/// 23 km cells to about 22 m.
+pub const RESOLUTIONS: std::ops::RangeInclusive<i32> = 8..=18;
+
+/// The conflict cells' resolution and where it came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Resolution {
+    pub resolution: i32,
+    /// `operator`, `pack` (`conflict_resolution` in its params) or `world`
+    /// (the occupancy resolution).
+    pub from: &'static str,
+}
+
+/// Outline as `[lon, lat]` pairs to the micro-degree: a few centimetres,
+/// and a third of the bytes.
+fn outline(cell: GeoCell) -> Vec<[f64; 2]> {
+    let r = |v: f64| (v * 1e6).round() / 1e6;
+    cell.boundary()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(lon, lat)| [r(lon), r(lat)])
+        .collect()
+}
+
+/// Most heatmap cells a report carries.
+const MAX_HEAT: usize = 20_000;
 
 pub struct ConflictService {
     latest: ArcSwapOption<ConflictReport>,
+    /// The operator's choice of cell resolution; 0 for none.
+    chosen: std::sync::atomic::AtomicI32,
     busy: Mutex<()>,
     /// Unix seconds of the last look.
     looked: AtomicI64,
@@ -117,6 +161,7 @@ impl Default for ConflictService {
     fn default() -> Self {
         ConflictService {
             latest: ArcSwapOption::empty(),
+            chosen: std::sync::atomic::AtomicI32::new(0),
             busy: Mutex::new(()),
             looked: AtomicI64::new(i64::MIN),
             started: Instant::now(),
@@ -125,6 +170,55 @@ impl Default for ConflictService {
 }
 
 impl ConflictService {
+    /// Use cells of this resolution, or (`None`) the pack's or the world's.
+    pub fn choose_resolution(&self, resolution: Option<i32>) -> Result<(), String> {
+        match resolution {
+            Some(r) if !RESOLUTIONS.contains(&r) => Err(format!(
+                "resolution is {} to {}",
+                RESOLUTIONS.start(),
+                RESOLUTIONS.end()
+            )),
+            r => {
+                self.chosen.store(r.unwrap_or(0), Ordering::Relaxed);
+                Ok(())
+            }
+        }
+    }
+
+    /// The resolution the next assessment of `view` uses.
+    pub fn resolution(&self, view: &Published) -> Resolution {
+        let chosen = self.chosen.load(Ordering::Relaxed);
+        if chosen > 0 {
+            return Resolution {
+                resolution: chosen,
+                from: "operator",
+            };
+        }
+        Self::default_resolution(view)
+    }
+
+    /// The resolution with no operator's choice: the pack's, or else the
+    /// world's.
+    pub fn default_resolution(view: &Published) -> Resolution {
+        match view
+            .config
+            .model
+            .get("conflict_resolution")
+            .and_then(Param::as_i64)
+            .map(|r| r as i32)
+            .filter(|r| RESOLUTIONS.contains(r))
+        {
+            Some(r) => Resolution {
+                resolution: r,
+                from: "pack",
+            },
+            None => Resolution {
+                resolution: view.meta.resolution.clamp(0, sim_core::MAX_RESOLUTION),
+                from: "world",
+            },
+        }
+    }
+
     fn now_s(&self) -> i64 {
         self.started.elapsed().as_secs() as i64
     }
@@ -136,18 +230,26 @@ impl ConflictService {
         weather: &WeatherService,
     ) -> anyhow::Result<Arc<ConflictReport>> {
         self.looked.store(self.now_s(), Ordering::Relaxed);
-        let tick = driver.view().meta.tick;
-        if let Some(r) = self.latest.load_full().filter(|r| r.tick == tick) {
+        // The same tick at the same resolution is the same report.
+        let fresh = |r: &Arc<ConflictReport>, view: &Published| {
+            let want = self.resolution(view);
+            r.tick == view.meta.tick
+                && r.resolution == want.resolution
+                && r.resolution_from == want.from
+        };
+        if let Some(r) = self.latest.load_full().filter(|r| fresh(r, &driver.view())) {
             return Ok(r);
         }
         let _busy = self.busy.lock().await;
         let view = driver.view();
-        if let Some(r) = self.latest.load_full().filter(|r| r.tick == view.meta.tick) {
+        if let Some(r) = self.latest.load_full().filter(|r| fresh(r, &view)) {
             return Ok(r);
         }
         let field = weather.current().and_then(|w| w.field.clone());
+        let resolution = self.resolution(&view);
         let report =
-            tokio::task::spawn_blocking(move || compute(&view, field.as_deref())).await??;
+            tokio::task::spawn_blocking(move || compute(&view, field.as_deref(), resolution))
+                .await??;
         let report = Arc::new(report);
         self.latest.store(Some(Arc::clone(&report)));
         Ok(report)
@@ -280,18 +382,22 @@ fn flying(view: &Published) -> Vec<Flying> {
     out
 }
 
-/// The configuration for a world: the drones preset, on its cells.
-pub fn config_for(view: &Published) -> Config {
+/// The configuration: the drones preset, on cells of `resolution`.
+pub fn config_for(resolution: i32) -> Config {
     Config {
-        resolution: view.meta.resolution.clamp(0, sim_core::MAX_RESOLUTION),
+        resolution,
         ..Config::drones()
     }
 }
 
 /// Assess one published view.
-pub fn compute(view: &Published, field: Option<&WindField>) -> anyhow::Result<ConflictReport> {
+pub fn compute(
+    view: &Published,
+    field: Option<&WindField>,
+    resolution: Resolution,
+) -> anyhow::Result<ConflictReport> {
     let started = Instant::now();
-    let cfg = config_for(view);
+    let cfg = config_for(resolution.resolution);
     let aircraft = flying(view);
     let callsigns: BTreeMap<u64, String> = aircraft
         .iter()
@@ -323,13 +429,7 @@ pub fn compute(view: &Published, field: Option<&WindField>) -> anyhow::Result<Co
         .into_iter()
         .take(MAX_CELLS)
         .map(|h| CellView {
-            boundary: h
-                .cell
-                .boundary()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(lon, lat)| [lon, lat])
-                .collect(),
+            boundary: outline(h.cell),
             cell: h.cell,
             layer: h.layer,
             alt_from_m: h.alt_from_m,
@@ -377,6 +477,17 @@ pub fn compute(view: &Published, field: Option<&WindField>) -> anyhow::Result<Co
                 peak_total: e.peak_total,
             })
             .collect(),
+        resolution_from: resolution.from,
         cells,
+        heat: sim_conflict::heat(&before_refs)
+            .into_iter()
+            .take(MAX_HEAT)
+            .map(|h| HeatView {
+                cell: h.cell,
+                boundary: outline(h.cell),
+                summed: h.summed,
+                collision: h.collision,
+            })
+            .collect(),
     })
 }

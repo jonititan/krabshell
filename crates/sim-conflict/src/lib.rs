@@ -40,7 +40,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use conflict::{detect, encounters, hotspots, two_or_more, Conflict, Encounter, Hotspot};
+pub use conflict::{
+    detect, encounters, heat, hotspots, two_or_more, Conflict, Encounter, HeatCell, Hotspot,
+};
 pub use performance::{FixedWing, Multirotor, Performance};
 pub use predict::{
     AircraftState, Calm, FieldWind, Manoeuvre, Prediction, Predictor, Targets, WindSource,

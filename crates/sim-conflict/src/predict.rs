@@ -404,6 +404,17 @@ impl<'a> Predictor<'a> {
         for _ in 0..cfg.steps {
             for _ in 0..substeps {
                 let following = t >= delay;
+                // The wind once for the whole cloud, at its middle: wind
+                // changes over a weather cell, a kilometre or more, and the
+                // cloud is a few hundred metres across. Each particle still
+                // gets its own wind error below.
+                let (we, wn) = {
+                    let k = 1.0 / particles.len() as f64;
+                    let (lat, lon, alt) = particles.iter().fold((0.0, 0.0, 0.0), |m, p| {
+                        (m.0 + p.lat * k, m.1 + p.lon * k, m.2 + p.alt * k)
+                    });
+                    self.wind.wind(lat, lon, alt, t)
+                };
                 for p in particles.iter_mut() {
                     // Draw every number whatever happens, so the stream is
                     // the same under every manoeuvre.
@@ -452,7 +463,6 @@ impl<'a> Predictor<'a> {
                     }
 
                     // Position, through the wind.
-                    let (we, wn) = self.wind.wind(p.lat, p.lon, p.alt, t);
                     let rad = p.hdg.to_radians();
                     let east = p.tas * libm::sin(rad) + we + wind_err.0 * noise.wind_ms;
                     let north = p.tas * libm::cos(rad) + wn + wind_err.1 * noise.wind_ms;

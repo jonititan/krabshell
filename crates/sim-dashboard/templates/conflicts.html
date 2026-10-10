@@ -14,12 +14,22 @@
 
 <section class="panel">
   <div class="map-head">
-    <h2>Collision probability</h2>
+    <h2>Conflict heatmap</h2>
     <div class="map-controls">
+      <form class="inline" hx-post="/actions/conflicts/resolution" hx-trigger="change"
+            hx-target="#conflict-tables" hx-swap="outerHTML">
+        <label title="A5 resolution of the cells conflicts are counted in. Finer cells see aircraft apart that coarser ones lump together.">Cells
+          <select id="conflict-resolution" name="resolution">
+            {% for r in resolutions %}
+            <option value="{{ r.value }}" {% if r.selected %}selected{% endif %}>{{ r.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
       <label>Shade by
         <select id="conflict-metric">
-          <option value="collision" selected>P(two or more)</option>
-          <option value="summed">Summed probability</option>
+          <option value="summed" selected>Aircraft expected</option>
+          <option value="collision">P(two or more)</option>
         </select>
       </label>
       <label>Basemap
@@ -38,13 +48,20 @@
   </div>
   <fieldset class="layers">
     <legend>Layers</legend>
-    <label><input id="conflict-layer" type="checkbox" checked> Collision heatmap</label>
+    <label><input id="conflict-layer" type="checkbox" checked> Conflict heatmap</label>
     <label><input type="checkbox" data-layer="drones" checked> Drones</label>
+    <label title="Hubs and landmarks: the depots couriers fly from and the named places in the pack"><input type="checkbox" data-layer="pois" checked> Hubs and landmarks</label>
+    <label title="Every address in the pack's address book, coloured by the hub that serves it"><input type="checkbox" data-layer="addresses"> Delivery addresses</label>
+    <label title="The addresses of open orders (a ring while waiting, filled once a drone is on its way) and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Orders and drop-offs</label>
+    <label title="Where people and vehicles on the ground really are"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label title="What the drones' cameras have seen lately: people, vehicles and intruders, fading as they age"><input type="checkbox" data-layer="detections" checked> Detections</label>
     <label><input type="checkbox" data-layer="stations" checked> Stations</label>
+    <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed, or the wind changes; in wind it is what holds flying into the worst of it"><input type="checkbox" data-layer="range" checked> Delivery range</label>
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid"> A5 occupancy grid</label>
   </fieldset>
-  <p class="dim small">Each cell is shaded at its worst moment in the next minute, at any height. Click a cell, or a row of the table, to pick it out.</p>
+  <p class="dim small">Every cell any aircraft could be in over the next minute is shaded at its highest, at any height: one aircraft alone gives up to 1, overlaps more. Cells in conflict are outlined in red and the ten worst numbered. Click a cell, or a row of the table, to pick it out.</p>
 
   <div class="map-wrap">
     <canvas id="map" width="1200" height="560" data-layers-off="grid" aria-label="Collision probability by A5 cell"></canvas>

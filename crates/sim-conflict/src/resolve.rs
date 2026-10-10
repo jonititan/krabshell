@@ -64,7 +64,9 @@ pub struct Assessment {
 /// the cells it touches alone.
 struct Board<'c> {
     cfg: &'c Config,
-    steps: Vec<HashMap<Key, (f64, u32)>>,
+    // Ordered, so the risk is summed in the same order every time and an
+    // assessment repeats to the bit.
+    steps: Vec<BTreeMap<Key, (f64, u32)>>,
     times: Vec<f64>,
 }
 
@@ -72,7 +74,7 @@ impl<'c> Board<'c> {
     fn new<'p>(cfg: &'c Config, predictions: impl Iterator<Item = &'p Prediction>) -> Board<'c> {
         let mut board = Board {
             cfg,
-            steps: vec![HashMap::new(); cfg.steps],
+            steps: vec![BTreeMap::new(); cfg.steps],
             times: vec![0.0; cfg.steps],
         };
         for p in predictions {

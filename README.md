@@ -28,6 +28,9 @@ implements it, and what was learned doing so, is in
 How to author and upload drone behaviour trees is in
 [`docs/drone-behaviours.md`](docs/drone-behaviours.md).
 
+The full documentation is in [`docs/`](docs/overview.md), and a running
+server serves it at `/docs`, with the API reference at `/docs/api`.
+
 ## Quick start
 
 ```sh
@@ -232,10 +235,12 @@ closed: reopen any as it was (altitude band included), now or after some
 minutes (0 for now), for some minutes or
 until closed (-1). It opens with a new number. **Recent activity** shows
 breaches and the operator's reroutes. The State page's map draws the fences
-too. Both maps have layers to show or hide: drones; delivery locations
-(hubs and landmarks, open orders' addresses, recent drop-offs); people and
-vehicles (where they are, and camera sightings); geofences; launch and
-recovery stations; regions of interest; and the A5 occupancy grid. The
+too. Both maps have layers to show or hide: drones; hubs and landmarks;
+delivery addresses (every address in the book, by hub; off until ticked);
+orders and drop-offs (open orders' addresses and recent deliveries); people and
+vehicles on the ground (where they really are); detections (what the drones'
+cameras have seen lately: people, vehicles and intruders); geofences; launch
+and recovery stations; regions of interest; and the A5 occupancy grid. The
 choice is remembered in the browser.
 
 ### Behaviour trees
@@ -446,6 +451,14 @@ contributing to each. It is worked out at most once a tick, off the tick
 thread, and only while someone is looking. The advisories are shown, not
 flown.
 
+The heatmap shades every cell any aircraft could be in over the minute, so
+each one's spread is always there and overlaps stand out; cells in conflict
+are outlined. The conflict cells' resolution is the world's by default, a
+pack's `conflict_resolution` param if it sets one (8 to 18), or whatever the
+operator picks on the screen or with `PUT /api/v1/conflicts/settings`.
+Finer cells tell apart aircraft coarser ones lump together; the protected
+zone is one ring of cells, so it shrinks with them.
+
 For each aircraft state (position, altitude, true airspeed, heading,
 vertical speed, turn rate, mass and a performance model), it flies a seeded
 cloud of particles forward under an energy model. Fixed-wing aircraft use
@@ -648,8 +661,9 @@ for _ in 0..1_000 {
 
 Everything is under `/api/v1`. Send `Authorization: Bearer $DASHBOARD_TOKEN`.
 
-The full reference is at **`/docs`** on a running server (the dashboard's **API**
-tab), rendered from the OpenAPI 3.1 document served at `/api/v1/openapi.json`.
+The full reference is at **`/docs/api`** on a running server (under the
+dashboard's **Docs** tab, beside the guides from [`docs/`](docs/)), rendered
+from the OpenAPI 3.1 document served at `/api/v1/openapi.json`.
 Neither needs a token. Point Swagger UI, Redoc, Postman or a client generator at
 the JSON. The document is kept by hand in
 [`crates/sim-axum/openapi.json`](crates/sim-axum/openapi.json); the tests in
@@ -684,6 +698,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/reports?since=N` | Model reports (sightings, waypoints reached) newer than `seq` N. |
 | GET | `/cells/lookup?lon=&lat=&res=` | Coordinate to cell. |
 | GET | `/state/overlays` | What the model publishes beside its agents: geofences, open orders' addresses, stations and regions of interest (each key absent for a model without it). |
+| GET | `/state/addresses` | The loaded pack's address book: `depots` and `items` (`[lat_e7, lon_e7, depot, label]`). ETag is the scenario; `If-None-Match` gives 304. |
 | GET POST | `/geofences` | Fences open, waiting to open and previously closed, with breach counts, recent breaches and reroutes; open one (`{"circle": {"lat", "lon", "radius_m"}}` or `{"polygon": [[lon, lat], …]}`, optional `"name"`, `"minutes"` (-1: until closed), `"after_minutes"`, and an altitude band in metres above ground level, `"floor_m"` (null: the surface) and `"ceiling_m"` (null: unlimited), with the ceiling above the floor). |
 | DELETE | `/geofences/{id}` | Close a geofence, whoever opened it, or cancel one waiting to open. |
 | PATCH | `/geofences/{id}` | `{"name": "..."}`: rename a geofence, open, waiting or previously closed (empty clears the name). |
@@ -693,6 +708,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET POST | `/rois` | Regions of interest as the model publishes them, with recent region and survey reports; designate one (`{"lat", "lon", "radius_m", "name"}`, degrees, 10 to 5000 m). |
 | DELETE | `/rois/{id}` | Remove a region of interest, a crash site's included. 404 if the model does not list it. |
 | GET | `/conflicts?outlines=` | Where the aircraft in the air could meet in the next minute: cells two or more could share (worst first, with summed probability, chance of two or more and contributors), resolution advisories, and conflicts left unresolved. |
+| GET PUT | `/conflicts/settings` | The cell resolution conflicts are assessed at; `{"resolution": n}` (8 to 18) to choose one, null for the pack's or world's. |
 | GET | `/weather` | The run's wind: mode, source, tick 0 and the simulation's UTC time, window, cells, last fetch and cache use, launch limits. |
 | POST | `/weather/refresh` | Live weather only: fetch again now and hand it to the world. |
 | GET | `/weather/cells?alt_m=&utc=` | The wind in every weather cell at a height and time, with outlines. |

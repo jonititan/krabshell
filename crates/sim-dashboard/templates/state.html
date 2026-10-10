@@ -34,12 +34,15 @@
   <fieldset class="layers">
     <legend>Layers</legend>
     <label><input type="checkbox" data-layer="drones" checked> Drones</label>
-    <label title="Hubs and landmarks, the addresses of open orders, and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Delivery locations</label>
-    <label title="Where people and vehicles are, and camera sightings of them"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label title="Hubs and landmarks: the depots couriers fly from and the named places in the pack"><input type="checkbox" data-layer="pois" checked> Hubs and landmarks</label>
+    <label title="Every address in the pack's address book, coloured by the hub that serves it"><input type="checkbox" data-layer="addresses"> Delivery addresses</label>
+    <label title="The addresses of open orders (a ring while waiting, filled once a drone is on its way) and recent drop-offs"><input type="checkbox" data-layer="deliveries" checked> Orders and drop-offs</label>
+    <label title="Where people and vehicles on the ground really are"><input type="checkbox" data-layer="people" checked> People and vehicles</label>
+    <label title="What the drones' cameras have seen lately: people, vehicles and intruders, fading as they age"><input type="checkbox" data-layer="detections" checked> Detections</label>
     <label><input type="checkbox" data-layer="fences" checked> Geofences</label>
     <label title="Launch and recovery stations"><input type="checkbox" data-layer="stations" checked> Stations</label>
     <label title="Regions of interest: named areas of interest for the drones to survey"><input type="checkbox" data-layer="rois" checked> Regions of interest</label>
-    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed"><input type="checkbox" data-layer="range" checked> Delivery range</label>
+    <label title="Everywhere the couriers can deliver to and get back from, by way of stations: worked out again whenever a station is added or removed, or the wind changes; in wind it is what holds flying into the worst of it"><input type="checkbox" data-layer="range" checked> Delivery range</label>
     <label title="Agents per A5 cell, at the display resolution"><input type="checkbox" data-layer="grid" checked> A5 occupancy grid</label>
   </fieldset>
   <div class="map-wrap">

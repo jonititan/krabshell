@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod conflicts;
+pub mod docs;
 pub mod openapi;
 pub mod problem;
 pub mod ratelimit;
@@ -45,6 +46,7 @@ pub struct AppState {
     pub limiter: Arc<ratelimit::ActorLimiter>,
     pub weather: Arc<weather::WeatherService>,
     pub conflicts: Arc<conflicts::ConflictService>,
+    pub addresses: Arc<routes::api::AddressCache>,
 }
 
 impl AppState {
@@ -64,6 +66,7 @@ impl AppState {
             limiter: Arc::new(ratelimit::ActorLimiter::new()),
             weather: Arc::new(weather::WeatherService::offline()),
             conflicts: Arc::new(conflicts::ConflictService::default()),
+            addresses: Arc::default(),
         }
     }
 
@@ -101,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/state/map", get(routes::api::state_map))
         .route("/state/entities", get(routes::api::state_entities))
         .route("/state/overlays", get(routes::api::state_overlays))
+        .route("/state/addresses", get(routes::api::state_addresses))
         .route("/state/download", get(routes::api::state_download))
         .route("/state/upload", post(routes::api::state_upload))
         .route("/state/cells/{cell}", get(routes::api::state_cell))
@@ -132,6 +136,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/rois/{id}", delete(routes::api::rois_remove))
         .route("/conflicts", get(routes::api::conflicts))
+        .route(
+            "/conflicts/settings",
+            get(routes::api::conflict_settings).put(routes::api::conflict_settings_put),
+        )
         .route("/weather", get(routes::weather::weather_status))
         .route("/weather/refresh", post(routes::weather::weather_refresh))
         .route("/weather/cells", get(routes::weather::weather_cells))
