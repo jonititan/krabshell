@@ -273,7 +273,3 @@ None of them steps the schedule or holds up a tick.
   or ATAK themselves.
 - CORS allowlist (§13): the dashboard is same-origin, so none is configured.
 - Checkpoints are JSON only; postcard+zstd is a later wire flag (§18.1).
-- Request bodies are capped at 2 MiB, not the 64 MiB the router's layer
-  says: axum's default body limit still applies to every extractor, and
-  nothing disables it. A `swarm-survey` checkpoint (≈3.6 MB) cannot be
-  uploaded.

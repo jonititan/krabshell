@@ -687,7 +687,13 @@ async fn submit_intent(state: &AppState, intent: Intent) -> ApiResult<Json<Inten
             status: "applied",
         })),
         Ok(IntentAck::Rejected(reason)) => Err(ApiError::from(reason)),
-        Err(_) => Ok(Json(IntentAccepted {
+        // Dropped unanswered: it will never apply, so it is not "queued".
+        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+            Err(ApiError::from(sim_core::RejectReason::Discarded {
+                why: "the driver dropped it unanswered".into(),
+            }))
+        }
+        Err(crossbeam_channel::RecvTimeoutError::Timeout) => Ok(Json(IntentAccepted {
             id,
             applied_tick: None,
             status: "queued",

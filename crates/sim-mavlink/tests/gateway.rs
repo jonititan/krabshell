@@ -462,6 +462,26 @@ async fn a_ground_station_can_download_the_geofences_as_a_fence_plan() {
         "the scenario's fences are untouched"
     );
 
+    // Queued while paused, then thrown away by a reset before any tick: the
+    // ground station, told it was accepted, hears that it was not applied.
+    let result = upload_fences(&mut station, &plan).await;
+    assert_eq!(result, MavMissionResult::MAV_MISSION_ACCEPTED);
+    let control = handle.clone();
+    tokio::task::spawn_blocking(move || control.command(sim_engine::Control::Reset))
+        .await
+        .unwrap()
+        .unwrap();
+    let warning = station
+        .expect(UAV, "the not-applied warning", |m| match m {
+            MavMessage::STATUSTEXT(t) => {
+                let text = String::from_utf8_lossy(&t.text.to_vec()).into_owned();
+                text.contains("not applied").then_some(text)
+            }
+            _ => None,
+        })
+        .await;
+    assert!(warning.starts_with("Fence plan not applied"), "{warning}");
+
     // Inclusion fences are not simulated: the plan is refused whole.
     let mut inclusion = plan.clone();
     inclusion.last_mut().unwrap().command = MavCmd::MAV_CMD_NAV_FENCE_CIRCLE_INCLUSION;

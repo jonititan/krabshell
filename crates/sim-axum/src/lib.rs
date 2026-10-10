@@ -155,6 +155,14 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .nest(API_PREFIX, public_api.merge(guarded_api))
         .merge(pages)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.auth),
+            auth::same_site_only,
+        ))
+        // Axum's extractors bring their own 2 MiB cap, which would quietly
+        // win over ours and refuse a large checkpoint or scenario pack. This
+        // layer is the one limit; intents are capped lower in their handler.
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

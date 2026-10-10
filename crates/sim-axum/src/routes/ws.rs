@@ -27,8 +27,23 @@ const MAX_AOI_CELLS: usize = 20_000;
 /// Largest `k` accepted for a disk AOI.
 const MAX_AOI_K: u32 = 64;
 
+/// Most intents one connection may have waiting for the driver's answer.
+/// More are refused as backpressured until some are answered: each waits
+/// for a tick, and a paused world has none.
+const MAX_WAITING: usize = 1_000;
+
+/// Intents sent to the driver and not yet answered, with the channel each
+/// answer will come on.
+type Waiting = Vec<(uuid::Uuid, crossbeam_channel::Receiver<IntentAck>)>;
+
+/// Largest message a client may send. A full 20 000-cell subscription is
+/// under half of this; an intent is capped far lower below.
+const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
 pub async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| serve(socket, state))
+    ws.max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| serve(socket, state))
 }
 
 async fn serve(socket: WebSocket, state: AppState) {
@@ -50,9 +65,11 @@ async fn serve(socket: WebSocket, state: AppState) {
     }
 
     // Intent acknowledgements come back on the driver's channel type, which is
-    // synchronous. Draining it on the publish timer keeps this task free of
-    // blocking receives while still answering within one frame.
-    let (ack_tx, ack_rx) = crossbeam_channel::unbounded::<(uuid::Uuid, IntentAck)>();
+    // synchronous. Polling the channels on the publish timer answers within a
+    // frame without parking a thread per intent: a paused world answers none,
+    // and a thread each would soon use up the blocking pool every control
+    // route needs.
+    let mut waiting: Waiting = Vec::new();
 
     let mut aoi: BTreeSet<GeoCell> = BTreeSet::new();
     let mut last: Vec<CellBag> = Vec::new();
@@ -70,7 +87,7 @@ async fn serve(socket: WebSocket, state: AppState) {
                     Message::Text(text) => {
                         match serde_json::from_str::<ClientMsg>(&text) {
                             Ok(msg) => {
-                                if handle(msg, &state, &mut aoi, &mut resend_everything, &ack_tx, &mut sink)
+                                if handle(msg, &state, &mut aoi, &mut resend_everything, &mut waiting, &mut sink)
                                     .await
                                     .is_err()
                                 {
@@ -97,12 +114,8 @@ async fn serve(socket: WebSocket, state: AppState) {
             }
 
             _ = ticker.tick() => {
-                // Answer every intent this connection is still waiting on.
-                while let Ok((intent_id, ack)) = ack_rx.try_recv() {
-                    let msg = match ack {
-                        IntentAck::Applied { .. } => ServerMsg::Accepted { intent_id },
-                        IntentAck::Rejected(reason) => ServerMsg::Rejected { intent_id, reason },
-                    };
+                // Answer every intent the driver has decided.
+                for msg in answered(&mut waiting) {
                     if send(&mut sink, msg).await.is_err() {
                         return;
                     }
@@ -153,17 +166,63 @@ async fn serve(socket: WebSocket, state: AppState) {
 
 type Sink = futures_util::stream::SplitSink<WebSocket, Message>;
 
+fn too_many_cells() -> ServerMsg {
+    ServerMsg::Error {
+        code: ErrorCode::BadRequest,
+        message: format!(
+            "an area of interest is capped at {MAX_AOI_CELLS} cells; \
+             subscribe to a coarser area or fewer cells"
+        ),
+    }
+}
+
+/// Take the decided intents out of `waiting`, as the messages to send. An
+/// answer channel the driver dropped means the intent was thrown away
+/// unanswered, which the client hears as a rejection rather than nothing.
+fn answered(waiting: &mut Waiting) -> Vec<ServerMsg> {
+    let mut out = Vec::new();
+    waiting.retain(|(intent_id, rx)| {
+        let intent_id = *intent_id;
+        match rx.try_recv() {
+            Ok(IntentAck::Applied { .. }) => out.push(ServerMsg::Accepted { intent_id }),
+            Ok(IntentAck::Rejected(reason)) => out.push(ServerMsg::Rejected { intent_id, reason }),
+            Err(crossbeam_channel::TryRecvError::Empty) => return true,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => out.push(ServerMsg::Rejected {
+                intent_id,
+                reason: RejectReason::Discarded {
+                    why: "the driver dropped it unanswered".into(),
+                },
+            }),
+        }
+        false
+    });
+    out
+}
+
 async fn handle(
     msg: ClientMsg,
     state: &AppState,
     aoi: &mut BTreeSet<GeoCell>,
     resend_everything: &mut bool,
-    ack_tx: &crossbeam_channel::Sender<(uuid::Uuid, IntentAck)>,
+    waiting: &mut Waiting,
     sink: &mut Sink,
 ) -> Result<(), axum::Error> {
     match msg {
         ClientMsg::Subscribe { cells, res } => {
             let world_resolution = state.driver.view().meta.resolution;
+            // Count before expanding: one resolution-0 cell has about a
+            // billion descendants at resolution 15.
+            let wanted = cells.iter().fold(0u64, |sum, cell| {
+                let n = if res.is_some() {
+                    cell.children_count(world_resolution)
+                } else {
+                    1
+                };
+                sum.saturating_add(n)
+            });
+            if (aoi.len() as u64).saturating_add(wanted) > MAX_AOI_CELLS as u64 {
+                return send(sink, too_many_cells()).await;
+            }
             let mut added = Vec::new();
             for cell in cells {
                 // A coarse cell subscribes to everything under it, so a client
@@ -185,19 +244,6 @@ async fn handle(
                 } else {
                     added.push(cell);
                 }
-            }
-            if aoi.len() + added.len() > MAX_AOI_CELLS {
-                return send(
-                    sink,
-                    ServerMsg::Error {
-                        code: ErrorCode::BadRequest,
-                        message: format!(
-                            "an area of interest is capped at {MAX_AOI_CELLS} cells; \
-                             subscribe to a coarser area or fewer cells"
-                        ),
-                    },
-                )
-                .await;
             }
             aoi.extend(added);
             *resend_everything = true;
@@ -248,6 +294,21 @@ async fn handle(
 
         ClientMsg::Intent { intent } => {
             let intent_id = intent.id;
+            // The same cap as `POST /intents`.
+            let size = serde_json::to_vec(&intent).map_or(usize::MAX, |b| b.len());
+            if size > crate::MAX_INTENT_BYTES {
+                return send(
+                    sink,
+                    ServerMsg::Error {
+                        code: ErrorCode::PayloadTooLarge,
+                        message: format!(
+                            "intent {intent_id} is {size} bytes; the limit is {}",
+                            crate::MAX_INTENT_BYTES
+                        ),
+                    },
+                )
+                .await;
+            }
             let view = state.driver.view();
 
             // Address checks happen here so a misaddressed intent never takes a
@@ -277,6 +338,19 @@ async fn handle(
                 .await;
             }
 
+            if waiting.len() >= MAX_WAITING {
+                return send(
+                    sink,
+                    ServerMsg::Rejected {
+                        intent_id,
+                        reason: RejectReason::Backpressured {
+                            pending: waiting.len(),
+                        },
+                    },
+                )
+                .await;
+            }
+
             let (tx, rx) = crossbeam_channel::bounded(1);
             let outcome = state.driver.submit(Submission {
                 intent,
@@ -284,13 +358,8 @@ async fn handle(
             });
             match outcome {
                 Ok(()) => {
-                    // Forward whatever the driver decides onto this connection.
-                    let ack_tx = ack_tx.clone();
-                    tokio::task::spawn_blocking(move || {
-                        if let Ok(ack) = rx.recv() {
-                            let _ = ack_tx.send((intent_id, ack));
-                        }
-                    });
+                    // Answered on the publish timer; see `answered`.
+                    waiting.push((intent_id, rx));
                     Ok(())
                 }
                 Err(reason) => send(sink, ServerMsg::Rejected { intent_id, reason }).await,

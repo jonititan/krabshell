@@ -323,13 +323,10 @@ impl DroneAgent {
         self.wrecked = true;
         let mut detail = self.flight_detail(world);
         detail["cause"] = "battery exhausted".into();
-        if let Some(order) = self
+        let carried = self
             .courier
             .as_ref()
-            .and_then(|c| c.order.as_ref().filter(|_| !c.delivered))
-        {
-            detail["requeued_order"] = order.id.into();
-        }
+            .and_then(|c| c.order.as_ref().filter(|_| !c.delivered).map(|o| (o.id, c.depot)));
         world.regions.release(self.body.id);
         if let Some(roi) = world.crash_region(&self.body.pose.point(), &self.body.callsign) {
             detail["roi"] = roi.into();
@@ -340,6 +337,15 @@ impl DroneAgent {
             }),
             None => serde_json::Value::Null,
         };
+        // Said only if it really went back: it may have been turned away.
+        if let Some((order, depot)) = carried {
+            if world.dispatch.queues[usize::from(depot)]
+                .front()
+                .is_some_and(|o| o.id == order)
+            {
+                detail["requeued_order"] = order.into();
+            }
+        }
         world.report(self.flight_report(
             ReportKind::Crash,
             format!("crash-{}", self.body.id),
@@ -485,7 +491,8 @@ impl DroneAgent {
 
     /// Back from a trip without delivering: the order goes back to the front
     /// of the queue, unless a geofence opened over the address and such
-    /// orders are turned away. Loading starts now either way.
+    /// orders are turned away, or it has now failed too many trips (see
+    /// `World::return_order`). Loading starts now either way.
     fn finish_trip(&mut self, world: &mut World, tick: u64) {
         if let Some(survey) = self.survey.take() {
             // Back without closing the circle: someone else may go.
@@ -499,14 +506,11 @@ impl DroneAgent {
         let Some(courier) = self.courier.as_mut() else {
             return;
         };
-        let Some(mut order) = courier.order.take() else {
+        let Some(order) = courier.order.take() else {
             return;
         };
         if !courier.delivered {
-            order.dispatched_tick = None;
-            if !world.reject_if_fenced(&order, crate::world::Stage::Returned) {
-                world.dispatch.queues[usize::from(courier.depot)].push_front(order);
-            }
+            world.return_order(order, courier.depot);
         }
         courier.delivered = false;
         courier.landed_tick = Some(tick);
@@ -535,6 +539,9 @@ impl DroneAgent {
     /// Take the oldest order at its depot whose address is not inside a
     /// geofence, and set off with it. False if there is none.
     fn take_order(&mut self, world: &mut World, tick: u64) -> bool {
+        // Planned for the wind, as surveys, diversions and the published
+        // range are; see `planner`.
+        let wind = world.wind_at(self.body.cell, f64::from(self.cruise_agl_m(world)));
         let DroneAgent { drone, courier, .. } = self;
         let Some(courier) = courier.as_mut() else {
             return false;
@@ -571,7 +578,7 @@ impl DroneAgent {
                 f64::from(courier.cruise_agl_m),
             )) / 1000.0;
             let planner = Planner {
-                range: Range::new(&tuning, drone.cruise_cms),
+                range: Range::new(&tuning, drone.cruise_cms).with_wind(&wind),
                 stations: world.usable_stations(),
                 climb_m: f64::from(courier.cruise_agl_m + ds.takeoff_m),
                 home: &drone.home,

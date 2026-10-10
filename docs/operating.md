@@ -43,6 +43,7 @@ Every flag can be given on the command line. Some can also come from the environ
 | `--model KIND` | | none | Run the start-up pack on a different model than its manifest names: `drones`, `walkers` or `walkers-krabmaga`. |
 | `--run` | | off | Start running at once, at maximum speed, instead of paused. |
 | `--checkpoint-on-exit PATH` | | none | Write a checkpoint to `PATH` on a clean shutdown. See [Shutdown](#shutdown). |
+| `--allowed-origin URL` | `KRABSHELL_ALLOWED_ORIGINS` | none | Another origin (`scheme://host[:port]`) that may change things, such as the public address behind a reverse proxy. Repeatable, or comma-separated in the variable. See [Requests from other sites](#requests-from-other-sites). |
 
 ### MAVLink gateway
 
@@ -120,6 +121,29 @@ A request is let in if it carries the token in any of three places:
 A request without a valid token to `/api/v1/*` gets `401` with an `application/problem+json` body whose `code` is `unauthorized`. A dashboard page redirects to `/login`. Posting the right token there sets the cookie and goes to the Run page; `POST /logout` clears it.
 
 These need no token at all: `GET /api/v1/health`, `GET /api/v1/openapi.json`, `/login`, `/logout`, everything under `/docs`, and the dashboard's static files under `/assets/`.
+
+### Requests from other sites
+
+A token says who may ask, not from where. A browser sends the dashboard's
+cookie with a form that another site posts to krabshell, and in open mode
+there is no token to send at all. So every request that changes something
+(anything but `GET`, `HEAD` and `OPTIONS`), and every WebSocket, must come
+from the dashboard's own origin or from a tool that is not a browser:
+
+- one whose `Origin` header is not this server's own (the scheme and the
+  `Host` it was sent to) is refused, as is one the browser marks
+  `Sec-Fetch-Site: cross-site` or `same-site`. Another port on `localhost` is
+  another origin;
+- one with neither header, as `curl` and scripts send, passes.
+
+Without a token the server also answers only to a loopback host name
+(`localhost`, `127.x.x.x`, `[::1]`). That stops DNS rebinding, where a name an
+attacker controls is pointed at `127.0.0.1` to make their page same-origin
+with the dashboard.
+
+A refused request gets `403` with the problem code `forbidden`. Behind a
+reverse proxy that rewrites `Host`, list the public origin with
+`--allowed-origin https://ops.example`.
 
 The server speaks plain HTTP. To expose it beyond a trusted network, put it behind something that terminates TLS.
 

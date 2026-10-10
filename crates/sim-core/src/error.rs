@@ -29,6 +29,8 @@ pub enum ErrorCode {
     DuplicateIntent,
     CellOutOfBounds,
     IntentRejected,
+    /// A queued intent was thrown away when the world was replaced.
+    IntentDiscarded,
     RateLimited,
     /// The requested change needs a paused driver.
     RequiresPause,
@@ -59,7 +61,7 @@ impl ErrorCode {
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden => 403,
             ErrorCode::NotFound | ErrorCode::UnknownScenario => 404,
-            ErrorCode::RequiresPause | ErrorCode::RequiresReset => 409,
+            ErrorCode::RequiresPause | ErrorCode::RequiresReset | ErrorCode::IntentDiscarded => 409,
             ErrorCode::PayloadTooLarge => 413,
             ErrorCode::RateLimited | ErrorCode::Backpressured => 429,
             ErrorCode::SimPanic | ErrorCode::Internal => 500,
@@ -85,6 +87,7 @@ impl ErrorCode {
             ErrorCode::DuplicateIntent => "duplicate_intent",
             ErrorCode::CellOutOfBounds => "cell_out_of_bounds",
             ErrorCode::IntentRejected => "intent_rejected",
+            ErrorCode::IntentDiscarded => "intent_discarded",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::RequiresPause => "requires_pause",
             ErrorCode::RequiresReset => "requires_reset",
@@ -169,6 +172,7 @@ impl From<RejectReason> for Problem {
             RejectReason::OutOfBounds => ErrorCode::CellOutOfBounds,
             RejectReason::Rejected { .. } => ErrorCode::IntentRejected,
             RejectReason::RateLimited => ErrorCode::RateLimited,
+            RejectReason::Discarded { .. } => ErrorCode::IntentDiscarded,
         };
         let detail = reason.to_string();
         Problem::new(code, detail).with_meta(serde_json::to_value(&reason).unwrap_or_default())

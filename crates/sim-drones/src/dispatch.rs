@@ -109,6 +109,19 @@ pub struct Order {
     pub ordered_tick: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatched_tick: Option<u64>,
+    /// Trips flown with it that came back without delivering it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failed_trips: u8,
+}
+
+/// Trips an order may come back from undelivered before it is turned away
+/// as out of the couriers' reach. Without a limit, an order no courier can
+/// reach goes back to the front of the queue every time, and every courier
+/// at its depot takes it in turn and never anything behind it.
+pub const MAX_FAILED_TRIPS: u8 = 3;
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 /// A drone that delivers from a depot. Lives in the drone's published state.
@@ -197,6 +210,7 @@ impl Dispatch {
                 address: address as u32,
                 ordered_tick: next,
                 dispatched_tick: None,
+                failed_trips: 0,
             };
             if accept(order.address) {
                 self.queues[usize::from(book.addresses[address].depot)].push_back(order);

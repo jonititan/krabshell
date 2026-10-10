@@ -351,7 +351,9 @@ While the simulation is **paused**:
   "Simulation is paused".
 - A mission upload is accepted, with the message "Mission queued: simulation
   paused", and takes effect on the next tick. A fence plan upload is treated
-  the same way ("Fence plan queued: simulation paused").
+  the same way ("Fence plan queued: simulation paused"). Resetting,
+  reloading or restoring before the next tick throws a queued plan away; the
+  ground station then gets the error "Mission not applied: world reset".
 
 ## Checking without QGroundControl or ATAK
 

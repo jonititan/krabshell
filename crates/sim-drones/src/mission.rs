@@ -683,12 +683,15 @@ impl Drone {
                 self.mode = Mode::Disarmed;
                 return true;
             }
-            if tuning.drain_ppm_tick > 0
-                && self.battery_ppm <= tuning.reserve_ppm
-                && !self.failsafe
-                && !matches!(self.mode, Mode::Rtl | Mode::Land)
+            if tuning.drain_ppm_tick > 0 && self.battery_ppm <= tuning.reserve_ppm && !self.failsafe
             {
-                self.mode = Mode::Rtl;
+                // A drone already on its way home (sent there by the operator
+                // or a ground station) or landing keeps doing so, but it is
+                // still on its reserve: the failsafe is raised either way, so
+                // a drone that cannot reach home can divert to a station.
+                if !matches!(self.mode, Mode::Rtl | Mode::Land) {
+                    self.mode = Mode::Rtl;
+                }
                 self.failsafe = true;
                 events.push(Event::LowBattery);
             }
@@ -1346,6 +1349,32 @@ mod tests {
         }
         assert_eq!(drone.battery_ppm, 1_000_000);
         assert_eq!(drone.mode, Mode::Loiter);
+    }
+
+    #[test]
+    fn a_drone_already_returning_home_still_raises_the_failsafe_at_the_reserve() {
+        // Sent home before the reserve (say a fence closed over its
+        // address), it must still know when it reaches the reserve, or it
+        // cannot divert to a station when home is out of reach.
+        let mut pose = home();
+        pose.alt_mm = 40_000;
+        let (lat, lon) = north_of(&pose, 3_000.0);
+        pose.lat_e7 = lat;
+        pose.lon_e7 = lon;
+        let tuning = Tuning {
+            drain_ppm_tick: 1_000,
+            ..TUNING
+        };
+        let mut drone = Drone::new(1, home().point(), 1_000);
+        drone.mode = Mode::Rtl;
+        drone.battery_ppm = 200_000;
+        let mut events = Vec::new();
+        for _ in 0..100 {
+            drone.step(&mut pose, &tuning, &FLAT, &mut events);
+        }
+        assert!(drone.failsafe);
+        assert_eq!(events, vec![Event::LowBattery], "raised once");
+        assert_eq!(drone.mode, Mode::Rtl, "still on its way home");
     }
 
     #[test]

@@ -497,9 +497,12 @@ pub(crate) fn orders(
         }
     }
 
-    // A courier whose address is now fenced off turns for home.
+    // A courier whose address is now fenced off turns for home. Not one on
+    // its low-battery failsafe: that one is already making for home or, if
+    // home is out of reach, for a station, and sending it home again would
+    // undo the divert every tick until it ran flat.
     if let Some(to) = address {
-        if drone.mode == Mode::Auto && !ops.homing && airspace.covers(&to) {
+        if drone.mode == Mode::Auto && !ops.homing && !drone.failsafe && airspace.covers(&to) {
             ops.checked = None;
             return Some(single(
                 command(mission::NAV_RETURN_TO_LAUNCH),

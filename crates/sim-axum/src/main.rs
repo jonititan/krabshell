@@ -50,6 +50,12 @@ struct Cli {
     #[arg(long)]
     run: bool,
 
+    /// Another origin that may change things, as `scheme://host[:port]`:
+    /// the public address when a reverse proxy rewrites the Host. Repeatable.
+    /// The server's own origin needs no listing.
+    #[arg(long, env = "KRABSHELL_ALLOWED_ORIGINS", value_delimiter = ',')]
+    allowed_origin: Vec<String>,
+
     /// Write a checkpoint here on a clean shutdown.
     #[arg(long)]
     checkpoint_on_exit: Option<PathBuf>,
@@ -150,7 +156,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let auth = Auth::from_env();
+    let auth = Auth::from_env().with_origins(cli.allowed_origin.clone());
 
     // Refusing to expose an unauthenticated server is a hard rule, not a
     // warning: the dashboard can reset a world and upload scenario packs.

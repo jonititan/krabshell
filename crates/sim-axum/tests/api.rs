@@ -1394,3 +1394,91 @@ async fn regions_of_interest_are_checked_and_sent_to_the_model() {
     let (status, _, _) = call(&h, get("/api/v1/rois")).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn another_site_cannot_drive_the_dashboard_with_its_cookie() {
+    let h = harness(Profile::Fast, 10);
+    // A form on another site posting to the dashboard: the browser adds the
+    // cookie and its own Origin.
+    let mut forged = form("/actions/reset", "");
+    forged
+        .headers_mut()
+        .insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+    forged
+        .headers_mut()
+        .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+    let (status, body, _) = call(&h, forged).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "forbidden");
+
+    // The dashboard's own page posting the same form is fine.
+    let mut own = form("/actions/pause", "");
+    own.headers_mut()
+        .insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+    own.headers_mut()
+        .insert(header::ORIGIN, "http://127.0.0.1:8080".parse().unwrap());
+    let (status, _, _) = call(&h, own).await;
+    assert!(status.is_success(), "{status}");
+}
+
+#[tokio::test]
+async fn a_reset_after_a_restore_starts_the_scenario_over_with_its_drones() {
+    let h = pack_harness("london-patrol");
+    let drones = |h: &Harness| {
+        let h = h.router.clone();
+        async move {
+            let response = h
+                .oneshot(get("/api/v1/state/entities?kind=drone"))
+                .await
+                .unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<Value>(&bytes)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    let seeded = drones(&h).await;
+    assert!(seeded > 0);
+
+    call(&h, post("/api/v1/run/step", json!({"n": 5}))).await;
+    let response = h
+        .router
+        .clone()
+        .oneshot(get("/api/v1/state/download"))
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let upload = Request::builder()
+        .method("POST")
+        .uri("/api/v1/state/upload")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::from(bytes.to_vec()))
+        .unwrap();
+    let (status, _, text) = call(&h, upload).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    let (status, _, text) = call(&h, post("/api/v1/run/reset", json!({}))).await;
+    assert!(status.is_success(), "{text}");
+    assert_eq!(call(&h, get("/api/v1/run")).await.1["tick"], 0);
+    assert_eq!(drones(&h).await, seeded, "the reset world has its drones");
+}
+
+#[tokio::test]
+async fn a_checkpoint_over_two_mebibytes_reaches_the_handler() {
+    // Axum's own 2 MiB extractor limit must not undercut the server's 64 MiB.
+    let h = harness(Profile::Fast, 5);
+    let big = vec![b' '; 3 * 1024 * 1024];
+    let upload = Request::builder()
+        .method("POST")
+        .uri("/api/v1/state/upload")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::from(big))
+        .unwrap();
+    let (status, body, text) = call(&h, upload).await;
+    assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE, "{text}");
+    // Whitespace is not a checkpoint: the handler says so, as a problem.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(body["code"].is_string(), "{text}");
+}

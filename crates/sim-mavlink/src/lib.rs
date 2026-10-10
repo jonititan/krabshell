@@ -99,6 +99,15 @@ enum Awaiting {
     Command(MavCmd),
 }
 
+/// A plan acknowledged as queued, still to be applied; see `Gateway::queued`.
+#[derive(Debug)]
+struct Queued {
+    rx: Receiver<IntentAck>,
+    peer: SocketAddr,
+    sysid: u8,
+    what: &'static str,
+}
+
 #[derive(Debug)]
 struct Pending {
     rx: Receiver<IntentAck>,
@@ -127,6 +136,10 @@ pub struct Gateway {
     sequence: [u8; 256],
     uploads: HashMap<(SocketAddr, u8), Upload>,
     pending: Vec<Pending>,
+    /// Plans acknowledged as queued while the simulation was paused, still
+    /// waiting on the driver: if it later throws one away (the world is
+    /// reset, reloaded or restored first), the ground station is told.
+    queued: Vec<Queued>,
     /// Last (seq, rev, fence id) announced in MISSION_CURRENT, per drone.
     announced: BTreeMap<u8, (u16, u32, u32)>,
     /// The geofences open, and the airspace revision they are at.
@@ -165,6 +178,7 @@ impl Gateway {
             sequence: [0; 256],
             uploads: HashMap::new(),
             pending: Vec::new(),
+            queued: Vec::new(),
             announced: BTreeMap::new(),
             last_report,
             world,
@@ -511,6 +525,7 @@ impl Gateway {
     }
 
     async fn poll_pending(&mut self) {
+        self.poll_queued().await;
         if self.pending.is_empty() {
             return;
         }
@@ -545,14 +560,64 @@ impl Gateway {
                     still.push(p);
                 }
                 Ok(ack) => done.push((p, Some(ack))),
-                Err(TryRecvError::Disconnected) => done.push((p, None)),
-                Err(TryRecvError::Empty) if now >= p.deadline => done.push((p, None)),
+                // The driver dropped it unanswered: it will never apply.
+                Err(TryRecvError::Disconnected) => {
+                    let reason = sim_core::RejectReason::Discarded {
+                        why: "the simulation dropped it".into(),
+                    };
+                    done.push((p, Some(IntentAck::Rejected(reason))));
+                }
+                Err(TryRecvError::Empty) if now >= p.deadline => {
+                    // Acknowledged as queued below; keep listening, so a
+                    // plan the world later throws away is not taken as flown.
+                    let what = match p.what {
+                        Awaiting::Mission => Some("Mission"),
+                        Awaiting::Fence => Some("Fence plan"),
+                        Awaiting::Command(_) => None,
+                    };
+                    if let Some(what) = what {
+                        self.queued.push(Queued {
+                            rx: p.rx.clone(),
+                            peer: p.peer,
+                            sysid: p.sysid,
+                            what,
+                        });
+                    }
+                    done.push((p, None));
+                }
                 Err(TryRecvError::Empty) => still.push(p),
             }
         }
         self.pending = still;
         for (p, ack) in done {
             self.answer(p, ack).await;
+        }
+    }
+
+    /// Tell a ground station when a plan it was told is queued will never
+    /// apply after all.
+    async fn poll_queued(&mut self) {
+        let mut lost = Vec::new();
+        self.queued.retain(|q| match q.rx.try_recv() {
+            Err(TryRecvError::Empty) => true,
+            Ok(IntentAck::Applied { .. }) => false,
+            // STATUSTEXT holds 50 bytes, so say it short.
+            Ok(IntentAck::Rejected(sim_core::RejectReason::Discarded { .. })) => {
+                lost.push((q.sysid, q.peer, format!("{} not applied: world reset", q.what)));
+                false
+            }
+            Ok(IntentAck::Rejected(reason)) => {
+                lost.push((q.sysid, q.peer, format!("{} not applied: {reason}", q.what)));
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                lost.push((q.sysid, q.peer, format!("{} not applied", q.what)));
+                false
+            }
+        });
+        for (sysid, peer, text) in lost {
+            self.status(sysid, peer, MavSeverity::MAV_SEVERITY_ERROR, &text)
+                .await;
         }
     }
 

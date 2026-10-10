@@ -1175,6 +1175,28 @@ impl World {
         true
     }
 
+    /// An order back from a trip undelivered (its drone came home without
+    /// it, or crashed): turned away if a fence now covers its address and
+    /// such orders are, or if it has failed `MAX_FAILED_TRIPS` trips; else
+    /// back to the front of its depot's queue.
+    pub(crate) fn return_order(&mut self, mut order: crate::dispatch::Order, depot: u16) {
+        order.dispatched_tick = None;
+        order.failed_trips = order.failed_trips.saturating_add(1);
+        if self.reject_if_fenced(&order, Stage::Returned) {
+            return;
+        }
+        if order.failed_trips >= crate::dispatch::MAX_FAILED_TRIPS {
+            self.dispatch.rejected += 1;
+            let reason = format!(
+                "no courier could reach the address: {} trips came back without delivering it",
+                order.failed_trips
+            );
+            self.rejection_report(&order, Stage::Returned, None, reason);
+            return;
+        }
+        self.dispatch.queues[usize::from(depot)].push_front(order);
+    }
+
     /// Turn away every queued order a newly opened geofence covers.
     fn reject_newly_fenced(&mut self) {
         if !self.settings.reject_orders_in_geofences {
@@ -1197,7 +1219,6 @@ impl World {
     /// Log an order turned away because its address is inside a geofence.
     fn order_rejected(&mut self, order: &crate::dispatch::Order, stage: Stage) {
         let at = address_point(&self.book, order.address);
-        let address = &self.book.addresses[order.address as usize];
         let fence = self
             .airspace
             .covering(&at)
@@ -1212,6 +1233,22 @@ impl World {
             (Some(id), false) => format!("geofence #{id} ({fence_name})"),
             (None, _) => "a geofence".to_owned(),
         };
+        let reason = format!("the delivery address is inside {fence_text}{}", stage.since());
+        self.rejection_report(order, stage, fence_id.map(|id| (id, fence_name)), reason);
+    }
+
+    /// Report an order turned away, with why; `fence` is the one covering
+    /// its address, if that was the reason.
+    fn rejection_report(
+        &mut self,
+        order: &crate::dispatch::Order,
+        stage: Stage,
+        fence: Option<(u32, String)>,
+        reason: String,
+    ) {
+        let at = address_point(&self.book, order.address);
+        let address = &self.book.addresses[order.address as usize];
+        let (fence_id, fence_name) = fence.map_or((None, String::new()), |(id, n)| (Some(id), n));
         let detail = serde_json::json!({
             "order": order.id,
             "address": order.address,
@@ -1221,7 +1258,7 @@ impl World {
             "fence": fence_id,
             "fence_name": fence_name,
             "stage": stage.name(),
-            "reason": format!("the delivery address is inside {fence_text}{}", stage.since()),
+            "reason": reason,
         });
         self.report(Report {
             seq: 0,
@@ -1249,11 +1286,8 @@ impl World {
         let id = wreck.body.id;
         let operated = self.ops.remove(&id).is_some();
         if let Some(courier) = &wreck.courier {
-            if let Some(mut order) = courier.order.clone().filter(|_| !courier.delivered) {
-                order.dispatched_tick = None;
-                if !self.reject_if_fenced(&order, Stage::Returned) {
-                    self.dispatch.queues[usize::from(courier.depot)].push_front(order);
-                }
+            if let Some(order) = courier.order.clone().filter(|_| !courier.delivered) {
+                self.return_order(order, courier.depot);
             }
         }
         // A crashed spare leaves the stand-by list; its replacement joins it.

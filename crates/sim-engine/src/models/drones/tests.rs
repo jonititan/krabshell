@@ -519,9 +519,27 @@ fn a_courier_that_runs_flat_crashes_and_the_spare_then_new_drones_replace_it() {
                 "the new drone flies the next order"
             );
         }
-        // Every crash put the order it carried back in the queue.
-        assert!(crash.detail["requeued_order"].as_u64().is_some());
+        // Every crash put the order it carried back in the queue, until it
+        // had failed too many trips: then it was turned away, and said why.
+        if crash.detail["requeued_order"].as_u64().is_none() {
+            assert!(
+                reports.iter().any(|r| r.kind == ReportKind::OrderRejected
+                    && r.detail["stage"] == "returned"
+                    && r.detail["reason"]
+                        .as_str()
+                        .is_some_and(|t| t.starts_with("no courier could reach"))),
+                "crash {i} neither requeued nor turned away its order"
+            );
+        }
     }
+    let turned_away: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.kind == ReportKind::OrderRejected)
+        .collect();
+    assert!(
+        !turned_away.is_empty(),
+        "an order no courier can reach is turned away, not retried for ever"
+    );
     // Wrecks leave. The spare was already in the fleet, so calling it up
     // leaves one drone fewer; every crash after that brings a new one.
     let live: Vec<&Record> = model
@@ -536,13 +554,16 @@ fn a_courier_that_runs_flat_crashes_and_the_spare_then_new_drones_replace_it() {
     for crash in &crashes {
         assert!(crash.alt_mm <= 1_000, "{} mm", crash.alt_mm);
     }
-    // No order is lost: every one placed is queued or on board.
+    // No order is lost: every one placed is queued, on board or turned away.
     let dispatch = model.world().dispatch();
     let carried = live
         .iter()
         .filter(|r| r.saved.courier.as_ref().is_some_and(|c| c.order.is_some()))
         .count();
-    assert_eq!(dispatch.placed as usize, dispatch.queued() + carried);
+    assert_eq!(
+        dispatch.placed as usize,
+        dispatch.queued() + carried + dispatch.rejected as usize
+    );
 }
 
 #[test]
@@ -1648,6 +1669,63 @@ fn a_drone_low_on_battery_out_of_reach_of_home_diverts_to_a_station_charges_and_
         drone.on_home_pad(&courier.saved.pose, model.world().terrain()),
         "home again"
     );
+}
+
+#[test]
+fn a_drone_already_sent_home_still_diverts_when_its_reserve_will_not_get_it_there() {
+    // As above, but a ground station sends it home (RTL) just before its
+    // reserve: it is already on its way home when the reserve comes, and
+    // must still divert rather than run flat short of home.
+    let mut model = drones(Profile::Gold);
+    let mut blob = far_blob(1_600.0, &[1_300.0, 2_600.0], 0.0);
+    blob.config
+        .model
+        .insert("battery_reserve_pct".into(), Param::Float(40.0));
+    model.reset(&blob).unwrap();
+    let (x, y) = flight::displace(flight::to_e7(LAT), flight::to_e7(LON), 2_500.0, 0.0);
+    let items = serde_json::json!({ "items": [
+        { "seq": 0, "frame": 3, "command": 22, "z": 40.0 },
+        { "seq": 1, "frame": 11, "command": 16, "x": x, "y": y, "z": 50.0 },
+        { "seq": 2, "frame": 11, "command": 17, "x": x, "y": y, "z": 50.0 }
+    ]});
+    for (code, payload) in [
+        (codes::MISSION_UPLOAD, items),
+        (
+            codes::COMMAND,
+            serde_json::json!({ "command": 400, "params": [1] }),
+        ),
+        (
+            codes::COMMAND,
+            serde_json::json!({ "command": 300, "params": [0] }),
+        ),
+    ] {
+        model
+            .apply_intent(&intent(&model, 5, code, payload))
+            .unwrap();
+    }
+    let mut tick = 1;
+    let mut reports = Vec::new();
+    while record(&model, 5).saved.drone.as_ref().unwrap().battery_ppm > 420_000 {
+        reports.extend(run(&mut model, tick, 1));
+        tick += 1;
+        assert!(tick < 20_000, "never got low");
+    }
+    model
+        .apply_intent(&intent(
+            &model,
+            5,
+            codes::COMMAND,
+            serde_json::json!({ "command": 20, "params": [] }),
+        ))
+        .unwrap();
+    reports.extend(run(&mut model, tick, 20_000));
+    assert!(
+        reports
+            .iter()
+            .any(|r| r.kind == ReportKind::Station && r.detail["action"] == "divert"),
+        "it diverted"
+    );
+    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash), "no crash");
 }
 
 #[test]

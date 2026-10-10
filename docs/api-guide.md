@@ -51,6 +51,11 @@ With `DASHBOARD_TOKEN` unset or blank the server accepts every request, and
 refuses to bind anything but loopback. Set it before exposing the server. See
 [Operating](operating.md) for the flags and environment.
 
+Writes and WebSocket upgrades from a browser must come from the server's own
+origin: one whose `Origin` names another site (or another port) gets `403`
+with the code `forbidden`. Scripts that send no `Origin` are unaffected. See
+[Requests from other sites](operating.md#requests-from-other-sites).
+
 Treat it like a password: anyone who
 holds it can drive the world, and the `actor` an intent claims is not checked
 against it (see [Rate limits](#rate-limits)).
@@ -79,7 +84,7 @@ its rejection reason and fields there. The codes and their statuses:
 | 401 | `unauthorized` |
 | 403 | `forbidden` |
 | 404 | `not_found`, `unknown_scenario` |
-| 409 | `requires_pause`, `requires_reset` |
+| 409 | `requires_pause`, `requires_reset`, `intent_discarded` |
 | 413 | `payload_too_large` |
 | 429 | `rate_limited`, `backpressured` |
 | 500 | `internal`, `sim_panic` |
@@ -107,18 +112,14 @@ wrong.
 
 | What | Limit | Answer when over |
 |---|---|---|
-| Any request body | 2 MiB in practice (see below) | `413`, plain text: `Failed to buffer the request body: length limit exceeded`. A scenario upload fails while the form is read, with `400` `bad_request`. |
+| Any request body | 64 MiB | `413`, plain text: `length limit exceeded`. It comes before any handler, so it is not a problem body. |
 | One intent on `POST /intents` | 16 KiB | `413`, `payload_too_large` |
 | A scenario pack, once unzipped | 256 MiB and 4 096 files | `400`, `malformed_scenario` |
 
-The server sets an overall cap of 64 MiB (`MAX_BODY_BYTES` in
-[`crates/sim-axum/src/lib.rs`](../crates/sim-axum/src/lib.rs)), but every route
-that reads a body (JSON bodies, checkpoint uploads and scenario uploads) also
-keeps the web framework's default cap of 2 MiB, and that is the one that bites
-first. Most checkpoints fit: `london-patrol` is about 1 MB and
-`kaunas-deliveries` about 1.6 MB at the start of a run. A `swarm-survey`
-checkpoint is about 3.6 MB and is refused on upload; there is no other way to
-restore one yet.
+The overall cap is `MAX_BODY_BYTES` in
+[`crates/sim-axum/src/lib.rs`](../crates/sim-axum/src/lib.rs). Checkpoints fit
+with room to spare: `london-patrol` is about 1 MB, `kaunas-deliveries` about
+1.6 MB at the start of a run and `swarm-survey` about 3.6 MB.
 
 ### Rate limits
 
@@ -502,11 +503,19 @@ fields:
 ```
 
 The reasons are `stale`, `too_far`, `backpressured`, `duplicate`,
-`out_of_bounds`, `rejected` (with `message`) and `rate_limited`. They are the
-same checks as for REST (see [Admission](#admission)), named after the reason
-rather than the problem code. `accepted` comes once the intent has been
-applied, not when it is queued, so on a paused world it waits for the next
-step.
+`out_of_bounds`, `rejected` (with `message`), `rate_limited` and `discarded`
+(with `why`). They are the same checks as for REST (see
+[Admission](#admission)), named after the reason rather than the problem code.
+`discarded` means the intent was queued but the world was replaced (a reset,
+a scenario load, a checkpoint restore, or a config change that rebuilds it)
+before its tick came. `accepted` comes once the intent has been applied, not
+when it is queued, so on a paused world it waits for the next step.
+
+One connection may have at most 1 000 intents waiting for an answer. More are
+refused as `backpressured` until some are answered. An intent is capped at
+16 KiB as on REST (an `error` with `payload_too_large`), a message at 1 MiB
+(the server closes the connection), and a subscription's cells are counted
+before a coarse cell is expanded, so asking for too much is refused at once.
 
 `tick` carries the same counters as `GET /run`: `agent_count`,
 `occupied_cells`, `sim_tps`, `publish_hz`, `last_step_ns`,

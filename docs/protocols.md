@@ -213,7 +213,7 @@ download straight after the ack returns it.
 | Upload outcome | `MISSION_ACK` type |
 |---|---|
 | Applied | `MAV_MISSION_ACCEPTED` |
-| Not applied within 1 s (simulation paused or busy) | `MAV_MISSION_ACCEPTED`, with the `STATUSTEXT` "Mission queued: simulation paused". It applies on the next tick |
+| Not applied within 1 s (simulation paused or busy) | `MAV_MISSION_ACCEPTED`, with the `STATUSTEXT` "Mission queued: simulation paused". It applies on the next tick. If the world is reset, reloaded or restored before then, it never applies, and an error `STATUSTEXT` "Mission not applied: world reset" says so (a fence plan, "Fence plan not applied: …") |
 | `count` above 4096 | `MAV_MISSION_NO_SPACE`, before any item is requested |
 | More items than the pack's `max_mission_items` (default 128, at most 4096) | `MAV_MISSION_NO_SPACE` |
 | An unsupported frame | `MAV_MISSION_UNSUPPORTED_FRAME` |

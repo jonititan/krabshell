@@ -87,6 +87,24 @@ impl GeoCell {
             .map_err(CellError::A5)
     }
 
+    /// How many cells [`children`](Self::children) at `resolution` would
+    /// return, without making them: a resolution-0 cell has five children,
+    /// every other cell four. Saturates rather than overflowing, so a caller
+    /// can check a budget before asking for millions.
+    pub fn children_count(self, resolution: i32) -> u64 {
+        let from = self.resolution();
+        if resolution <= from {
+            return 1;
+        }
+        let mut depth = (resolution - from) as u32;
+        let mut count: u64 = 1;
+        if from == 0 {
+            count = 5;
+            depth -= 1;
+        }
+        count.saturating_mul(4u64.saturating_pow(depth))
+    }
+
     /// Edge-adjacent cells, excluding `self`.
     pub fn neighbors(self) -> Result<Vec<Self>, CellError> {
         let mut cells = self.grid_disk(1)?;
@@ -291,6 +309,19 @@ impl<'de> Deserialize<'de> for GeoCell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn children_count_matches_the_children() {
+        let fine = GeoCell::from_lonlat(-0.1276, 51.5072, 6).unwrap();
+        for from in 0..=3 {
+            let cell = fine.parent(Some(from)).unwrap();
+            for to in from..=6 {
+                let made = cell.children(Some(to)).unwrap().len() as u64;
+                assert_eq!(cell.children_count(to), made, "{from} -> {to}");
+            }
+        }
+        assert_eq!(fine.parent(Some(0)).unwrap().children_count(60), u64::MAX);
+    }
 
     const LONDON: (f64, f64) = (-0.1276, 51.5072);
 

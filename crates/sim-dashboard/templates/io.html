@@ -46,11 +46,23 @@
       const file = document.getElementById('restore-file').files[0];
       if (!file) return;
       status.textContent = 'Uploading…';
-      const response = await fetch('/api/v1/state/upload', { method: 'POST', body: await file.arrayBuffer() });
-      const body = await response.json();
-      status.textContent = response.ok
-        ? `Restored to tick ${body.tick} with ${body.agent_count} agents.`
-        : `${body.code}: ${body.detail}`;
+      try {
+        const response = await fetch('/api/v1/state/upload', { method: 'POST', body: await file.arrayBuffer() });
+        // A refusal before the handler (a body over the server's limit) is
+        // plain text, not a problem body.
+        const text = await response.text();
+        let body = null;
+        try { body = JSON.parse(text); } catch { /* not JSON */ }
+        if (response.ok && body) {
+          status.textContent = `Restored to tick ${body.tick} with ${body.agent_count} agents.`;
+        } else if (body && body.code) {
+          status.textContent = `${body.code}: ${body.detail}`;
+        } else {
+          status.textContent = `Not restored (${response.status}): ${text.slice(0, 200)}`;
+        }
+      } catch (err) {
+        status.textContent = `Not restored: ${err.message || err}`;
+      }
     });
   </script>
   {% else %}
