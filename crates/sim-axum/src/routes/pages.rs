@@ -18,7 +18,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Form, Router};
 use serde::Deserialize;
-use sim_core::config::{Config, Param};
+use sim_core::config::Config;
 use sim_core::{GeoCell, Intent, IntentVerb, Profile, RunMode};
 use sim_engine::{Control, Published, Submission};
 
@@ -205,6 +205,10 @@ pub struct ControlView {
     pub fault: Option<String>,
     pub last_good_tick: String,
     pub flash: Option<Flash>,
+    /// Render the `#control-flash` slot beside the panel: on a page, and on an
+    /// action's reply (out of band). The once-a-second poll leaves it out, so
+    /// it never wipes the outcome of the last action.
+    pub flash_slot: bool,
 }
 
 impl ControlView {
@@ -268,6 +272,7 @@ impl ControlView {
             fault: health.fault.clone(),
             last_good_tick: thousands(health.last_good_tick),
             flash,
+            flash_slot: true,
         }
     }
 }
@@ -799,6 +804,8 @@ struct IntentsTemplate {
     nav: &'static str,
     control: ControlView,
     recent: Vec<IntentRow>,
+    /// Always `None` on the page; the slot starts empty.
+    flash: Option<Flash>,
     resolution: String,
 }
 
@@ -833,6 +840,8 @@ struct CellFragment {
 #[template(path = "fragments/intents.html")]
 struct IntentsFragment {
     recent: Vec<IntentRow>,
+    /// The outcome of a submission, swapped into `#intent-flash` out of band.
+    flash: Option<Flash>,
 }
 
 fn render(template: impl Template) -> Response {
@@ -1055,6 +1064,7 @@ async fn intents_page(State(state): State<AppState>) -> Response {
         nav: "intents",
         control: ControlView::build(&state, None),
         recent: intent_rows(&view),
+        flash: None,
         resolution: view.meta.resolution.to_string(),
     })
 }
@@ -1072,9 +1082,9 @@ async fn io_page(State(state): State<AppState>) -> Response {
 // -------------------------------------------------------------- fragments
 
 async fn control_fragment(State(state): State<AppState>) -> Response {
-    render(ControlFragment {
-        control: ControlView::build(&state, None),
-    })
+    let mut control = ControlView::build(&state, None);
+    control.flash_slot = false;
+    render(ControlFragment { control })
 }
 
 async fn scenarios_fragment(State(state): State<AppState>) -> Response {
@@ -1099,6 +1109,7 @@ async fn cell_fragment(State(state): State<AppState>, Query(query): Query<CellQu
 async fn intents_fragment(State(state): State<AppState>) -> Response {
     render(IntentsFragment {
         recent: intent_rows(&state.driver.view()),
+        flash: None,
     })
 }
 
@@ -1317,22 +1328,11 @@ fn control_with(state: &AppState, flash: Flash) -> Response {
 }
 
 fn intents_with(state: &AppState, flash: Flash) -> Response {
-    // The intent form swaps the whole panel, so the flash rides along with the
-    // refreshed activity list.
-    let view = state.driver.view();
-    let _ = flash.kind;
+    // The intent form swaps the activity list; the outcome rides along out of
+    // band into #intent-flash, which the list's own poll never touches.
     render(IntentsFragment {
-        recent: std::iter::once(IntentRow {
-            id: "—".to_owned(),
-            actor: "dashboard".to_owned(),
-            verb: "submit".to_owned(),
-            cell: "—".to_owned(),
-            tick: thousands(view.meta.tick),
-            rejected: flash.kind == "bad",
-            detail: flash.message,
-        })
-        .chain(intent_rows(&view))
-        .collect(),
+        recent: intent_rows(&state.driver.view()),
+        flash: Some(flash),
     })
 }
 
@@ -1468,7 +1468,7 @@ fn thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push('\u{202f}');
         }
         out.push(ch);
@@ -1484,11 +1484,7 @@ fn realtime_tps(config: &Config) -> Option<f64> {
 
 /// Simulated seconds per tick, from the model's `tick_seconds`.
 fn tick_seconds(config: &Config) -> Option<f64> {
-    config
-        .model
-        .get("tick_seconds")
-        .and_then(Param::as_f64)
-        .filter(|s| *s > 0.0 && s.is_finite())
+    config.tick_seconds()
 }
 
 /// `4 d 03:12:44` (days only once there are any), whole seconds.

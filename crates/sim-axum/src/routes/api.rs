@@ -63,7 +63,6 @@ pub async fn health(State(state): State<AppState>) -> Response {
 #[derive(Serialize)]
 pub struct RunStatus {
     pub mode: RunMode,
-    pub tick: u64,
     pub scenario_id: String,
     pub scenario_name: String,
     pub model: String,
@@ -72,6 +71,7 @@ pub struct RunStatus {
     pub parallel: bool,
     pub threads: u32,
     pub target_tps: Option<f64>,
+    /// Flattened, so `tick` and the counters sit at the top level.
     #[serde(flatten)]
     pub metrics: Metrics,
     pub meta: SnapshotMeta,
@@ -84,7 +84,6 @@ pub struct RunStatus {
 fn status_of(state: &AppState, view: &Published) -> RunStatus {
     RunStatus {
         mode: view.health.mode,
-        tick: view.meta.tick,
         scenario_id: view.scenario_id.clone(),
         scenario_name: view.scenario_name.clone(),
         model: view.model_kind.clone(),
@@ -832,11 +831,7 @@ pub struct Refused {
 }
 
 fn tick_seconds(view: &Published) -> Option<f64> {
-    view.config
-        .model
-        .get("tick_seconds")
-        .and_then(sim_core::config::Param::as_f64)
-        .filter(|s| *s > 0.0 && s.is_finite())
+    view.config.tick_seconds()
 }
 
 /// The geofences open now, and what has happened to fences lately. Empty
@@ -1353,13 +1348,7 @@ pub async fn state_entities(
         "x-sim-mode",
         format!("{:?}", view.health.mode).to_lowercase(),
     );
-    if let Some(seconds) = view
-        .config
-        .model
-        .get("tick_seconds")
-        .and_then(sim_core::config::Param::as_f64)
-        .filter(|s| *s > 0.0 && s.is_finite())
-    {
+    if let Some(seconds) = tick_seconds(&view) {
         header("x-sim-tick-seconds", seconds.to_string());
     }
     let kinds: Option<Vec<&str>> = query.kind.as_deref().map(|k| {

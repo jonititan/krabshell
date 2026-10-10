@@ -171,19 +171,21 @@ impl GeoCell {
 
     /// Accepts `"0x1f.."`, bare hex, or a decimal `u64`.
     ///
-    /// Decimal is accepted because the spec allows either on the wire, but a
-    /// bare 16-digit string is ambiguous, so hex wins when both parse.
+    /// Decimal is accepted because the spec allows either on the wire. Bare
+    /// text is hex when it is 16 characters long, the width [`Self::to_hex`]
+    /// writes, or has a letter a-f; anything else is decimal. So a 16-digit
+    /// decimal is read as hex: write it with `0x` or in full to be sure.
     pub fn parse(s: &str) -> Result<Self, CellError> {
         let s = s.trim();
         if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
             return a5::hex_to_u64(hex).map(GeoCell).map_err(CellError::A5);
         }
-        if let Ok(v) = u64::from_str_radix(s, 16) {
-            return Ok(GeoCell(v));
+        let bad = || CellError::BadCellId(s.to_owned());
+        if s.len() == 16 || s.bytes().any(|b| b.is_ascii_alphabetic()) {
+            u64::from_str_radix(s, 16).map(GeoCell).map_err(|_| bad())
+        } else {
+            s.parse::<u64>().map(GeoCell).map_err(|_| bad())
         }
-        s.parse::<u64>()
-            .map(GeoCell)
-            .map_err(|_| CellError::BadCellId(s.to_owned()))
     }
 }
 
@@ -343,6 +345,21 @@ mod tests {
             GeoCell::parse(&format!("0x{}", cell.to_hex())).unwrap(),
             cell
         );
+    }
+
+    #[test]
+    fn bare_ids_are_hex_at_full_width_or_with_letters_and_decimal_otherwise() {
+        let cell = GeoCell::from_lonlat(LONDON.0, LONDON.1, 12).unwrap();
+        assert_eq!(GeoCell::parse(&cell.to_hex()).unwrap(), cell);
+        assert_eq!(GeoCell::parse(&cell.raw().to_string()).unwrap(), cell);
+        assert_eq!(GeoCell::parse("1234").unwrap(), GeoCell(1234));
+        assert_eq!(GeoCell::parse("ff").unwrap(), GeoCell(0xff));
+        assert_eq!(
+            GeoCell::parse("6410800000000000").unwrap(),
+            GeoCell(0x6410_8000_0000_0000)
+        );
+        assert!(GeoCell::parse("12g4").is_err());
+        assert!(GeoCell::parse("").is_err());
     }
 
     #[test]

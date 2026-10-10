@@ -84,8 +84,8 @@ pub enum ServerMsg {
         reason: RejectReason,
     },
     /// Rate-limited heartbeat, so a viewer can show progress without deltas.
+    /// The tick is `metrics.tick`, flattened to the top level.
     Tick {
-        tick: u64,
         #[serde(flatten)]
         metrics: Metrics,
     },

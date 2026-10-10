@@ -153,7 +153,6 @@ async fn serve(socket: WebSocket, state: AppState) {
                 }
 
                 let heartbeat = ServerMsg::Tick {
-                    tick: view.meta.tick,
                     metrics: view.metrics,
                 };
                 if send(&mut sink, heartbeat).await.is_err() {

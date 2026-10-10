@@ -56,8 +56,10 @@ it does not jump. The maps redraw to fit when it changes.
 Every page except the docs carries the same control panel at the
 top. It is one htmx fragment (`/fragments/control`) that refreshes itself
 once a second. Each button swaps the same fragment with the result, so a click
-and the poll never fight over the page. A green, amber or red banner reports
-the outcome of the last action.
+and the poll never fight over the page. A green, amber or red banner just
+above the panel reports the outcome of the last action. The poll leaves it
+alone; a green one fades after six seconds, and an amber or red one stays
+until the next action.
 
 | Control | Dashboard action | API equivalent |
 |---|---|---|
@@ -204,7 +206,7 @@ Despawn with no agent clears the whole cell; move needs an agent id.
 
 The **Activity** table lists recent intents (tick, actor, verb, cell,
 outcome), refreshed every two seconds. The result of your own submission
-appears as the first row. Intents from the dashboard are subject to the same
+appears in a banner under the form, and stays until you submit again. Intents from the dashboard are subject to the same
 per-actor rate limit as any other.
 
 ## Import / export

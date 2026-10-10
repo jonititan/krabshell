@@ -802,5 +802,5 @@ cargo clippy --workspace --all-targets
 Every test binary links Bevy; `CARGO_PROFILE_DEV_DEBUG=0
 CARGO_PROFILE_TEST_DEBUG=0` keeps them small. CI runs formatting, clippy, tests
 and gold replays (drones through `simctl` and standalone through
-`krab-drones`, walkers on krABMaga's grid) on the default build and again with
-`parallel`.
+`krab-drones`, walkers on krABMaga's grid) on the default build. The
+`parallel` job is switched off for now; it is commented out in the workflow.

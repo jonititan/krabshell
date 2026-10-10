@@ -67,14 +67,10 @@ pub fn flying(drone: &DroneStatus) -> bool {
 /// (an A5 resolution; absent means the pack does not ask for one) and the
 /// pack's `tick_seconds`.
 pub fn settings(config: &sim_core::config::Config) -> Option<(i32, f64)> {
-    use sim_core::config::Param;
     let resolution = config.model.get("heatmap_resolution")?.as_i64()?;
     let tick_seconds = config
-        .model
-        .get("tick_seconds")
-        .and_then(Param::as_f64)
-        .filter(|s| *s > 0.0 && s.is_finite())
-        .unwrap_or(0.1);
+        .tick_seconds()
+        .unwrap_or(sim_core::config::DEFAULT_TICK_SECONDS);
     (0..=30)
         .contains(&resolution)
         .then_some((resolution as i32, tick_seconds))

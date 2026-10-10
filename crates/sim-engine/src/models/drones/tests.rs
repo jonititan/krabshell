@@ -203,11 +203,13 @@ fn a_checkpoint_resumes_on_the_same_path() {
     let mut cells = Vec::new();
     straight.snapshot(&mut cells, usize::MAX);
     let fields = straight.fields();
+    let saved = hash(&straight);
     let rest_straight = run(&mut straight, 401, 400);
 
     let mut restored = drones(Profile::Gold);
     restored.load_cells(cells).unwrap();
     restored.restore_fields(&fields).unwrap();
+    assert_eq!(saved, hash(&restored), "differs before stepping on");
     let rest_restored = run(&mut restored, 401, 400);
 
     assert_eq!(hash(&straight), hash(&restored));
@@ -423,6 +425,11 @@ fn a_checkpoint_mid_delivery_restores_the_queue_and_the_courier() {
     restored.load_cells(cells).unwrap();
     restored.restore_fields(&original.fields()).unwrap();
     assert_eq!(restored.world().dispatch(), original.world().dispatch());
+    assert_eq!(
+        hash(&original),
+        hash(&restored),
+        "differs before stepping on"
+    );
 
     let a = run(&mut original, 2_501, 3_000);
     let b = run(&mut restored, 2_501, 3_000);
@@ -1725,7 +1732,10 @@ fn a_drone_already_sent_home_still_diverts_when_its_reserve_will_not_get_it_ther
             .any(|r| r.kind == ReportKind::Station && r.detail["action"] == "divert"),
         "it diverted"
     );
-    assert!(!reports.iter().any(|r| r.kind == ReportKind::Crash), "no crash");
+    assert!(
+        !reports.iter().any(|r| r.kind == ReportKind::Crash),
+        "no crash"
+    );
 }
 
 #[test]

@@ -194,7 +194,7 @@ impl Auth {
         let own = host
             .as_deref()
             .is_some_and(|host| origin.split_once("://").is_some_and(|(_, a)| a == host));
-        if own || self.origins.iter().any(|o| *o == origin) {
+        if own || self.origins.contains(&origin) {
             None
         } else {
             Some("refused: sent from another origin (allow it with --allowed-origin)")

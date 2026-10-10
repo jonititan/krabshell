@@ -323,10 +323,12 @@ impl DroneAgent {
         self.wrecked = true;
         let mut detail = self.flight_detail(world);
         detail["cause"] = "battery exhausted".into();
-        let carried = self
-            .courier
-            .as_ref()
-            .and_then(|c| c.order.as_ref().filter(|_| !c.delivered).map(|o| (o.id, c.depot)));
+        let carried = self.courier.as_ref().and_then(|c| {
+            c.order
+                .as_ref()
+                .filter(|_| !c.delivered)
+                .map(|o| (o.id, c.depot))
+        });
         world.regions.release(self.body.id);
         if let Some(roi) = world.crash_region(&self.body.pose.point(), &self.body.callsign) {
             detail["roi"] = roi.into();
@@ -608,7 +610,7 @@ impl DroneAgent {
         true
     }
 
-    /// What it is doing, in a word.
+    /// What it is doing, in a word. [`activity_named`] lists the words.
     fn activity_now(&self, world: &World) -> &'static str {
         let grounded = self.drone.grounded(&self.body.pose, &world.terrain);
         let homing = world.ops.get(&self.body.id).is_some_and(|o| o.homing);
@@ -1105,7 +1107,7 @@ impl Member {
                 drone: saved.drone.ok_or_else(|| missing("drone"))?,
                 courier: saved.courier,
                 survey: saved.survey,
-                activity: "",
+                activity: activity_named(&saved.activity),
                 waiting_for_slot: saved.waiting_for_slot,
                 slot: saved.slot,
                 wrecked: false,
@@ -1186,4 +1188,20 @@ fn mission_item(command: u16, at: &Point, agl_m: f32) -> MissionItem {
         y: at.lon_e7,
         z: agl_m,
     }
+}
+
+/// A saved activity as the word [`DroneAgent::activity_now`] would give, so a
+/// restored board hashes the same as the one saved. Anything else is blank.
+fn activity_named(word: &str) -> &'static str {
+    [
+        "surveying",
+        "delivering",
+        "charging",
+        "idle",
+        "returning",
+        "flying",
+    ]
+    .into_iter()
+    .find(|known| *known == word)
+    .unwrap_or("")
 }

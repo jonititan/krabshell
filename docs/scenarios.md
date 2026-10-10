@@ -223,7 +223,7 @@ Every parameter the drones model reads, from [`../crates/sim-drones/src/settings
 
 | Parameter | Default | Unit | Meaning |
 |---|---|---|---|
-| `tick_seconds` | 0.1 | s | Simulated time per tick. Clamped to 0.001–10. The dashboard's clock, the heatmap and the weather clock read it too. |
+| `tick_seconds` | 0.1 | s | Simulated time per tick, 0.001–10; a config outside that range is refused. The dashboard's clock, the heatmap and the weather clock read the same value. Without it the dashboard offers no real-time speed. |
 | `seed` | `0x0d0e5eed00000001` | — | Seed for every random choice: where people and vehicles start and wander, vehicle types, orders, and what the cameras see. |
 
 ### Flight

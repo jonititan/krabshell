@@ -232,6 +232,47 @@ async fn run_status_describes_the_loaded_world() {
 }
 
 #[tokio::test]
+async fn run_status_names_each_key_once() {
+    let h = harness(Profile::Gold, 25);
+    let (_, _, text) = call(&h, get("/api/v1/run")).await;
+    let keys = top_level_keys(&text);
+    let mut unique = keys.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(keys.len(), unique.len(), "duplicate keys in {keys:?}");
+    assert!(keys.contains(&"tick".to_string()));
+}
+
+/// The keys of a JSON object in the order written, duplicates kept (a
+/// `serde_json::Value` would silently keep only the last).
+fn top_level_keys(text: &str) -> Vec<String> {
+    struct Keys(Vec<String>);
+    impl<'de> serde::Deserialize<'de> for Keys {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct Visitor;
+            impl<'de> serde::de::Visitor<'de> for Visitor {
+                type Value = Keys;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("an object")
+                }
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    mut map: A,
+                ) -> Result<Keys, A::Error> {
+                    let mut keys = Vec::new();
+                    while let Some((key, _)) = map.next_entry::<String, serde::de::IgnoredAny>()? {
+                        keys.push(key);
+                    }
+                    Ok(Keys(keys))
+                }
+            }
+            d.deserialize_map(Visitor)
+        }
+    }
+    serde_json::from_str::<Keys>(text).unwrap().0
+}
+
+#[tokio::test]
 async fn stepping_answers_with_the_world_after_the_step() {
     let h = harness(Profile::Fast, 10);
     let (status, body, _) = call(&h, post("/api/v1/run/step", json!({"n": 12}))).await;

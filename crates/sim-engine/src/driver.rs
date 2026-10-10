@@ -665,7 +665,9 @@ impl DriverLoop {
     /// unanswered (a ground station would think its mission was taken) or,
     /// still on the channel, land in a world they were not meant for.
     fn discard_pending(&mut self, why: &str) {
-        let reason = RejectReason::Discarded { why: why.to_owned() };
+        let reason = RejectReason::Discarded {
+            why: why.to_owned(),
+        };
         let mut gone: Vec<Submission> = self.pending.drain(..).collect();
         while let Ok(submission) = self.intents.try_recv() {
             gone.push(submission);

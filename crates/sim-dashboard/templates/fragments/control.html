@@ -1,8 +1,20 @@
 {#
   The control panel. Every page includes it, and it polls itself once a second.
   Actions swap this same fragment, so a button press and the poll cannot fight
-  over the DOM.
+  over the DOM. The outcome of an action goes in #control-flash, outside the
+  panel: the action's reply swaps it out of band and the poll never sends it,
+  so the message outlives the next refresh. An ok message fades after a few
+  seconds (app.css); a warning or error stays until the next action.
 #}
+{% if control.flash_slot %}
+<div id="control-flash" class="flash-slot" aria-live="polite"{% if control.flash.is_some() %} hx-swap-oob="true"{% endif %}>
+  {% match control.flash %}
+  {% when Some with (flash) %}
+  <div class="banner {{ flash.kind }}">{{ flash.message }}</div>
+  {% when None %}
+  {% endmatch %}
+</div>
+{% endif %}
 <section id="control"
          class="panel control"
          hx-get="/fragments/control"
@@ -33,12 +45,6 @@
     or use a coarser display resolution.
   </div>
   {% endif %}
-
-  {% match control.flash %}
-  {% when Some with (flash) %}
-  <div class="banner {{ flash.kind }}">{{ flash.message }}</div>
-  {% when None %}
-  {% endmatch %}
 
   <div class="control-head">
     <span class="{{ control.mode_class }}">{{ control.mode }}</span>
