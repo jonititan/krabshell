@@ -490,3 +490,51 @@ tr:hover button.rename-button, button.rename-button:focus-visible { opacity: 1; 
 form.rename { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; white-space: nowrap; }
 form.rename input { width: 22ch; }
 form.rename button { padding: 3px 10px; }
+
+/* ------------------------------------------------------------ API docs */
+
+.prose p { margin: 0 0 8px; max-width: 78ch; }
+.prose p:last-child { margin-bottom: 0; }
+.prose-inline p { display: inline; margin: 0; }
+.prose code, .type code, .prose-inline code { font-family: var(--mono); font-size: 0.92em; }
+.docs-toc { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px 24px; }
+.docs-toc h2 a { color: inherit; text-decoration: none; }
+.docs-toc ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 14px; }
+.docs-toc a { color: var(--ink); text-decoration: none; }
+.docs-toc a:hover { color: var(--accent); }
+.docs-tag { margin-top: 28px; }
+.docs-tag > .prose { margin-bottom: 12px; }
+.op, .schema { scroll-margin-top: 72px; }
+.op-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.op-head .path { font-family: var(--mono); font-size: 15px; overflow-wrap: anywhere; }
+.op h3, .schema h3 { font-size: 16px; margin: 8px 0 6px; }
+.op h4, .variant h4 { font-size: 13px; margin: 16px 0 6px; color: var(--dim); font-weight: 600; }
+a.anchor { margin-left: auto; text-decoration: none; }
+.method {
+  display: inline-block;
+  min-width: 5.5ch;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+.method.get { background: var(--ok); }
+.method.put, .method.patch { background: var(--loading); }
+.method.delete { background: var(--bad); }
+.type a { color: var(--accent); }
+.req { color: var(--bad); }
+table.fields td:first-child { white-space: nowrap; }
+table.fields, table.responses { font-size: 13px; }
+table.responses td.status { width: 5ch; font-weight: 600; }
+table.responses td.s2 { color: var(--ok); }
+table.responses td.s4 { color: var(--warn); }
+table.responses td.s5 { color: var(--bad); }
+.variant { border-left: 2px solid var(--line); padding-left: 12px; margin-top: 12px; }
+@media (max-width: 640px) {
+  table.fields { display: block; overflow-x: auto; }
+}

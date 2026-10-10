@@ -5,6 +5,7 @@
 //! wedged browser cannot cost the simulation a tick.
 
 pub mod auth;
+pub mod openapi;
 pub mod problem;
 pub mod ratelimit;
 pub mod routes;
@@ -67,7 +68,10 @@ pub fn router(state: AppState) -> Router {
 
     // `/health` sits outside the token wall on purpose: a process monitor
     // should be able to see that the driver is alive without holding a secret.
-    let public_api = Router::new().route("/health", get(routes::api::health));
+    // The API's description is no secret either, and tools fetch it bare.
+    let public_api = Router::new()
+        .route("/health", get(routes::api::health))
+        .route("/openapi.json", get(openapi::spec));
 
     let guarded_api = Router::new()
         .route("/run", get(routes::api::run_status))

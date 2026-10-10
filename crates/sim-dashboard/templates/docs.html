@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}API &middot; krabshell{% endblock %}
+
+{%- macro field_table(fields, show_location) -%}
+<table class="grid fields">
+  <thead><tr><th>Name</th>{% if show_location %}<th>In</th>{% endif %}<th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+  {% for f in fields.iter() %}
+  <tr>
+    <td class="mono">{{ f.name }}{% if f.required %} <span class="req" title="required">*</span>{% endif %}</td>
+    {% if show_location %}<td class="dim">{{ f.location }}</td>{% endif %}
+    <td class="mono type">{{ f.ty|safe }}</td>
+    <td class="prose">{{ f.description|safe }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro -%}
+
+{% block content %}
+<h1>{{ docs.title }} <span class="dim small">v{{ docs.version }}</span></h1>
+<div class="lede prose">{{ docs.intro|safe }}</div>
+
+<section class="panel">
+  <h2>OpenAPI</h2>
+  <ul class="links">
+    <li>
+      <a href="/api/v1/openapi.json">/api/v1/openapi.json</a>
+      <span class="dim">OpenAPI 3.1, no token needed. Open it in Swagger UI, Redoc or Postman, or generate a client from it.</span>
+    </li>
+  </ul>
+</section>
+
+<nav class="panel docs-toc" aria-label="Operations">
+  {% for tag in docs.tags %}
+  <div>
+    <h2><a href="#tag-{{ tag.name }}">{{ tag.name }}</a></h2>
+    <ul>
+      {% for op in tag.ops %}
+      <li><a href="#{{ op.anchor }}"><span class="method {{ op.method }}">{{ op.method }}</span> {{ op.summary }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+  <div>
+    <h2><a href="#schemas">schemas</a></h2>
+    <p class="dim small">{{ docs.schemas.len() }} types the bodies are built from.</p>
+  </div>
+</nav>
+
+{% for tag in docs.tags %}
+<section class="docs-tag" id="tag-{{ tag.name }}">
+  <h2>{{ tag.name }}</h2>
+  <div class="prose dim">{{ tag.description|safe }}</div>
+
+  {% for op in tag.ops %}
+  <article class="panel op" id="{{ op.anchor }}">
+    <header class="op-head">
+      <span class="method {{ op.method }}">{{ op.method }}</span>
+      <code class="path">{{ op.path }}</code>
+      {% if op.public %}<span class="tag">no token</span>{% endif %}
+      <a class="anchor dim" href="#{{ op.anchor }}" aria-label="Link to {{ op.summary }}">#</a>
+    </header>
+    <h3>{{ op.summary }}</h3>
+    <div class="prose">{{ op.description|safe }}</div>
+
+    {% if !op.params.is_empty() %}
+    <h4>Parameters</h4>
+    {% call field_table(op.params, true) %}{% endcall %}
+    {% endif %}
+
+    {% if let Some(body) = op.body.as_ref() %}
+    <h4>Request body <span class="dim small">{{ body.content_type }}{% if !body.required %}, optional{% endif %}</span></h4>
+    {% if body.fields.is_empty() %}
+    <p class="mono type">{{ body.ty|safe }}</p>
+    {% else %}
+    {% call field_table(body.fields, false) %}{% endcall %}
+    {% endif %}
+    {% endif %}
+
+    <h4>Responses</h4>
+    <table class="grid responses">
+      <tbody>
+      {% for r in op.responses %}
+      <tr>
+        <td class="mono status s{{ r.status.chars().next().unwrap_or('x') }}">{{ r.status }}</td>
+        <td>
+          <div class="prose">{{ r.description|safe }}</div>
+          {% if !r.ty.is_empty() %}<div class="mono type small">{{ r.ty|safe }} <span class="dim">{{ r.content_type }}</span></div>{% endif %}
+          {% for h in r.headers %}
+          <div class="small"><span class="mono">{{ h.name }}</span> <span class="mono type dim">{{ h.ty|safe }}</span> &mdash; <span class="prose-inline">{{ h.description|safe }}</span></div>
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+
+<section class="docs-tag" id="schemas">
+  <h2>Schemas</h2>
+  {% for s in docs.schemas %}
+  <article class="panel schema" id="schema-{{ s.name }}">
+    <h3 class="mono">{{ s.name }} <a class="anchor dim" href="#schema-{{ s.name }}" aria-label="Link to {{ s.name }}">#</a></h3>
+    <div class="prose">{{ s.description|safe }}</div>
+    {% if !s.ty.is_empty() %}<p class="mono type">{{ s.ty|safe }}</p>{% endif %}
+    {% if !s.fields.is_empty() %}{% call field_table(s.fields, false) %}{% endcall %}{% endif %}
+    {% if !s.variants.is_empty() %}
+    <p class="dim small">One of:</p>
+    {% for v in s.variants %}
+    <div class="variant">
+      {% if !v.title.is_empty() %}<h4 class="mono">{{ v.title }}</h4>{% endif %}
+      <div class="prose">{{ v.description|safe }}</div>
+      {% if !v.ty.is_empty() %}<p class="mono type">{{ v.ty|safe }}</p>{% endif %}
+      {% if !v.fields.is_empty() %}{% call field_table(v.fields, false) %}{% endcall %}{% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

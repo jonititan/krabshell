@@ -508,6 +508,14 @@ for _ in 0..1_000 {
 
 Everything is under `/api/v1`. Send `Authorization: Bearer $DASHBOARD_TOKEN`.
 
+The full reference is at **`/docs`** on a running server (the dashboard's **API**
+tab), rendered from the OpenAPI 3.1 document served at `/api/v1/openapi.json`.
+Neither needs a token. Point Swagger UI, Redoc, Postman or a client generator at
+the JSON. The document is kept by hand in
+[`crates/sim-axum/openapi.json`](crates/sim-axum/openapi.json); the tests in
+`crates/sim-axum/tests/openapi.rs` fail if a route is added without it, or if a
+response grows a field it does not describe.
+
 ```sh
 T="Authorization: Bearer $DASHBOARD_TOKEN"
 curl -s -H "$T" -X POST localhost:8080/api/v1/run/start -d '{}' -H 'content-type: application/json'
@@ -520,6 +528,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | Method | Path | |
 |---|---|---|
 | GET | `/health` | No token needed. 503 when the driver is dead or faulted. |
+| GET | `/openapi.json` | No token needed. This API as OpenAPI 3.1. |
 | GET | `/run` | Mode, tick, rates, counters, recent intents. |
 | POST | `/run/start` `/run/pause` `/run/step` `/run/reset` `/run/rate` | Clock control. |
 | GET POST | `/scenarios`, `/scenarios/{id}/load` | List, upload (multipart zip), load. |
@@ -527,6 +536,7 @@ curl -s -H "$T" localhost:8080/api/v1/state/download -o world.ckpt.json
 | GET | `/state?cells=…` or `?center=…&k=…` | Bags for a cell set. |
 | GET | `/state/map?res=N` | Occupancy aggregated to parent cells, with polygons. |
 | GET | `/state/cells/{cell}` | One bag. |
+| GET | `/state/entities?kind=…` | Every object with an exact position; `x-sim-tick`, `x-sim-mode` and `x-sim-tick-seconds` headers. |
 | GET POST | `/state/download`, `/state/upload` | Checkpoint out and in (restore requires pause). |
 | POST | `/intents` | Submit one intent. |
 | GET | `/intents/log` | JSON Lines replay log (gold profile). |

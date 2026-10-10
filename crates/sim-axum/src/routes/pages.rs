@@ -42,6 +42,7 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
     let public = Router::new()
         .route("/login", get(login_form).post(login_submit))
         .route("/logout", post(logout))
+        .route("/docs", get(docs_page))
         .route("/assets/app.css", get(|| asset(APP_CSS, "text/css")))
         .route("/assets/map.js", get(|| asset(MAP_JS, "text/javascript")))
         .route(
@@ -311,6 +312,13 @@ struct LoginTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "docs.html")]
+struct DocsTemplate {
+    nav: &'static str,
+    docs: &'static crate::openapi::DocsView,
+}
+
+#[derive(Template)]
 #[template(path = "run.html")]
 struct RunTemplate {
     nav: &'static str,
@@ -502,6 +510,16 @@ async fn logout() -> Response {
 }
 
 // ------------------------------------------------------------------ pages
+
+/// The API reference, rendered from the OpenAPI document. Outside the token
+/// wall, like the document itself: it says how to use the API, not what is in
+/// the world.
+async fn docs_page() -> Response {
+    render(DocsTemplate {
+        nav: "docs",
+        docs: &crate::openapi::VIEW,
+    })
+}
 
 async fn run_page(State(state): State<AppState>) -> Response {
     render(RunTemplate {

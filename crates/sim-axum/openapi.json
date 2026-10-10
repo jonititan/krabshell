@@ -1,0 +1,1247 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "krabshell API",
+    "version": "1",
+    "summary": "Drive and watch a krabshell simulation over HTTP.",
+    "description": "The REST and WebSocket surface of krabshell (spec §9). Every route reads the driver's published view or posts a message to it, so no request can cost the simulation a tick.\n\nErrors are `application/problem+json` bodies with a stable `code` to switch on. Everything but `/health` and this document needs the dashboard token, given as a bearer header, a `krabshell_token` cookie, or `?token=` (the only way a browser WebSocket can send it). A server started without `DASHBOARD_TOKEN` accepts every request.\n\nA request the server cannot parse (a missing or malformed query parameter, a body that is not the JSON the route takes, a missing `Content-Type`) is refused before it reaches a handler, with a plain-text 400, 415 or 422 rather than a problem body.",
+    "license": { "name": "MIT", "identifier": "MIT" }
+  },
+  "servers": [
+    { "url": "/api/v1", "description": "This server" }
+  ],
+  "security": [
+    { "bearer": [] },
+    { "cookie": [] },
+    { "query": [] }
+  ],
+  "tags": [
+    { "name": "run", "description": "Start, pause, step and reset the simulation, and watch its health." },
+    { "name": "scenarios", "description": "Scenario packs on disk: list, install and load them." },
+    { "name": "config", "description": "The effective run configuration." },
+    { "name": "state", "description": "The published world: cells, entities, overlays, checkpoints." },
+    { "name": "intents", "description": "Change the world. Intents are applied by the driver at a tick boundary." },
+    { "name": "geofences", "description": "Airspace the drones keep out of. Each change is an intent, applied on the next tick." },
+    { "name": "stations", "description": "Launch and recovery stations, and regions of interest for the drones to survey." },
+    { "name": "cells", "description": "A5 cell maths." },
+    { "name": "live", "description": "The WebSocket subscription." },
+    { "name": "meta", "description": "This document." }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["run"],
+        "operationId": "health",
+        "summary": "Liveness",
+        "description": "Unauthenticated on purpose, so a process monitor can watch the driver without holding the token. 503 when the tick thread has died or the model has faulted.",
+        "security": [],
+        "responses": {
+          "200": { "description": "The driver is alive.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } },
+          "503": { "description": "The driver is dead or faulted. The body says which.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "openapi",
+        "summary": "This document",
+        "description": "The OpenAPI description of this API, for Swagger UI, Redoc, client generators and the like. Unauthenticated.",
+        "security": [],
+        "responses": {
+          "200": { "description": "OpenAPI 3.1 document.", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/run": {
+      "get": {
+        "tags": ["run"],
+        "operationId": "runStatus",
+        "summary": "Run status",
+        "description": "What is loaded, what it is doing, and how fast.",
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/run/start": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runStart",
+        "summary": "Start running",
+        "description": "Run continuously. With no body, or `target_tps` null, as fast as the machine allows.",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StartBody" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/run/pause": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runPause",
+        "summary": "Pause",
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/run/step": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runStep",
+        "summary": "Step",
+        "description": "Advance `n` ticks (1 with no body), then pause. Answers once the burst has finished, so the status describes the world after it. A burst still going after 10 seconds is answered with mode `stepping`.",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StepBody" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/run/reset": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runReset",
+        "summary": "Reset",
+        "description": "Rebuild the loaded scenario from tick 0, paused.",
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/run/rate": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runRate",
+        "summary": "Set the tick rate",
+        "description": "Change the target rate without starting or pausing.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateBody" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/scenarios": {
+      "get": {
+        "tags": ["scenarios"],
+        "operationId": "scenariosList",
+        "summary": "List scenario packs",
+        "responses": {
+          "200": { "description": "Every pack in the scenario directory.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ScenarioSummary" } } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["scenarios"],
+        "operationId": "scenariosUpload",
+        "summary": "Install a scenario pack",
+        "description": "Upload a zipped pack. The id is the `id` field, or the archive's filename without its extension. Size and entry limits are enforced while the archive is read (spec §13).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["pack"],
+                "properties": {
+                  "pack": { "type": "string", "format": "binary", "description": "The zip. A part named `file` is accepted too." },
+                  "id": { "type": "string", "description": "What to call the pack. Defaults to the archive's filename stem." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Installed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UploadResult" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" }
+        }
+      }
+    },
+    "/scenarios/{id}/load": {
+      "post": {
+        "tags": ["scenarios"],
+        "operationId": "scenariosLoad",
+        "summary": "Load a scenario",
+        "description": "Replace the running world with this pack, paused at tick 0.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Pack id, as listed." }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/RunStatus" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/config": {
+      "get": {
+        "tags": ["config"],
+        "operationId": "configGet",
+        "summary": "Effective config",
+        "responses": {
+          "200": { "description": "The config the driver is running with.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Config" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "put": {
+        "tags": ["config"],
+        "operationId": "configPut",
+        "summary": "Replace the config",
+        "description": "Validated, then applied. Changing some fields (resolution, root, parallelism, model parameters) rebuilds the world; `reset_fields` names them.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Config" } } }
+        },
+        "responses": {
+          "200": { "description": "Applied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfigApplied" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/config/download": {
+      "get": {
+        "tags": ["config"],
+        "operationId": "configDownload",
+        "summary": "Download the config as TOML",
+        "description": "The config as it is currently effective, not the file on disk (spec §10.2), as `<scenario>-config.toml`.",
+        "responses": {
+          "200": { "description": "TOML attachment.", "headers": { "Content-Disposition": { "$ref": "#/components/headers/ContentDisposition" } }, "content": { "application/toml": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateGet",
+        "summary": "Occupied cells",
+        "description": "The objects in some cells. Name the cells with `cells`, or a disk with `center` and `k`; with neither, every published cell, which is refused once the world has more than 20 000 occupied cells.",
+        "parameters": [
+          { "name": "cells", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated cell ids, at most 20 000.", "example": "0x6c40000000000000,0x6c44000000000000" },
+          { "name": "center", "in": "query", "schema": { "$ref": "#/components/schemas/GeoCell" }, "description": "Centre of a disk of cells. Ignored when `cells` is given." },
+          { "name": "k", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 64, "default": 1 }, "description": "Rings around `center`. Values above 64 are treated as 64." },
+          { "name": "res", "in": "query", "schema": { "type": "integer" }, "description": "Accepted and ignored. Use `/state/map` to aggregate." }
+        ],
+        "responses": {
+          "200": { "description": "The cells asked for that have anything in them.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StateBody" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state/map": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateMap",
+        "summary": "Occupancy for a map",
+        "description": "Occupancy rolled up to a display resolution, each cell with its boundary ready to draw (spec §7.3).",
+        "parameters": [
+          { "name": "res", "in": "query", "schema": { "type": "integer" }, "description": "Resolution to aggregate to. Defaults to the config's `view_resolution`; clamped to between 0 and the occupancy resolution." }
+        ],
+        "responses": {
+          "200": { "description": "Aggregated cells.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MapBody" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state/entities": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateEntities",
+        "summary": "Positioned objects",
+        "description": "Every object with an exact position, for drawing individual things rather than cell counts. The headers carry the tick, the tick length and the run mode, so a client can predict motion between polls.",
+        "parameters": [
+          { "name": "kind", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated kinds to include. Omit for every kind.", "example": "drone,poi" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entities.",
+            "headers": {
+              "x-sim-tick": { "$ref": "#/components/headers/SimTick" },
+              "x-sim-mode": { "$ref": "#/components/headers/SimMode" },
+              "x-sim-tick-seconds": { "$ref": "#/components/headers/SimTickSeconds" }
+            },
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Entity" } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state/overlays": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateOverlays",
+        "summary": "Model overlays",
+        "description": "What the model publishes beside its agents, as it publishes it. For the drones: geofences, open orders, stations, regions of interest and courier range. Null for a model with none.",
+        "responses": {
+          "200": {
+            "description": "The model's overlays.",
+            "headers": { "x-sim-tick": { "$ref": "#/components/headers/SimTick" } },
+            "content": { "application/json": { "schema": { "type": ["object", "null"], "additionalProperties": true } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state/download": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateDownload",
+        "summary": "Download a checkpoint",
+        "description": "The committed world, copied out of the driver, as `<scenario>-tick<n>.ckpt.json`.",
+        "responses": {
+          "200": { "description": "Checkpoint attachment.", "headers": { "Content-Disposition": { "$ref": "#/components/headers/ContentDisposition" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Checkpoint" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/state/upload": {
+      "post": {
+        "tags": ["state"],
+        "operationId": "stateUpload",
+        "summary": "Restore a checkpoint",
+        "description": "Replace the world with a checkpoint. Pause first. A gold-profile checkpoint whose hash does not match its cells is refused.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Checkpoint" } } }
+        },
+        "responses": {
+          "200": { "description": "Restored.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RestoreResult" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/state/cells/{cell}": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "stateCell",
+        "summary": "One cell",
+        "description": "The objects in one cell; an empty list if there are none. 404 only when the cell is empty and the published view was capped, so it may have been dropped.",
+        "parameters": [
+          { "name": "cell", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/GeoCell" } }
+        ],
+        "responses": {
+          "200": { "description": "The cell.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CellBag" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/intents": {
+      "post": {
+        "tags": ["intents"],
+        "operationId": "intentsPost",
+        "summary": "Submit an intent",
+        "description": "Hand one intent to the driver and wait up to half a second for it to be applied. A paused world will not reach it: it stays queued, and the answer says `queued`. The WebSocket is the better path for anything interactive. Bodies are capped at 16 KiB, and each actor's submission rate is limited.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Intent" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/intents/log": {
+      "get": {
+        "tags": ["intents"],
+        "operationId": "intentsLog",
+        "summary": "Download the replay log",
+        "description": "Every intent applied since load, one JSON object per line, as `<scenario>-tick<n>.intents.jsonl`. Kept only in the gold profile (spec §8.4).",
+        "responses": {
+          "200": { "description": "JSON Lines of `LoggedIntent`.", "headers": { "Content-Disposition": { "$ref": "#/components/headers/ContentDisposition" } }, "content": { "application/jsonl": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DriverUnavailable" }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["run"],
+        "operationId": "metrics",
+        "summary": "Prometheus metrics",
+        "description": "Gauges in the Prometheus text exposition format, each named `krabshell_*`.",
+        "responses": {
+          "200": { "description": "Prometheus text.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "# HELP krabshell_tick Committed tick.\n# TYPE krabshell_tick gauge\nkrabshell_tick 1200\n" } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/reports": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "reports",
+        "summary": "Model events",
+        "description": "Sightings, waypoints, deliveries, breaches and the like, newer than `since`. The driver keeps the latest few hundred; a caller that falls further behind sees a gap between its `since` and the first `seq` returned.",
+        "parameters": [
+          { "name": "since", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 }, "description": "Only reports with a larger `seq`. Pass back the last answer's `last_seq`." }
+        ],
+        "responses": {
+          "200": { "description": "Reports, oldest first.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportsBody" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cells/lookup": {
+      "get": {
+        "tags": ["cells"],
+        "operationId": "cellsLookup",
+        "summary": "Cell at a point",
+        "description": "Compile a coordinate to an A5 cell, with its shape and whether intents may address it (spec §7.2).",
+        "parameters": [
+          { "name": "lon", "in": "query", "required": true, "schema": { "type": "number" }, "description": "Degrees east." },
+          { "name": "lat", "in": "query", "required": true, "schema": { "type": "number" }, "description": "Degrees north." },
+          { "name": "res", "in": "query", "schema": { "type": "integer" }, "description": "Resolution. Defaults to the occupancy resolution." }
+        ],
+        "responses": {
+          "200": { "description": "The cell.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LookupBody" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/geofences": {
+      "get": {
+        "tags": ["geofences"],
+        "operationId": "geofencesList",
+        "summary": "Geofences",
+        "description": "Fences open now, waiting to open, and closed lately, with the latest breach and reroute reports. Empty for a model without geofences.",
+        "responses": {
+          "200": { "description": "Geofences.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GeofencesBody" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["geofences"],
+        "operationId": "geofencesOpen",
+        "summary": "Open a geofence",
+        "description": "A circle or a polygon, in degrees, with an optional name, lifetime, delay and altitude band.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GeofenceOpen" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/geofences/{id}": {
+      "delete": {
+        "tags": ["geofences"],
+        "operationId": "geofencesClose",
+        "summary": "Close a geofence",
+        "description": "Close an open fence, whoever opened it, or cancel one waiting to open. From the next tick.",
+        "parameters": [ { "$ref": "#/components/parameters/Id" } ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      },
+      "patch": {
+        "tags": ["geofences"],
+        "operationId": "geofencesRename",
+        "summary": "Rename a geofence",
+        "description": "Open, waiting to open, or previously closed. From the next tick.",
+        "parameters": [ { "$ref": "#/components/parameters/Id" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RenameBody" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/geofences/{id}/extend": {
+      "post": {
+        "tags": ["geofences"],
+        "operationId": "geofencesExtend",
+        "summary": "Change how long a geofence stays open",
+        "description": "From the next tick.",
+        "parameters": [ { "$ref": "#/components/parameters/Id" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExtendBody" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/stations": {
+      "get": {
+        "tags": ["stations"],
+        "operationId": "stationsList",
+        "summary": "Launch and recovery stations",
+        "description": "The stations, how busy they are, how far the couriers can reach by way of them, and the latest station reports. Empty, and not `available`, for a model without stations.",
+        "responses": {
+          "200": { "description": "Stations.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StationsBody" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["stations"],
+        "operationId": "stationsAdd",
+        "summary": "Add a station",
+        "description": "From the next tick.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StationAdd" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/stations/{id}": {
+      "delete": {
+        "tags": ["stations"],
+        "operationId": "stationsRemove",
+        "summary": "Remove a station",
+        "description": "Whoever added it. From the next tick.",
+        "parameters": [ { "$ref": "#/components/parameters/Id" } ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/rois": {
+      "get": {
+        "tags": ["stations"],
+        "operationId": "roisList",
+        "summary": "Regions of interest",
+        "description": "The regions, the surveys done, the drones assigned, and the latest region and survey reports. Empty, and not `available`, for a model without them.",
+        "responses": {
+          "200": { "description": "Regions of interest.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RoisBody" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["stations"],
+        "operationId": "roisAdd",
+        "summary": "Designate a region of interest",
+        "description": "For the drones to survey. From the next tick.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RoiAdd" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/rois/{id}": {
+      "delete": {
+        "tags": ["stations"],
+        "operationId": "roisRemove",
+        "summary": "Remove a region of interest",
+        "description": "Whoever designated it, a crash included. From the next tick.",
+        "parameters": [ { "$ref": "#/components/parameters/Id" } ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/IntentAccepted" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "tags": ["live"],
+        "operationId": "ws",
+        "summary": "Live subscription (WebSocket)",
+        "description": "Upgrade to a WebSocket (spec §9.3). The server sends `hello`, then a `snapshot` and `delta`s for the cells the client subscribes to, at most `publish_hz` times a second, plus a `tick` with the metrics. Clients send `ClientMessage`s and receive `ServerMessage`s, as JSON text frames. Browsers cannot set headers on a WebSocket, so pass the token as `?token=`.",
+        "parameters": [
+          { "name": "token", "in": "query", "schema": { "type": "string" }, "description": "The dashboard token." }
+        ],
+        "responses": {
+          "101": { "description": "Switching to the WebSocket protocol. Messages are `ClientMessage` up and `ServerMessage` down." },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer", "description": "`Authorization: Bearer <DASHBOARD_TOKEN>`." },
+      "cookie": { "type": "apiKey", "in": "cookie", "name": "krabshell_token", "description": "Set by the dashboard's login form." },
+      "query": { "type": "apiKey", "in": "query", "name": "token", "description": "For WebSockets, which cannot carry a header from a browser." }
+    },
+    "parameters": {
+      "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 }, "description": "The id the list gives it." }
+    },
+    "headers": {
+      "SimTick": { "description": "The tick the body is from.", "schema": { "type": "integer" } },
+      "SimMode": { "description": "The run mode when the body was read.", "schema": { "$ref": "#/components/schemas/RunMode" } },
+      "SimTickSeconds": { "description": "Simulated seconds per tick, when the model says.", "schema": { "type": "number" } },
+      "ContentDisposition": { "description": "`attachment` with a suggested filename.", "schema": { "type": "string" } }
+    },
+    "responses": {
+      "RunStatus": { "description": "The run status, after the command if there was one.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunStatus" } } } },
+      "IntentAccepted": { "description": "Applied, or queued for the next tick.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntentAccepted" } } } },
+      "BadRequest": { "description": "The request, or the intent it made, was refused. `code` says why.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "Unauthorized": { "description": "No token, or the wrong one.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "NotFound": { "description": "No such thing.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "Conflict": { "description": "Not in this run mode: `requires_pause` or `requires_reset`.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "PayloadTooLarge": { "description": "The body is over the limit.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "TooManyRequests": { "description": "`rate_limited` (this actor) or `backpressured` (the driver's queue is full).", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "DriverUnavailable": { "description": "The simulation thread is not running, or did not answer in time.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "An RFC 7807-shaped error.",
+        "required": ["code", "title", "detail", "status"],
+        "properties": {
+          "code": { "$ref": "#/components/schemas/ErrorCode" },
+          "title": { "type": "string", "description": "The code, for people." },
+          "detail": { "type": "string", "description": "What went wrong this time." },
+          "status": { "type": "integer", "description": "The HTTP status." },
+          "meta": { "description": "Anything more the code carries, such as a rejected intent's reason." }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable error codes. Switch on these, not on `detail`.",
+        "enum": ["bad_request", "unauthorized", "forbidden", "not_found", "payload_too_large", "unknown_scenario", "malformed_scenario", "bad_cell", "bad_config", "stale_intent", "intent_too_far", "backpressured", "duplicate_intent", "cell_out_of_bounds", "intent_rejected", "rate_limited", "requires_pause", "requires_reset", "driver_unavailable", "sim_panic", "internal"]
+      },
+      "GeoCell": {
+        "type": "string",
+        "description": "An A5 cell id, as 16 hex digits. Inputs may also be `0x`-prefixed hex or a decimal u64.",
+        "pattern": "^[0-9a-f]{16}$",
+        "example": "6c40000000000000"
+      },
+      "LonLat": {
+        "type": "array",
+        "description": "`[lon, lat]` in degrees.",
+        "prefixItems": [ { "type": "number" }, { "type": "number" } ],
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "RunMode": { "type": "string", "enum": ["paused", "running", "stepping", "loading", "faulted"] },
+      "Profile": { "type": "string", "enum": ["gold", "fast"], "description": "`gold`: sequential, seeded and hashable, for science and replay. `fast`: parallel allowed, for games and visualisation." },
+      "DriverHealth": {
+        "type": "object",
+        "required": ["alive", "mode", "last_publish_age_ms", "last_good_tick"],
+        "properties": {
+          "alive": { "type": "boolean", "description": "The tick thread is running." },
+          "mode": { "$ref": "#/components/schemas/RunMode" },
+          "last_publish_age_ms": { "type": "integer", "description": "How long since the last published view." },
+          "fault": { "type": "string", "description": "The panic message, when faulted." },
+          "last_good_tick": { "type": "integer" }
+        }
+      },
+      "Health": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["status", "engine", "uptime_seconds", "tick"],
+            "properties": {
+              "status": { "type": "string", "enum": ["ok", "degraded"] },
+              "engine": { "type": "string", "description": "Which engine this build runs." },
+              "uptime_seconds": { "type": "integer" },
+              "tick": { "type": "integer" }
+            }
+          },
+          { "$ref": "#/components/schemas/DriverHealth" }
+        ]
+      },
+      "Metrics": {
+        "type": "object",
+        "required": ["tick", "agent_count", "occupied_cells", "sim_tps", "publish_hz", "last_step_ns", "intent_queue_depth", "intents_applied", "intents_rejected", "dropped_views", "truncated_cells"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "agent_count": { "type": "integer" },
+          "occupied_cells": { "type": "integer" },
+          "sim_tps": { "type": "number", "description": "Ticks per second, measured." },
+          "publish_hz": { "type": "number", "description": "Views published per second, measured." },
+          "last_step_ns": { "type": "integer" },
+          "intent_queue_depth": { "type": "integer" },
+          "intents_applied": { "type": "integer", "description": "Since load." },
+          "intents_rejected": { "type": "integer", "description": "Since load." },
+          "dropped_views": { "type": "integer", "description": "Published views no reader took." },
+          "truncated_cells": { "type": "integer", "description": "Cells left out of the published view at the cap." }
+        }
+      },
+      "SnapshotMeta": {
+        "type": "object",
+        "required": ["scenario_id", "tick", "profile", "resolution", "agent_count", "occupied_cells"],
+        "properties": {
+          "scenario_id": { "type": "string" },
+          "tick": { "type": "integer" },
+          "profile": { "$ref": "#/components/schemas/Profile" },
+          "root": { "$ref": "#/components/schemas/GeoCell", "description": "The island root. Absent for a global grid." },
+          "resolution": { "type": "integer", "description": "Occupancy resolution." },
+          "agent_count": { "type": "integer" },
+          "occupied_cells": { "type": "integer" },
+          "hash": { "type": "integer", "description": "Stable hash of the cells, in the gold profile." }
+        }
+      },
+      "IntentRecord": {
+        "type": "object",
+        "description": "One line of the recent intent activity.",
+        "required": ["id", "actor", "verb", "cell", "tick", "rejected", "detail"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "actor": { "type": "string" },
+          "verb": { "type": "string" },
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "tick": { "type": "integer" },
+          "rejected": { "type": ["string", "null"], "description": "Null when applied; the rejection code otherwise." },
+          "detail": { "type": "string" }
+        }
+      },
+      "RunStatus": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["mode", "tick", "scenario_id", "scenario_name", "model", "engine", "profile", "parallel", "threads", "target_tps", "meta", "health", "truncated", "recent_intents"],
+            "properties": {
+              "mode": { "$ref": "#/components/schemas/RunMode" },
+              "tick": { "type": "integer" },
+              "scenario_id": { "type": "string" },
+              "scenario_name": { "type": "string" },
+              "model": { "type": "string", "description": "The model kind." },
+              "engine": { "type": "string" },
+              "profile": { "$ref": "#/components/schemas/Profile" },
+              "parallel": { "type": "boolean" },
+              "threads": { "type": "integer" },
+              "target_tps": { "type": ["number", "null"], "description": "Null means as fast as possible." },
+              "meta": { "$ref": "#/components/schemas/SnapshotMeta" },
+              "health": { "$ref": "#/components/schemas/DriverHealth" },
+              "truncated": { "type": "boolean", "description": "The published view dropped cells at the cap." },
+              "recent_intents": { "type": "array", "items": { "$ref": "#/components/schemas/IntentRecord" } }
+            }
+          },
+          { "$ref": "#/components/schemas/Metrics" }
+        ]
+      },
+      "StartBody": {
+        "type": "object",
+        "properties": {
+          "target_tps": { "type": ["number", "null"], "exclusiveMinimum": 0, "description": "Ticks per second to aim for. Absent or null: as fast as possible." }
+        }
+      },
+      "StepBody": {
+        "type": "object",
+        "properties": {
+          "n": { "type": "integer", "minimum": 1, "default": 1, "description": "Ticks to advance." }
+        }
+      },
+      "RateBody": {
+        "type": "object",
+        "required": ["target_tps"],
+        "properties": {
+          "target_tps": { "type": ["number", "null"], "exclusiveMinimum": 0, "description": "Ticks per second to aim for. Null: as fast as possible." }
+        }
+      },
+      "ScenarioSummary": {
+        "type": "object",
+        "required": ["id", "name", "description", "model", "resolution", "profile", "seed_agents", "source"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "model": { "type": "string" },
+          "resolution": { "type": "integer" },
+          "root": { "$ref": "#/components/schemas/GeoCell" },
+          "profile": { "$ref": "#/components/schemas/Profile" },
+          "seed_agents": { "type": "integer", "description": "Agents the pack places itself, before the model adds any." },
+          "source": { "type": "string", "description": "Where the pack lives." }
+        }
+      },
+      "UploadResult": {
+        "type": "object",
+        "required": ["scenario"],
+        "properties": { "scenario": { "$ref": "#/components/schemas/ScenarioSummary" } }
+      },
+      "Param": {
+        "description": "A model parameter.",
+        "oneOf": [
+          { "type": "boolean" },
+          { "type": "integer" },
+          { "type": "number" },
+          { "type": "string" },
+          { "type": "array", "items": { "$ref": "#/components/schemas/Param" } }
+        ]
+      },
+      "RunConfig": {
+        "type": "object",
+        "properties": {
+          "profile": { "$ref": "#/components/schemas/Profile" },
+          "parallel": { "type": "boolean", "description": "krABMaga's parallel schedule. Changing it rebuilds the world." },
+          "threads": { "type": "integer" },
+          "target_tps": { "type": "number", "description": "Absent: as fast as possible." },
+          "publish_hz": { "type": "number", "description": "Upper bound on views published per second." },
+          "intent_horizon": { "type": "integer", "description": "How many ticks ahead an intent may be scheduled." },
+          "max_pending_intents": { "type": "integer" },
+          "max_applied_per_tick": { "type": "integer" },
+          "max_published_cells": { "type": "integer", "description": "Cap on cells in one published view." },
+          "intent_rate_per_actor": { "type": "number", "description": "Sustained intents per second per actor; bursts of twice this are allowed." },
+          "auto_recover": { "type": "boolean", "description": "Restart the driver after a tick panic." }
+        }
+      },
+      "GridConfig": {
+        "type": "object",
+        "properties": {
+          "resolution": { "type": "integer", "description": "Occupancy resolution." },
+          "root": { "$ref": "#/components/schemas/GeoCell", "description": "Island root. Absent: a global grid." },
+          "view_resolution": { "type": "integer", "description": "The coarser resolution the dashboard map aggregates to." }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "description": "Every section is optional on input and filled with defaults. Unknown fields are refused.",
+        "additionalProperties": false,
+        "properties": {
+          "run": { "$ref": "#/components/schemas/RunConfig" },
+          "grid": { "$ref": "#/components/schemas/GridConfig" },
+          "model": { "type": "object", "description": "Passed to the model on reset.", "additionalProperties": { "$ref": "#/components/schemas/Param" } }
+        }
+      },
+      "ConfigApplied": {
+        "type": "object",
+        "required": ["config", "reset_fields", "tick"],
+        "properties": {
+          "config": { "$ref": "#/components/schemas/Config" },
+          "reset_fields": { "type": "array", "items": { "type": "string" }, "description": "Fields whose change rebuilt the world." },
+          "tick": { "type": "integer" }
+        }
+      },
+      "WorldObject": {
+        "type": "object",
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "type": "integer" },
+          "kind": { "type": "string" },
+          "state": { "description": "Whatever the model keeps for this kind." }
+        }
+      },
+      "CellBag": {
+        "type": "object",
+        "required": ["cell", "objects"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "objects": { "type": "array", "items": { "$ref": "#/components/schemas/WorldObject" } }
+        }
+      },
+      "StateBody": {
+        "type": "object",
+        "required": ["meta", "cells", "truncated"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/SnapshotMeta" },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/CellBag" } },
+          "truncated": { "type": "boolean", "description": "The published view was capped, so cells may be missing." }
+        }
+      },
+      "MapCell": {
+        "type": "object",
+        "required": ["cell", "count", "boundary"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "count": { "type": "integer" },
+          "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" }, "description": "The cell's ring." }
+        }
+      },
+      "MapBody": {
+        "type": "object",
+        "required": ["tick", "resolution", "cells", "max_count", "truncated"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "resolution": { "type": "integer" },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/MapCell" } },
+          "max_count": { "type": "integer" },
+          "truncated": { "type": "boolean" }
+        }
+      },
+      "Entity": {
+        "type": "object",
+        "required": ["id", "kind", "cell", "lat", "lon", "alt_m", "heading_deg", "speed_ms"],
+        "properties": {
+          "id": { "type": "integer" },
+          "kind": { "type": "string" },
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "lat": { "type": "number" },
+          "lon": { "type": "number" },
+          "alt_m": { "type": "number" },
+          "heading_deg": { "type": "number" },
+          "speed_ms": { "type": "number" },
+          "callsign": { "type": "string" },
+          "mode": { "type": "string", "description": "A drone's flight mode." },
+          "activity": { "type": "string", "description": "What a drone's behaviour is doing: delivering, surveying, charging and so on." }
+        }
+      },
+      "Checkpoint": {
+        "type": "object",
+        "description": "The committed world. In the gold profile, `meta.hash` is checked against the cells on restore.",
+        "required": ["meta", "config", "cells"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/SnapshotMeta" },
+          "config": { "$ref": "#/components/schemas/Config" },
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/CellBag" } },
+          "fields": { "description": "Model state that is not agents." },
+          "rng": { "type": "integer" },
+          "intent_log": { "type": "array", "items": { "$ref": "#/components/schemas/LoggedIntent" } }
+        }
+      },
+      "RestoreResult": {
+        "type": "object",
+        "required": ["tick", "agent_count", "hash"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "agent_count": { "type": "integer" },
+          "hash": { "type": ["integer", "null"] }
+        }
+      },
+      "IntentVerb": {
+        "description": "What to do. A model's own verbs are `{\"custom\": code}`.",
+        "oneOf": [
+          { "type": "string", "enum": ["spawn", "despawn", "move", "set_field"] },
+          {
+            "type": "object",
+            "required": ["custom"],
+            "additionalProperties": false,
+            "properties": { "custom": { "type": "integer", "minimum": 0, "maximum": 65535 } }
+          }
+        ]
+      },
+      "Intent": {
+        "type": "object",
+        "required": ["id", "cell", "actor", "verb"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "description": "Chosen by the client. A repeat is refused as a duplicate." },
+          "tick": { "type": "integer", "description": "Tick to apply at. Absent: the next one." },
+          "cell": { "$ref": "#/components/schemas/GeoCell", "description": "Where it applies, at the occupancy resolution, inside the world." },
+          "agent": { "type": "integer", "description": "The agent it is about, if any." },
+          "actor": { "type": "string", "description": "Who sent it. Rate limits are per actor." },
+          "verb": { "$ref": "#/components/schemas/IntentVerb" },
+          "payload": { "description": "Verb-specific." },
+          "issued_at": { "type": "integer", "description": "Client's timestamp, for logs." }
+        }
+      },
+      "LoggedIntent": {
+        "type": "object",
+        "required": ["tick", "intent"],
+        "properties": {
+          "tick": { "type": "integer", "description": "The tick it was applied at." },
+          "intent": { "$ref": "#/components/schemas/Intent" }
+        }
+      },
+      "IntentAccepted": {
+        "type": "object",
+        "required": ["id", "applied_tick", "status"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "applied_tick": { "type": ["integer", "null"], "description": "Null while queued." },
+          "status": { "type": "string", "enum": ["applied", "queued"], "description": "`queued` when the world did not reach it within half a second, as when paused. A queued intent the model later refuses shows up in the list's `refused`." }
+        }
+      },
+      "ReportKind": {
+        "type": "string",
+        "enum": ["detection", "waypoint", "delivery", "landing", "crash", "geofence", "breach", "reroute", "order_rejected", "station", "roi", "survey"]
+      },
+      "Report": {
+        "type": "object",
+        "description": "Something the model saw or did.",
+        "required": ["seq", "tick", "kind", "uid", "lat_e7", "lon_e7", "alt_mm"],
+        "properties": {
+          "seq": { "type": "integer", "description": "Increases by one per report." },
+          "tick": { "type": "integer" },
+          "kind": { "$ref": "#/components/schemas/ReportKind" },
+          "uid": { "type": "string", "description": "Stable id, used as the CoT uid." },
+          "observer": { "type": "integer" },
+          "target": { "type": "integer" },
+          "target_kind": { "type": "string" },
+          "lat_e7": { "type": "integer", "description": "Degrees × 10⁷." },
+          "lon_e7": { "type": "integer", "description": "Degrees × 10⁷." },
+          "alt_mm": { "type": "integer" },
+          "detail": { "description": "Kind-specific." }
+        }
+      },
+      "ReportsBody": {
+        "type": "object",
+        "required": ["tick", "last_seq", "reports"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "last_seq": { "type": "integer", "description": "The highest `seq` so far. Pass it back as `since`." },
+          "reports": { "type": "array", "items": { "$ref": "#/components/schemas/Report" } }
+        }
+      },
+      "Refused": {
+        "type": "object",
+        "description": "An intent the model refused lately, so a client that was told `queued` learns why it never took effect.",
+        "required": ["id", "detail"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "detail": { "type": "string" }
+        }
+      },
+      "Fence": {
+        "type": "object",
+        "description": "A geofence, as the model publishes it. A circle has `lat_e7`, `lon_e7` and `radius_m`; a polygon has `points`.",
+        "additionalProperties": true,
+        "required": ["id", "shape", "source", "opened_tick"],
+        "properties": {
+          "id": { "type": "integer" },
+          "shape": { "type": "string", "enum": ["circle", "polygon"] },
+          "lat_e7": { "type": "integer" },
+          "lon_e7": { "type": "integer" },
+          "radius_m": { "type": "number" },
+          "points": { "type": "array", "items": { "type": "array", "items": { "type": "integer" } }, "description": "Corners as `[lat_e7, lon_e7]`, not closed." },
+          "floor_m": { "type": "number", "description": "Metres above ground. Absent: from the surface." },
+          "ceiling_m": { "type": "number", "description": "Metres above ground. Absent: unlimited." },
+          "name": { "type": "string" },
+          "source": { "type": "string", "description": "`scenario`, `dashboard`, `gcs` or `intent`." },
+          "opened_tick": { "type": "integer", "description": "For a scheduled fence, when it will open." },
+          "closes_tick": { "type": "integer" },
+          "breaches": { "type": "integer", "description": "Open fences only: breaches in the recent reports." },
+          "closed_tick": { "type": "integer", "description": "Previous fences only." },
+          "closed": { "type": "string", "description": "Previous fences only: `expired`, `closed` or `cancelled`." }
+        }
+      },
+      "GeofencesBody": {
+        "type": "object",
+        "required": ["tick", "tick_seconds", "mode", "rev", "margin_m", "fences", "scheduled", "previous", "recent", "refused"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "tick_seconds": { "type": ["number", "null"], "description": "Simulated seconds per tick, when the model says." },
+          "mode": { "$ref": "#/components/schemas/RunMode" },
+          "rev": { "type": "integer", "description": "Bumped whenever a fence opens or closes." },
+          "margin_m": { "type": "number", "description": "How far the simulated drones keep from a fence." },
+          "fences": { "type": "array", "items": { "$ref": "#/components/schemas/Fence" }, "description": "Open now." },
+          "scheduled": { "type": "array", "items": { "$ref": "#/components/schemas/Fence" }, "description": "Waiting to open, soonest first." },
+          "previous": { "type": "array", "items": { "$ref": "#/components/schemas/Fence" }, "description": "Closed, newest first." },
+          "recent": { "type": "array", "items": { "$ref": "#/components/schemas/Report" }, "description": "Latest breach and reroute reports, newest first." },
+          "refused": { "type": "array", "items": { "$ref": "#/components/schemas/Refused" } }
+        }
+      },
+      "Circle": {
+        "type": "object",
+        "required": ["lat", "lon", "radius_m"],
+        "properties": {
+          "lat": { "type": "number" },
+          "lon": { "type": "number" },
+          "radius_m": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      },
+      "GeofenceOpen": {
+        "type": "object",
+        "description": "Give `circle` or `polygon`.",
+        "properties": {
+          "circle": { "$ref": "#/components/schemas/Circle" },
+          "polygon": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" }, "minItems": 3, "description": "Corners in degrees." },
+          "name": { "type": "string" },
+          "minutes": { "type": "number", "description": "How long it stays open. -1 or absent: until closed." },
+          "after_minutes": { "type": "number", "minimum": 0, "description": "Delay before it opens. 0 or absent: the next tick." },
+          "floor_m": { "type": ["number", "null"], "minimum": 0, "description": "Metres above ground. Absent or null: from the surface." },
+          "ceiling_m": { "type": ["number", "null"], "minimum": 0, "description": "Metres above ground, above the floor. Absent or null: unlimited." }
+        },
+        "example": { "circle": { "lat": 51.5007, "lon": -0.1246, "radius_m": 300 }, "name": "Westminster", "minutes": 30, "ceiling_m": 120 }
+      },
+      "ExtendBody": {
+        "type": "object",
+        "required": ["minutes"],
+        "properties": { "minutes": { "type": "number", "description": "Minutes from now it stays open, or -1 until closed." } }
+      },
+      "RenameBody": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "description": "Empty clears it." } }
+      },
+      "Station": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "lat_e7", "lon_e7", "slots", "source", "added_tick", "drones", "occupied", "waiting"],
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "lat_e7": { "type": "integer" },
+          "lon_e7": { "type": "integer" },
+          "slots": { "type": "integer", "description": "Drones that can be down on it, or coming down onto it, at once." },
+          "source": { "type": "string", "description": "`scenario`, `dashboard` or `intent`." },
+          "added_tick": { "type": "integer" },
+          "drones": { "type": "integer", "description": "On the ground at it now." },
+          "occupied": { "type": "integer", "description": "Slots taken." },
+          "waiting": { "type": "integer", "description": "Drones holding off for a slot." }
+        }
+      },
+      "StationsBody": {
+        "type": "object",
+        "required": ["tick", "tick_seconds", "mode", "available", "stations", "range", "recent", "refused"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "tick_seconds": { "type": ["number", "null"] },
+          "mode": { "$ref": "#/components/schemas/RunMode" },
+          "available": { "type": "boolean", "description": "The model publishes stations at all." },
+          "stations": { "type": "array", "items": { "$ref": "#/components/schemas/Station" } },
+          "range": { "type": ["object", "null"], "additionalProperties": true, "description": "How far each hub's couriers can deliver by way of the stations, as the model publishes it." },
+          "recent": { "type": "array", "items": { "$ref": "#/components/schemas/Report" } },
+          "refused": { "type": "array", "items": { "$ref": "#/components/schemas/Refused" } }
+        }
+      },
+      "StationAdd": {
+        "type": "object",
+        "required": ["lat", "lon", "name", "slots"],
+        "properties": {
+          "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+          "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "Trimmed." },
+          "slots": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Launch and recovery slots." }
+        },
+        "example": { "lat": 54.93, "lon": 23.85, "name": "Šilainiai", "slots": 4 }
+      },
+      "Roi": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "lat_e7", "lon_e7", "radius_m", "source", "added_tick", "surveys", "assigned"],
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "lat_e7": { "type": "integer" },
+          "lon_e7": { "type": "integer" },
+          "radius_m": { "type": "number" },
+          "source": { "type": "string", "description": "`scenario`, `dashboard`, `intent`, or `crash` for one left where a drone fell." },
+          "added_tick": { "type": "integer" },
+          "surveys": { "type": "integer", "description": "Surveys finished." },
+          "last_surveyed_tick": { "type": "integer" },
+          "assigned": { "type": "array", "items": { "type": "integer" }, "description": "Drones on their way to survey it." }
+        }
+      },
+      "RoisBody": {
+        "type": "object",
+        "required": ["tick", "tick_seconds", "mode", "available", "rois", "recent", "refused"],
+        "properties": {
+          "tick": { "type": "integer" },
+          "tick_seconds": { "type": ["number", "null"] },
+          "mode": { "$ref": "#/components/schemas/RunMode" },
+          "available": { "type": "boolean", "description": "The model publishes regions of interest at all." },
+          "rois": { "type": "array", "items": { "$ref": "#/components/schemas/Roi" } },
+          "recent": { "type": "array", "items": { "$ref": "#/components/schemas/Report" }, "description": "Latest region and survey reports, newest first." },
+          "refused": { "type": "array", "items": { "$ref": "#/components/schemas/Refused" } }
+        }
+      },
+      "RoiAdd": {
+        "type": "object",
+        "required": ["lat", "lon", "radius_m", "name"],
+        "properties": {
+          "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+          "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+          "radius_m": { "type": "number", "minimum": 10, "maximum": 5000 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "Trimmed." }
+        }
+      },
+      "LookupBody": {
+        "type": "object",
+        "required": ["cell", "resolution", "centroid", "boundary", "parent", "in_world", "edge_meters"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "resolution": { "type": "integer" },
+          "centroid": { "$ref": "#/components/schemas/LonLat" },
+          "boundary": { "type": "array", "items": { "$ref": "#/components/schemas/LonLat" } },
+          "parent": { "oneOf": [ { "$ref": "#/components/schemas/GeoCell" }, { "type": "null" } ] },
+          "in_world": { "type": "boolean", "description": "Intents may address this cell in the current run." },
+          "edge_meters": { "type": "number", "description": "Nominal edge length at this resolution." }
+        }
+      },
+      "Removal": {
+        "type": "object",
+        "required": ["cell"],
+        "properties": {
+          "cell": { "$ref": "#/components/schemas/GeoCell" },
+          "objects": { "type": "array", "items": { "type": "integer" }, "description": "Agents that left. Absent: the whole cell emptied." }
+        }
+      },
+      "ClientMessage": {
+        "description": "Client to server, over `/ws`.",
+        "oneOf": [
+          { "type": "object", "title": "subscribe", "required": ["type", "cells"], "properties": { "type": { "const": "subscribe" }, "cells": { "type": "array", "items": { "$ref": "#/components/schemas/GeoCell" } }, "res": { "type": "integer" } } },
+          { "type": "object", "title": "unsubscribe", "required": ["type", "cells"], "properties": { "type": { "const": "unsubscribe" }, "cells": { "type": "array", "items": { "$ref": "#/components/schemas/GeoCell" } } } },
+          { "type": "object", "title": "set_aoi", "description": "Replace the area of interest with a disk of `k` rings, at most 64.", "required": ["type", "center", "k"], "properties": { "type": { "const": "set_aoi" }, "center": { "$ref": "#/components/schemas/GeoCell" }, "k": { "type": "integer", "minimum": 0, "maximum": 64 }, "res": { "type": "integer" } } },
+          { "type": "object", "title": "intent", "required": ["type", "intent"], "properties": { "type": { "const": "intent" }, "intent": { "$ref": "#/components/schemas/Intent" } } },
+          { "type": "object", "title": "ping", "required": ["type"], "properties": { "type": { "const": "ping" } } }
+        ],
+        "discriminator": { "propertyName": "type" }
+      },
+      "ServerMessage": {
+        "description": "Server to client, over `/ws`. Protocol version 1.",
+        "oneOf": [
+          { "type": "object", "title": "hello", "required": ["type", "tick", "meta", "protocol"], "properties": { "type": { "const": "hello" }, "tick": { "type": "integer" }, "meta": { "$ref": "#/components/schemas/SnapshotMeta" }, "protocol": { "type": "integer", "const": 1 } } },
+          { "type": "object", "title": "snapshot", "description": "Every subscribed cell.", "required": ["type", "tick", "cells"], "properties": { "type": { "const": "snapshot" }, "tick": { "type": "integer" }, "cells": { "type": "array", "items": { "$ref": "#/components/schemas/CellBag" } } } },
+          { "type": "object", "title": "delta", "description": "What changed in the subscribed cells since the last frame.", "required": ["type", "tick"], "properties": { "type": { "const": "delta" }, "tick": { "type": "integer" }, "upsert": { "type": "array", "items": { "$ref": "#/components/schemas/CellBag" } }, "remove": { "type": "array", "items": { "$ref": "#/components/schemas/Removal" } } } },
+          { "type": "object", "title": "accepted", "required": ["type", "intent_id"], "properties": { "type": { "const": "accepted" }, "intent_id": { "type": "string", "format": "uuid" } } },
+          { "type": "object", "title": "rejected", "description": "`reason` is one of `stale`, `too_far`, `backpressured`, `duplicate`, `out_of_bounds`, `rejected` or `rate_limited`, with its fields beside it.", "required": ["type", "intent_id", "reason"], "properties": { "type": { "const": "rejected" }, "intent_id": { "type": "string", "format": "uuid" }, "reason": { "type": "string", "enum": ["stale", "too_far", "backpressured", "duplicate", "out_of_bounds", "rejected", "rate_limited"] }, "target": { "type": "integer" }, "committed": { "type": "integer" }, "horizon": { "type": "integer" }, "pending": { "type": "integer" }, "message": { "type": "string" } } },
+          { "allOf": [ { "type": "object", "title": "tick", "required": ["type"], "properties": { "type": { "const": "tick" } } }, { "$ref": "#/components/schemas/Metrics" } ] },
+          { "type": "object", "title": "error", "required": ["type", "code", "message"], "properties": { "type": { "const": "error" }, "code": { "$ref": "#/components/schemas/ErrorCode" }, "message": { "type": "string" } } },
+          { "type": "object", "title": "pong", "required": ["type"], "properties": { "type": { "const": "pong" } } }
+        ],
+        "discriminator": { "propertyName": "type" }
+      }
+    }
+  }
+}
