@@ -28,6 +28,8 @@ fn quad(id: u64, lat: f64, lon: f64, hdg: f64, turn: f64) -> AircraftState {
         turn_rate_dps: turn,
         mass_kg: None,
         performance: "quad".into(),
+        protection: None,
+        right_of_way: false,
     }
 }
 

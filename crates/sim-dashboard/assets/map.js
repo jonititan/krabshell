@@ -669,6 +669,7 @@
   const SIDC = {
     drone: 'SFAPMHQ--------',         // friend, air, military rotary-wing UAV
     intruder: 'SUAPMHQ--------',         // unknown, air, military rotary-wing UAV
+    aircraft: 'SNAPCF---------',         // neutral, air, civilian fixed-wing (CoT a-n-A-C-F)
     person: '10011100001103000000',   // unknown, land civilian unit, individual
     station: 'SFGPIBA---H----',       // friend, ground installation, airport / air base
   };
@@ -1149,15 +1150,15 @@
         ctx.globalAlpha = 1;
         ctx.lineWidth = 1.5;
       } else {
-        const sidc = e.kind === 'intruder' ? SIDC.intruder : SIDC.drone;
+        const sidc = SIDC[e.kind] || SIDC.drone;
         const reach = stamp(ctx, sidc, size, x, y, moving ? at.hdg : null);
-        if (reach === null) arrow(x, y, at.hdg, e.kind === 'intruder' ? bad : accent, panel);
+        if (reach === null) arrow(x, y, at.hdg, e.kind === 'drone' ? accent : bad, panel);
         else right = reach + 4;
       }
       // Drones parked together on a roof would print their names on top of
       // each other: name the ones moving, and the rest once zoomed in. A
       // drone's label says what it is doing, or failing that its mode.
-      if (e.callsign && (moving || namePois || (e.kind === 'intruder'))) {
+      if (e.callsign && (moving || namePois || e.kind === 'intruder' || e.kind === 'aircraft')) {
         const doing = e.activity || e.mode;
         const label = e.kind === 'drone' && doing ? `${e.callsign} · ${doing}` : e.callsign;
         haloText(label, x + right, y + 4, panel, ink);
@@ -1231,7 +1232,7 @@
   async function refreshEntities() {
     try {
       const kinds = [
-        ...(layers.drones ? ['drone', 'intruder'] : []),
+        ...(layers.drones ? ['drone', 'intruder', 'aircraft'] : []),
         ...(layers.pois ? ['poi'] : []),
       ];
       const response = kinds.length

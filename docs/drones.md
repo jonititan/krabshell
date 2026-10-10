@@ -4,7 +4,7 @@ The `drones` model simulates multirotor drones flying MAVLink missions over a wo
 
 ## Agent types
 
-A pack seeds agents in `world/agents.json` (see [Seed agents](scenarios.md#seed-agents)), each with a `kind` and a `state`. People and vehicles can also be scattered by count. All altitudes are above mean sea level, over the pack's terrain; without terrain the ground is at 0 m.
+A pack seeds agents in `world/agents.json` (see [Seed agents](scenarios.md#seed-agents)), each with a `kind` (`drone`, `intruder`, `aircraft`, `person`, `vehicle` or `poi`) and a `state`. People and vehicles can also be scattered by count. All altitudes are above mean sea level, over the pack's terrain; without terrain the ground is at 0 m.
 
 ### Drones
 
@@ -35,6 +35,20 @@ An intruder is an uncontrolled drone flying a closed circuit. It starts at its s
 | `callsign` | empty | Name in reports and CoT. |
 
 Intruders fly at a fixed ground speed and climb at 3 m/s whatever the wind. They cannot be commanded.
+
+### Manned aircraft
+
+An aircraft is a manned aeroplane flying a published route: an arrival down an approach, a departure climbing out. It flies from the first point of its `route` to the last, then is parked out of sight until its next start. While parked it is not drawn, not seen by drones' cameras, not sent over CoT and not assessed for conflicts. A seed aircraft needs no `lon`/`lat`: it starts at its first route point.
+
+| `state` key | Default | Meaning |
+|---|---|---|
+| `route` | required | At least two points `{"lon", "lat", "alt_m", "speed_ms"}`. `alt_m` is above mean sea level, as ATM gives altitudes. `speed_ms` is the airspeed by that point; absent, the one before it. |
+| `speed_ms` | 70 | Airspeed for route points that set none before them. |
+| `start_s` | 0 | Simulated seconds before its first start. |
+| `repeat_s` | none | Seconds from one start to the next. Starts keep to this timetable however long a flight takes. Without it the route is flown once. |
+| `callsign` | empty | Name on the map, in CoT and in conflict advisories. |
+
+Along each leg the altitude and the airspeed change evenly with distance, so a constant gradient, such as a 3° glide path, is one straight leg. It flies its airspeed through the wind, holding the track, and publishes the airspeed and heading it flew (`air_cms`, `yaw_cdeg`) beside its ground speed and track. It turns at once at each point; at airliner speeds that is a few seconds early or late against a flown turn. The conflict service assesses aircraft with `sim-conflict`'s generic narrowbody (fixed-wing) performance, with a protected volume (`manned_lateral_m`, `manned_vertical_m`: 300 m and ±150 m) that drones must keep out of, and the right of way: drones are advised to give way, the aircraft never is. See [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-right-of-way). On the map an aircraft is APP-6 neutral air, civilian fixed-wing; over CoT it is `a-n-A-C-F`.
 
 ### People and vehicles
 

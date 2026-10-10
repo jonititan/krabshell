@@ -26,6 +26,8 @@ The assessment takes every aircraft in the air at the current tick:
 - **Drones**, unless they are on the ground: a drone that is disarmed, idle or
   charging is left out.
 - **Intruders**, always.
+- **Manned aircraft** (the drones model's `aircraft` kind) while they fly
+  their route; one parked between flights is left out.
 
 For each it reads the position, altitude, airspeed (or ground speed if no
 airspeed is published), heading (where the nose points), vertical speed and
@@ -37,10 +39,13 @@ Each kind flies with a performance model built from the pack's params:
 |---|---|---|---|---|
 | Drone | Multirotor | `cruise_ms` (10) | 1.5 × cruise, at least 18 m/s | `climb_ms` (3 m/s) |
 | Intruder | Multirotor | `intruder_speed_ms` (12) | 1.5 × cruise, at least 18 m/s | `climb_ms` (3 m/s) |
+| Manned aircraft | Fixed-wing | the generic narrow-body jet's | | |
 
-The rest is the generic quadcopter's: 6 kg, 2.5 m/s descent, 3 m/s²
-acceleration, 60°/s yaw rate, 2 m/s² vertical acceleration, a 500 m ceiling
-and 1 s between an advisory and starting to follow it.
+The rest of a drone's or intruder's is the generic quadcopter's: 6 kg,
+2.5 m/s descent, 3 m/s² acceleration, 60°/s yaw rate, 2 m/s² vertical
+acceleration, a 500 m ceiling and 1 s between an advisory and starting to
+follow it. A model's ceiling only caps climbs: an aircraft seen above it is
+predicted from where it is, not pulled down to it.
 
 The wind is the run's (see [Weather](weather.md)), looked up through the
 weather cell above each point, at the simulation's UTC time plus the time
@@ -127,8 +132,11 @@ thins; a fast multirotor cannot also climb hard). The prediction scales it,
 between 0.2 and 1.5 times, to the vertical speed the aircraft is actually
 flying.
 
-krabshell's drones and intruders are all multirotors. Fixed-wing aircraft are
-used by the `airliners` preset, the tests and the example. No BADA or OpenAP
+krabshell's drones and intruders are all multirotors. Its manned aircraft
+(the drones model's `aircraft` kind) are assessed as the generic narrow-body
+jet, on the drones preset's cells, layers and horizon, with their own
+protected volume and the right of way (see above). Fixed-wing
+aircraft are also used by the `airliners` preset, the tests and the example. No BADA or OpenAP
 aircraft data is included: BADA's is licensed by EUROCONTROL and OpenAP's is
 LGPL. `FixedWing`'s fields are named as OpenAP names them, so either source
 can fill them. The generic narrow-body jet and quadcopter are illustrative.
@@ -219,6 +227,27 @@ shown). The first conflict is 40 s ahead.*
 **Risk** sums, over every conflict, its summed probability weighted toward
 the near ones: a conflict 30 seconds ahead counts half as much as one now,
 since it leaves more time to act.
+
+### Manned aircraft: protected volume and right of way
+
+A manned aircraft carries a protected volume, its separation minima: by
+default 300 m across and 150 m above and below, set with the pack's
+`manned_lateral_m` and `manned_vertical_m`. A drone or intruder is in
+conflict with it when one is predicted inside that volume. Against it, the
+drone counts only the cell and layer it is in, not its own protected zone, so
+the minima are 300 m and 150 m, not those plus the drone's ring of cells.
+They hold to within the grid: a cell is in the volume when its centre is
+within 300 m of the aircraft (cells at resolution 15 are about 180 m), and a
+layer when any of it is within 150 m.
+
+This is kept apart from drone-to-drone conflicts (a second plane of keys in
+`sim-conflict`), so two drones inside an airliner's volume are each in
+conflict with the airliner, not, on that account, with each other.
+
+A manned aircraft also has the right of way: it is never advised. Drones and
+intruders give way to it; a conflict nothing else can resolve is left
+unresolved. Two manned aircraft in each other's volumes are always left
+unresolved, as their separation is ATC's.
 
 ## Advisories
 

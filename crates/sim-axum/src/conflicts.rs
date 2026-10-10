@@ -17,7 +17,7 @@ use arc_swap::ArcSwapOption;
 use serde::Serialize;
 use sim_conflict::{
     assess, hotspots, AircraftState, Calm, Config, FieldWind, Fleet, Manoeuvre, Multirotor,
-    Performance, Prediction, Targets, WindSource,
+    Performance, Prediction, Protection, Targets, WindSource,
 };
 use sim_core::config::Param;
 use sim_core::{GeoCell, WindField};
@@ -303,7 +303,7 @@ fn param(view: &Published, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
-/// The performance the pack's drones and intruders fly with.
+/// The performance the pack's drones, intruders and manned aircraft fly with.
 fn fleet(view: &Published) -> Fleet {
     let quad = |name: &str, cruise: f64| {
         let Performance::Multirotor(base) = Performance::generic_quadcopter() else {
@@ -327,19 +327,38 @@ fn fleet(view: &Published) -> Fleet {
             "intruder".to_owned(),
             quad("intruder", param(view, "intruder_speed_ms", 12.0)),
         ),
+        ("aircraft".to_owned(), Performance::generic_narrowbody()),
     ])
 }
 
-/// The aircraft in the air: drones not on the ground or charging, and every
-/// intruder.
+/// Separation every drone and intruder must keep from a manned aircraft:
+/// the pack's `manned_lateral_m` and `manned_vertical_m`, 300 m across and
+/// 150 m above or below if it sets none.
+fn manned_protection(view: &Published) -> Protection {
+    Protection {
+        lateral_m: param(view, "manned_lateral_m", 300.0),
+        vertical_m: param(view, "manned_vertical_m", 150.0),
+    }
+}
+
+/// The aircraft in the air: drones not on the ground or charging, every
+/// intruder, and manned aircraft on their route (not parked between flights).
+/// A manned aircraft has its protected volume and the right of way: drones
+/// and intruders give way to it.
 fn flying(view: &Published) -> Vec<Flying> {
     let int = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_i64);
+    let manned = manned_protection(view);
     let mut out = Vec::new();
     for bag in &view.cells {
         for object in &bag.objects {
             let s = &object.state;
             let kind = object.kind.as_str();
-            if kind != "drone" && kind != "intruder" {
+            if kind != "drone" && kind != "intruder" && kind != "aircraft" {
+                continue;
+            }
+            if kind == "aircraft"
+                && s.pointer("/flight/active") != Some(&serde_json::Value::Bool(true))
+            {
                 continue;
             }
             if kind == "drone" {
@@ -375,6 +394,8 @@ fn flying(view: &Published) -> Vec<Flying> {
                     turn_rate_dps: 0.0,
                     mass_kg: None,
                     performance: kind.to_owned(),
+                    protection: (kind == "aircraft").then_some(manned),
+                    right_of_way: kind == "aircraft",
                 },
             });
         }

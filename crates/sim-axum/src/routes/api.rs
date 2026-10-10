@@ -1368,6 +1368,10 @@ pub async fn state_entities(
                 continue;
             }
             let s = &object.state;
+            // A manned aircraft between flights is parked out of sight.
+            if s.pointer("/flight/active") == Some(&serde_json::Value::Bool(false)) {
+                continue;
+            }
             let (Some(lat), Some(lon)) = (int(s, "lat_e7"), int(s, "lon_e7")) else {
                 continue;
             };

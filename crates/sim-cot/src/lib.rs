@@ -160,6 +160,8 @@ pub fn event_xml(e: &CotEvent) -> String {
 
 pub const DRONE_TYPE: &str = "a-f-A-M-H-Q";
 pub const POI_TYPE: &str = "b-m-p-s-m";
+/// A manned aircraft: neutral, air, civilian fixed-wing.
+pub const AIRCRAFT_TYPE: &str = "a-n-A-C-F";
 
 /// The CoT type for something a drone saw.
 pub fn sighting_type(target_kind: &str) -> &'static str {
@@ -206,6 +208,47 @@ pub fn drone_events(view: &Published, now: SystemTime, stale: Duration) -> Vec<C
                 view.meta.tick
             )),
             link: None,
+        })
+        .collect()
+}
+
+/// Tracks for every manned aircraft flying its route in a view. One parked
+/// between flights sends nothing, and its last track goes stale.
+pub fn aircraft_events(view: &Published, now: SystemTime, stale: Duration) -> Vec<CotEvent> {
+    view.cells
+        .iter()
+        .flat_map(|bag| &bag.objects)
+        .filter(|o| {
+            o.kind == "aircraft"
+                && o.state.pointer("/flight/active") == Some(&serde_json::Value::Bool(true))
+        })
+        .map(|o| {
+            let int = |key: &str| o.state.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as f64;
+            let callsign = o
+                .state
+                .get("callsign")
+                .and_then(|v| v.as_str())
+                .filter(|c| !c.is_empty())
+                .map_or_else(|| format!("Aircraft {}", o.id), str::to_owned);
+            CotEvent {
+                uid: format!("{UID_PREFIX}-ac-{}", o.id),
+                cot_type: AIRCRAFT_TYPE.into(),
+                how: "m-g",
+                time: now,
+                stale,
+                lat: int("lat_e7") * 1e-7,
+                lon: int("lon_e7") * 1e-7,
+                hae: int("alt_mm") * 1e-3,
+                ce: 10.0,
+                le: 10.0,
+                callsign: Some(callsign.clone()),
+                track: Some((int("hdg_cdeg") / 100.0, int("spd_cms") / 100.0)),
+                remarks: Some(format!(
+                    "{callsign} · manned aircraft · sim tick {}",
+                    view.meta.tick
+                )),
+                link: None,
+            }
         })
         .collect()
 }
@@ -361,6 +404,7 @@ impl Emitter {
                 _ = drones.tick() => {
                     let view = self.handle.view();
                     self.send(drone_events(&view, SystemTime::now(), drone_stale)).await;
+                    self.send(aircraft_events(&view, SystemTime::now(), drone_stale)).await;
                 }
                 _ = pois.tick() => {
                     let view = self.handle.view();

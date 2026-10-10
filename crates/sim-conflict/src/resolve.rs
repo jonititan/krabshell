@@ -11,14 +11,17 @@
 //! second aircraft's choice is made knowing the first's, the two come out
 //! complementary (one climbs, the other descends or holds) without a
 //! separate coordination rule.
+//!
+//! An aircraft with the right of way is never advised: its conflicts are
+//! resolved by everyone else, or left over if no one else can.
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 
-use crate::conflict::{detect, encounters, risk, risk_for, urgency, Conflict, Encounter};
+use crate::conflict::{can_meet, detect, encounters, risk, risk_for, urgency, Conflict, Encounter};
 use crate::predict::{
-    targets, AircraftState, Key, Manoeuvre, Prediction, Predictor, Targets, WindSource,
+    targets, AircraftState, Key, Manoeuvre, Plane, Prediction, Predictor, Targets, WindSource,
 };
 use crate::{Config, Error, Fleet};
 
@@ -59,6 +62,15 @@ pub struct Assessment {
     pub unadvised: Vec<Prediction>,
 }
 
+/// What is in one key: the summed probability, how many aircraft, and how
+/// many of them protected (counted on the protected plane only).
+#[derive(Debug, Clone, Copy, Default)]
+struct Tally {
+    total: f64,
+    aircraft: u32,
+    protected: u32,
+}
+
 /// Summed probabilities and contributor counts, per step and key, kept up to
 /// date as predictions are swapped, so a candidate manoeuvre is scored by
 /// the cells it touches alone.
@@ -66,8 +78,13 @@ struct Board<'c> {
     cfg: &'c Config,
     // Ordered, so the risk is summed in the same order every time and an
     // assessment repeats to the bit.
-    steps: Vec<BTreeMap<Key, (f64, u32)>>,
+    steps: Vec<BTreeMap<Key, Tally>>,
     times: Vec<f64>,
+}
+
+/// Whether `p` counts as protected in `key`.
+fn guards(p: &Prediction, key: &Key) -> u32 {
+    u32::from(p.protected && key.plane == Plane::Protected)
 }
 
 impl<'c> Board<'c> {
@@ -87,14 +104,16 @@ impl<'c> Board<'c> {
         for (s, cells) in p.cells.iter().enumerate() {
             self.times[s] = p.times_s[s];
             for (k, v) in cells {
-                let e = self.steps[s].entry(*k).or_insert((0.0, 0));
+                let e = self.steps[s].entry(*k).or_default();
                 if adding {
-                    e.0 += v;
-                    e.1 += 1;
+                    e.total += v;
+                    e.aircraft += 1;
+                    e.protected += guards(p, k);
                 } else {
-                    e.0 -= v;
-                    e.1 -= 1;
-                    if e.1 == 0 {
+                    e.total -= v;
+                    e.aircraft -= 1;
+                    e.protected -= guards(p, k);
+                    if e.aircraft == 0 {
                         self.steps[s].remove(k);
                     }
                 }
@@ -102,10 +121,10 @@ impl<'c> Board<'c> {
         }
     }
 
-    /// What a key adds to the risk with this total and contributor count.
-    fn contrib(&self, total: f64, n: u32, step: usize) -> f64 {
-        if n >= 2 && total >= self.cfg.threshold - 1e-9 {
-            total * urgency(self.times[step], self.cfg)
+    /// What a key adds to the risk with this tally.
+    fn contrib(&self, key: &Key, t: Tally, step: usize) -> f64 {
+        if can_meet(key.plane, t.aircraft, t.protected) && t.total >= self.cfg.threshold - 1e-9 {
+            t.total * urgency(self.times[step], self.cfg)
         } else {
             0.0
         }
@@ -114,8 +133,8 @@ impl<'c> Board<'c> {
     fn risk(&self) -> f64 {
         let mut sum = 0.0;
         for (s, cells) in self.steps.iter().enumerate() {
-            for &(total, n) in cells.values() {
-                sum += self.contrib(total, n, s);
+            for (k, t) in cells {
+                sum += self.contrib(k, *t, s);
             }
         }
         sum
@@ -126,8 +145,8 @@ impl<'c> Board<'c> {
         let mut sum = 0.0;
         for (s, cells) in p.cells.iter().enumerate() {
             for k in cells.keys() {
-                if let Some(&(total, n)) = self.steps[s].get(k) {
-                    sum += self.contrib(total, n, s);
+                if let Some(t) = self.steps[s].get(k) {
+                    sum += self.contrib(k, *t, s);
                 }
             }
         }
@@ -140,18 +159,27 @@ impl<'c> Board<'c> {
         for s in 0..self.steps.len() {
             let (o, n) = (&old.cells[s], &new.cells[s]);
             for (k, p_old) in o {
-                let (total, count) = self.steps[s].get(k).copied().unwrap_or((0.0, 0));
-                let p_new = n.get(k).copied().unwrap_or(0.0);
-                let after =
-                    self.contrib(total - p_old + p_new, count - 1 + u32::from(p_new > 0.0), s);
-                d += after - self.contrib(total, count, s);
+                let t = self.steps[s].get(k).copied().unwrap_or_default();
+                let p_new = n.get(k).copied();
+                let stays = u32::from(p_new.is_some());
+                let after = Tally {
+                    total: t.total - p_old + p_new.unwrap_or(0.0),
+                    aircraft: t.aircraft - 1 + stays,
+                    protected: t.protected - guards(old, k) + stays * guards(new, k),
+                };
+                d += self.contrib(k, after, s) - self.contrib(k, t, s);
             }
             for (k, p_new) in n {
                 if o.contains_key(k) {
                     continue;
                 }
-                let (total, count) = self.steps[s].get(k).copied().unwrap_or((0.0, 0));
-                d += self.contrib(total + p_new, count + 1, s) - self.contrib(total, count, s);
+                let t = self.steps[s].get(k).copied().unwrap_or_default();
+                let after = Tally {
+                    total: t.total + p_new,
+                    aircraft: t.aircraft + 1,
+                    protected: t.protected + guards(new, k),
+                };
+                d += self.contrib(k, after, s) - self.contrib(k, t, s);
             }
         }
         d
@@ -205,7 +233,8 @@ pub fn assess(
         }
         let mut best: Option<(f64, &AircraftState, usize)> = None;
         for s in states {
-            if advisories.iter().any(|a| a.aircraft == s.id)
+            if s.right_of_way
+                || advisories.iter().any(|a| a.aircraft == s.id)
                 || board.risk_for(&current[&s.id]) <= 0.0
             {
                 continue;
@@ -233,11 +262,7 @@ pub fn assess(
             .iter()
             .filter(|c| c.aircraft.iter().any(|(a, _)| *a == s.id))
             .collect();
-        let mut against: Vec<u64> = mine
-            .iter()
-            .flat_map(|c| c.aircraft.iter().map(|(a, _)| *a))
-            .filter(|a| *a != s.id)
-            .collect();
+        let mut against: Vec<u64> = mine.iter().flat_map(|c| c.against(s.id)).collect();
         against.sort_unstable();
         against.dedup();
         let first_conflict_s = mine.iter().map(|c| c.t_s).fold(f64::INFINITY, f64::min);

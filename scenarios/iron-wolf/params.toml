@@ -1,0 +1,60 @@
+# Simulated seconds per tick.
+tick_seconds = 0.1
+seed = 20260512
+
+# No delivery orders — military exercise with pre-planned / behaviour-driven missions.
+# Strike drones fly short low-level sorties; relay drones cycle for persistent coverage.
+
+# Flight envelopes
+# Strike drones: low AGL, variable speed up to ~40 m/s (150 km/h)
+# Relay drones: cruise to station then loiter 300–900 m AGL
+cruise_ms = 18.0
+climb_ms = 5.0
+takeoff_alt_m = 40.0
+rtl_alt_m = 120.0
+
+# Battery — strike drones short endurance; relays ~1 h
+battery_drain_pct_s = 0.08          # faster drain for FPV/strike class
+battery_reserve_pct = 15.0
+charge_pct_s = 0.05
+launch_battery_pct = 90.0
+
+# Geofences (exercise volumes + airport buffers)
+geofence_margin_m = 50.0
+reject_orders_in_geofences = false   # not used for deliveries
+
+# Camera / sensing (for ground picture)
+hfov_deg = 70.0
+max_range_m = 400.0
+p_detect = 0.75
+sensor_period_s = 1.0
+report_interval_s = 10.0
+
+# Ground traffic (exercise area)
+persons = 800
+vehicles = 120
+wander_radius_m = 8000.0
+origin_lon = 24.39
+origin_lat = 55.02
+person_speed_ms = 1.2
+vehicle_speed_ms = 10.0
+
+# Run log
+heatmap_resolution = 15
+
+# Weather (May 2026 exercise window example)
+weather = "recorded"
+weather_start_utc = "2026-05-12T08:00:00Z"
+weather_hours = 12
+# Fetch over the exercise area, Kaunas Airport and both traffic flows, not
+# just the terrain stub. Wind is fetched up to 180 m above the ground and held
+# there above it, so airliners higher up fly in the 180 m wind.
+weather_bbox = [23.45, 54.88, 24.62, 55.06]
+# About 3 km cells: keeps that box to a few hundred Open-Meteo calls.
+weather_resolution = 11
+
+# Separation drones must keep from the airliners (the defaults, written out):
+# 300 m across, 150 m above and below. Airliners have the right of way, so
+# conflict advisories always go to the drones.
+manned_lateral_m = 300.0
+manned_vertical_m = 150.0

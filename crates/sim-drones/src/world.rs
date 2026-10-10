@@ -40,7 +40,9 @@ use sim_core::{
 };
 use sim_core::{Wind, WindField};
 
-use crate::agents::{Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent};
+use crate::agents::{
+    AircraftAgent, Body, Dispatcher, DroneAgent, GroundAgent, IntruderAgent, Member, PoiAgent,
+};
 use crate::airspace::{Airspace, Band, Fence, SavedAirspace, Shape};
 use crate::behaviour::Brain;
 use crate::dispatch::{AddressBook, Courier, Dispatch};
@@ -50,7 +52,7 @@ use crate::operator::{self, Ops};
 use crate::regions::{Region, Regions, Survey};
 use crate::settings::{cms, settings, Settings};
 use crate::stations::{Planner, Range, Station, Stations};
-use crate::targets::{Route, VehicleType, Wander};
+use crate::targets::{Fix, Flight, Route, VehicleType, Wander};
 use crate::terrain::Terrain;
 
 /// `IntentVerb::Custom` codes the drones handle. The MAVLink gateway builds
@@ -176,10 +178,29 @@ pub fn schedule() -> Schedule {
     }
 }
 
+/// Airspeed of a seed aircraft that sets none, m/s: about 135 knots, an
+/// airliner on final approach.
+const DEFAULT_AIRCRAFT_SPEED_MS: f64 = 70.0;
+
+/// One point of a seed aircraft's `route`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedFix {
+    lon: f64,
+    lat: f64,
+    /// Above mean sea level.
+    alt_m: f64,
+    /// Airspeed by this point; the one before it if absent.
+    #[serde(default)]
+    speed_ms: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Drone,
     Intruder,
+    /// A manned aircraft on a published route; see [`Flight`].
+    Aircraft,
     Person,
     Vehicle,
     Poi,
@@ -190,6 +211,7 @@ impl Kind {
         match self {
             Kind::Drone => "drone",
             Kind::Intruder => "intruder",
+            Kind::Aircraft => "aircraft",
             Kind::Person => "person",
             Kind::Vehicle => "vehicle",
             Kind::Poi => "poi",
@@ -200,6 +222,7 @@ impl Kind {
         Some(match name {
             "drone" => Kind::Drone,
             "intruder" => Kind::Intruder,
+            "aircraft" => Kind::Aircraft,
             "person" => Kind::Person,
             "vehicle" => Kind::Vehicle,
             "poi" => Kind::Poi,
@@ -219,6 +242,9 @@ pub struct Saved {
     pub drone: Option<Drone>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Route>,
+    /// A manned aircraft's route and timetable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flight: Option<Flight>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wander: Option<Wander>,
     /// What sort of vehicle a vehicle is.
@@ -655,6 +681,25 @@ impl World {
 
     // ------------------------------------------------------------ building
 
+    /// A seed drone's `depot` or `spare` names a depot the address book does
+    /// not have. Say where depots come from, since a pack without deliveries
+    /// has none and the fix is then to drop the key.
+    fn no_such_depot(&self, id: AgentId, key: &str, depot: &str) -> anyhow::Error {
+        if self.book.depots.is_empty() {
+            anyhow::anyhow!(
+                "drone {id}: `{key}: \"{depot}\"` makes it a delivery drone, but this pack has no \
+                 address book (`addresses` in world/fields.json). Remove `{key}` for a drone \
+                 that does not deliver"
+            )
+        } else {
+            anyhow::anyhow!(
+                "drone {id}: `{key}: \"{depot}\"` is not one of the depots in world/fields.json \
+                 `addresses.depots`: {:?}",
+                self.book.depots
+            )
+        }
+    }
+
     /// Build the roster: the pack's seed agents, then scattered people and
     /// vehicles.
     fn enrol(&mut self, blob: &ScenarioBlob) -> anyhow::Result<()> {
@@ -665,12 +710,10 @@ impl World {
             let member = self.seed_member(seed, &mut sysids)?;
             if let Some(depot) = seed.state.get("spare").and_then(|v| v.as_str()) {
                 let id = member.body().id;
-                let index = self.book.depot_index(depot).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "drone {id}: spare for depot '{depot}', which is not one of the address book's {:?}",
-                        self.book.depots
-                    )
-                })?;
+                let index = self
+                    .book
+                    .depot_index(depot)
+                    .ok_or_else(|| self.no_such_depot(id, "spare", depot))?;
                 match &member {
                     Member::Drone(d) if d.courier.is_none() => {}
                     _ => anyhow::bail!(
@@ -756,7 +799,7 @@ impl World {
     ) -> anyhow::Result<Member> {
         let kind = Kind::parse(&seed.kind).ok_or_else(|| {
             anyhow::anyhow!(
-                "seed agent kind '{}' is not one of drone, intruder, person, vehicle, poi",
+                "seed agent kind '{}' is not one of drone, intruder, aircraft, person, vehicle, poi",
                 seed.kind
             )
         })?;
@@ -764,6 +807,8 @@ impl World {
         self.next_id = self.next_id.max(id + 1);
         let (lon, lat) = match (seed.lon, seed.lat) {
             (Some(lon), Some(lat)) => (lon, lat),
+            // An aircraft starts at the first fix of its route.
+            _ if kind == Kind::Aircraft => (0.0, 0.0),
             _ => seed.resolve_cell(self.resolution)?.centroid()?,
         };
         let state = &seed.state;
@@ -809,12 +854,10 @@ impl World {
                 body.callsign = text("callsign").unwrap_or_else(|| format!("UAV-{sysid}"));
                 let courier = match text("depot") {
                     Some(depot) => {
-                        let index = self.book.depot_index(&depot).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "drone {id}: depot '{depot}' is not one of the address book's {:?}",
-                                self.book.depots
-                            )
-                        })?;
+                        let index = self
+                            .book
+                            .depot_index(&depot)
+                            .ok_or_else(|| self.no_such_depot(id, "depot", &depot))?;
                         Some(Courier {
                             depot: index,
                             cruise_agl_m: number("cruise_agl_m").unwrap_or(60.0) as f32,
@@ -869,6 +912,65 @@ impl World {
                         waypoints,
                         leg: 0,
                         speed_cms: number("speed_ms").map_or(s.intruder_speed_cms, cms),
+                    },
+                })
+            }
+            Kind::Aircraft => {
+                let route: Vec<SeedFix> = state
+                    .get("route")
+                    .map(|r| serde_json::from_value(r.clone()))
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!("aircraft {id}: bad route: {e}"))?
+                    .unwrap_or_default();
+                if route.len() < 2 {
+                    anyhow::bail!(
+                        "aircraft {id}: a route needs at least two {{lon, lat, alt_m}} points"
+                    );
+                }
+                let mut speed_ms = number("speed_ms").unwrap_or(DEFAULT_AIRCRAFT_SPEED_MS);
+                let mut fixes = Vec::with_capacity(route.len());
+                for (n, fix) in route.iter().enumerate() {
+                    speed_ms = fix.speed_ms.unwrap_or(speed_ms);
+                    if !(speed_ms > 0.0 && speed_ms.is_finite()) {
+                        anyhow::bail!("aircraft {id}: route point {n} has no positive speed_ms");
+                    }
+                    // Altitudes are above mean sea level, as ATM gives them.
+                    let at = Point::at(fix.lon, fix.lat, fix.alt_m);
+                    if !self.accepts(&at) {
+                        anyhow::bail!("aircraft {id}: route point {n} is outside the world");
+                    }
+                    fixes.push(Fix {
+                        at,
+                        speed_cms: cms(speed_ms),
+                    });
+                }
+                let ticks = |key: &str| -> anyhow::Result<Option<u64>> {
+                    match number(key) {
+                        None => Ok(None),
+                        Some(v) if v >= 0.0 && v.is_finite() => {
+                            Ok(Some(libm::round(v / s.tuning.dt) as u64))
+                        }
+                        Some(v) => anyhow::bail!("aircraft {id}: {key} {v} is not a time"),
+                    }
+                };
+                let repeat_ticks = ticks("repeat_s")?.unwrap_or(0);
+                let first = fixes[0].at;
+                let parked = Pose {
+                    lat_e7: first.lat_e7,
+                    lon_e7: first.lon_e7,
+                    alt_mm: first.alt_mm,
+                    ..Pose::default()
+                };
+                let mut body = self.body(id, kind, parked)?;
+                body.callsign = text("callsign").unwrap_or_default();
+                Member::Aircraft(AircraftAgent {
+                    body,
+                    flight: Flight {
+                        fixes,
+                        leg: 0,
+                        active: false,
+                        next_start: ticks("start_s")?.unwrap_or(0),
+                        repeat_ticks,
                     },
                 })
             }

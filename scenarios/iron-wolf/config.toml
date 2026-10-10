@@ -1,0 +1,10 @@
+# No target_tps: the simulation runs flat out.
+[run]
+publish_hz = 20.0
+intent_horizon = 8
+max_pending_intents = 10000
+max_applied_per_tick = 1000
+max_published_cells = 50000
+
+[grid]
+view_resolution = 12

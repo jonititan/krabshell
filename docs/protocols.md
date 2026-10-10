@@ -338,6 +338,7 @@ CoT is one-way: the emitter sends and never listens.
 | Event | `type` | `uid` | `how` | Rate | Stale after |
 |---|---|---|---|---|---|
 | A drone | `a-f-A-M-H-Q` (friendly rotary-wing UAV) | `krabshell-uav-<sysid>` | `m-g` | Once a second | 10 s |
+| A manned aircraft on its route | `a-n-A-C-F` (neutral civil fixed-wing) | `krabshell-ac-<id>` | `m-g` | Once a second | 10 s |
 | A person a drone saw | `a-u-G-U-C-I` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |
 | A vehicle a drone saw | `a-u-G-E-V` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |
 | An intruder drone a drone saw | `a-u-A-M-H-Q` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |

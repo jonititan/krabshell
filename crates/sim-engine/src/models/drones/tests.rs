@@ -2080,3 +2080,72 @@ fn a_checkpoint_in_wind_replays_exactly_and_keeps_an_updated_wind() {
     assert_eq!(hash(&original), hash(&restored));
     assert_eq!(original.world().weather(), restored.world().weather());
 }
+
+/// The test world with a manned aircraft: 2 km in from the east at 300 m,
+/// down to 60 m, starting 10 s in and every 60 s after.
+fn with_aircraft(profile: Profile) -> ScenarioBlob {
+    let mut blob = blob(profile);
+    blob.agents.push(SeedAgent {
+        id: Some(7),
+        kind: "aircraft".into(),
+        cell: None,
+        lon: None,
+        lat: None,
+        state: serde_json::json!({
+            "callsign": "AIR-1",
+            "start_s": 10,
+            "repeat_s": 60,
+            "route": [
+                { "lon": LON + 0.03, "lat": LAT, "alt_m": 300, "speed_ms": 75 },
+                { "lon": LON, "lat": LAT, "alt_m": 60, "speed_ms": 65 }
+            ]
+        }),
+    });
+    blob
+}
+
+fn flight(model: &Drones) -> &sim_drones::targets::Flight {
+    record(model, 7).saved.flight.as_ref().unwrap()
+}
+
+#[test]
+fn an_aircraft_parks_until_its_start_then_flies_its_route_on_the_timetable() {
+    let mut model = Drones::new(&with_aircraft(Profile::Gold)).unwrap();
+    run(&mut model, 1, 99);
+    assert!(!flight(&model).active, "starts at 10 s");
+    run(&mut model, 100, 100);
+    assert!(flight(&model).active);
+    let pose = record(&model, 7).saved.pose;
+    assert!(
+        pose.alt_m() < 300.0 && pose.alt_m() > 60.0,
+        "{}",
+        pose.alt_m()
+    );
+    assert!(pose.vs_cms < 0, "descending");
+    // About 2 km at 65-75 m/s: down by 40 s in, parked, and off again at 70 s.
+    run(&mut model, 200, 400);
+    assert!(!flight(&model).active, "should have landed");
+    run(&mut model, 600, 120);
+    assert!(flight(&model).active, "should have started again at 70 s");
+}
+
+#[test]
+fn a_checkpoint_with_an_aircraft_in_flight_replays_exactly() {
+    let blob = with_aircraft(Profile::Gold);
+    let mut original = Drones::new(&blob).unwrap();
+    run(&mut original, 1, 250);
+    assert!(flight(&original).active);
+    let mut cells = Vec::new();
+    original.snapshot(&mut cells, usize::MAX);
+    let saved = hash(&original);
+
+    let mut restored = Drones::new(&blob).unwrap();
+    restored.load_cells(cells).unwrap();
+    restored.restore_fields(&original.fields()).unwrap();
+    assert_eq!(saved, hash(&restored));
+
+    let a = run(&mut original, 251, 1_000);
+    let b = run(&mut restored, 251, 1_000);
+    assert_eq!(hash(&original), hash(&restored));
+    assert_eq!(a, b);
+}

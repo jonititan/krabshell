@@ -1,5 +1,6 @@
 //! Things for drones to find: people and vehicles that wander, intruder drones
-//! that fly a fixed circuit, and points of interest that stay put.
+//! that fly a fixed circuit, and points of interest that stay put. Also the
+//! manned aircraft that share the airspace, flying published routes.
 
 use serde::{Deserialize, Serialize};
 
@@ -129,6 +130,103 @@ impl Route {
     }
 }
 
+/// A point on a manned aircraft's route: where, at what altitude above mean
+/// sea level, and the airspeed to be flying by the time it gets there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fix {
+    #[serde(flatten)]
+    pub at: Point,
+    pub speed_cms: i32,
+}
+
+/// A manned aircraft flying a route from its first fix to its last: an
+/// arrival down the approach, say, or a departure climbing out.
+///
+/// Altitude changes evenly along each leg, so a constant gradient (a 3°
+/// glide path) is a straight leg. Airspeed changes evenly along each leg
+/// too. It flies that airspeed through the wind and holds the track, as
+/// [`flight::step_toward`] does. It turns at once at each fix: a few seconds
+/// early or late at airliner speeds, which is well inside a conflict
+/// horizon, but not a flown turn.
+///
+/// Before its first start and between flights it is parked out of sight at
+/// its first fix: not drawn, not seen and not assessed for conflicts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Flight {
+    pub fixes: Vec<Fix>,
+    /// The fix it is flying to. Meaningless while it is parked.
+    pub leg: u16,
+    /// In the air on its route.
+    pub active: bool,
+    /// The tick it next starts at; `u64::MAX` once it has none.
+    pub next_start: u64,
+    /// Ticks from one start to the next; 0 flies the route once.
+    #[serde(default)]
+    pub repeat_ticks: u64,
+}
+
+impl Flight {
+    /// One tick. `wind` is toward the east and north, m/s, where it is.
+    pub fn step(&mut self, pose: &mut Pose, tick: u64, dt: f64, wind: (f64, f64)) {
+        if !self.active {
+            if tick < self.next_start || self.fixes.len() < 2 {
+                flight::hold(pose);
+                return;
+            }
+            self.active = true;
+            self.leg = 1;
+            // Starts keep to the timetable, however long a flight took.
+            self.next_start = match self.repeat_ticks {
+                0 => u64::MAX,
+                every => self.next_start.saturating_add(every),
+            };
+            let first = self.fixes[0];
+            *pose = Pose {
+                lat_e7: first.at.lat_e7,
+                lon_e7: first.at.lon_e7,
+                alt_mm: first.at.alt_mm,
+                spd_cms: first.speed_cms,
+                ..Pose::default()
+            };
+            return;
+        }
+
+        let from = self.fixes[usize::from(self.leg) - 1];
+        let to = self.fixes[usize::from(self.leg)];
+        let leg_m = flight::ground_distance_m(&from.at, &to.at);
+        let along = |left_m: f64| {
+            if leg_m > 0.0 {
+                (1.0 - left_m / leg_m).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        let lerp = |a: i32, b: i32, t: f64| f64::from(a) + (f64::from(b) - f64::from(a)) * t;
+
+        let done = along(flight::ground_distance_m(&pose.point(), &to.at));
+        let limits = Limits {
+            speed_ms: lerp(from.speed_cms, to.speed_cms, done).max(1.0) * 0.01,
+            climb_ms: 0.0,
+            wind_east_ms: wind.0,
+            wind_north_ms: wind.1,
+        };
+        // Horizontal only; the altitude follows the leg's gradient below.
+        let left = flight::step_toward(pose, &to.at.with_alt_mm(pose.alt_mm), limits, dt);
+        let alt_mm = libm::round(lerp(from.at.alt_mm, to.at.alt_mm, along(left.ground_m))) as i32;
+        pose.vs_cms = libm::round(f64::from(alt_mm - pose.alt_mm) * 0.1 / dt) as i32;
+        pose.alt_mm = alt_mm;
+
+        if left.ground_m <= 1.0 {
+            self.leg += 1;
+            if usize::from(self.leg) >= self.fixes.len() {
+                self.active = false;
+                self.leg = 0;
+                flight::hold(pose);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +254,103 @@ mod tests {
             route.step(&mut pose, 0.1);
         }
         assert_eq!(route.leg, 0, "should have completed both legs");
+    }
+
+    /// An approach: 10 km east of the threshold at 600 m, down a straight
+    /// leg to 50 m, slowing from 80 to 70 m/s.
+    fn approach(start_tick: u64, repeat_ticks: u64) -> (Flight, Point) {
+        let threshold = Pose::at(24.0, 55.0, 50.0).point();
+        let (lat, lon) = flight::displace(threshold.lat_e7, threshold.lon_e7, 10_000.0, 0.0);
+        let start = Point {
+            lat_e7: lat,
+            lon_e7: lon,
+            alt_mm: 600_000,
+        };
+        let flight = Flight {
+            fixes: vec![
+                Fix {
+                    at: start,
+                    speed_cms: 8_000,
+                },
+                Fix {
+                    at: threshold,
+                    speed_cms: 7_000,
+                },
+            ],
+            leg: 0,
+            active: false,
+            next_start: start_tick,
+            repeat_ticks,
+        };
+        (flight, threshold)
+    }
+
+    #[test]
+    fn an_aircraft_waits_for_its_start_then_flies_a_straight_glide_path() {
+        let (mut flight, threshold) = approach(50, 0);
+        let mut pose = Pose::default();
+        for tick in 0..50 {
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            assert!(!flight.active, "started early at tick {tick}");
+        }
+        flight.step(&mut pose, 50, 0.1, (0.0, 0.0));
+        assert!(flight.active);
+        assert_eq!(pose.point(), flight.fixes[0].at);
+
+        // Altitude stays on the line from 600 m to 50 m over the 10 km.
+        let mut tick = 51;
+        while flight.active {
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            if flight.active {
+                let left = flight::ground_distance_m(&pose.point(), &threshold);
+                let on_path = 50.0 + 550.0 * left / 10_000.0;
+                assert!(
+                    (pose.alt_m() - on_path).abs() < 0.05,
+                    "{:.2} m against {on_path:.2} m with {left:.0} m to go",
+                    pose.alt_m()
+                );
+                assert!(pose.vs_cms < 0);
+            }
+            tick += 1;
+            assert!(tick < 5_000, "never arrived");
+        }
+        // 10 km at 70-80 m/s is about 133 s.
+        let flown_s = (tick - 51) as f64 * 0.1;
+        assert!((128.0..140.0).contains(&flown_s), "{flown_s} s");
+        assert_eq!(pose.alt_mm, threshold.alt_mm);
+        assert_eq!(flight.next_start, u64::MAX, "flies once");
+    }
+
+    #[test]
+    fn a_repeating_aircraft_keeps_its_timetable() {
+        let (mut flight, _) = approach(0, 3_000);
+        let mut pose = Pose::default();
+        let mut starts = Vec::new();
+        for tick in 0..9_500 {
+            let was = flight.active;
+            flight.step(&mut pose, tick, 0.1, (0.0, 0.0));
+            if flight.active && !was {
+                starts.push(tick);
+            }
+        }
+        assert_eq!(starts, vec![0, 3_000, 6_000, 9_000]);
+    }
+
+    #[test]
+    fn an_aircraft_flies_its_airspeed_through_the_wind_and_says_so() {
+        let (mut flight, _) = approach(0, 0);
+        let mut pose = Pose::default();
+        // Flying west into a 20 m/s westerly (blowing toward the east).
+        for tick in 0..200 {
+            flight.step(&mut pose, tick, 0.1, (20.0, 0.0));
+        }
+        let air = f64::from(pose.air_cms.expect("airspeed in wind")) * 0.01;
+        let ground = f64::from(pose.spd_cms) * 0.01;
+        assert!(
+            (air - ground - 20.0).abs() < 0.5,
+            "air {air}, ground {ground}"
+        );
+        assert!((70.0..=80.0).contains(&air), "{air}");
     }
 
     #[test]
