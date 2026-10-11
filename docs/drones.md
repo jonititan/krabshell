@@ -4,7 +4,7 @@ The `drones` model simulates multirotor drones flying MAVLink missions over a wo
 
 ## Agent types
 
-A pack seeds agents in `world/agents.json` (see [Seed agents](scenarios.md#seed-agents)), each with a `kind` and a `state`. People and vehicles can also be scattered by count. All altitudes are above mean sea level, over the pack's terrain; without terrain the ground is at 0 m.
+A pack seeds agents in `world/agents.json` (see [Seed agents](scenarios.md#seed-agents)), each with a `kind` (`drone`, `intruder`, `aircraft`, `person`, `vehicle` or `poi`) and a `state`. People and vehicles can also be scattered by count. All altitudes are above mean sea level, over the pack's terrain; without terrain the ground is at 0 m.
 
 ### Drones
 
@@ -34,7 +34,21 @@ An intruder is an uncontrolled drone flying a closed circuit. It starts at its s
 | `speed_ms` | the `intruder_speed_ms` parameter | Ground speed. |
 | `callsign` | empty | Name in reports and CoT. |
 
-Intruders fly at a fixed ground speed and climb at 3 m/s whatever the wind. They cannot be commanded.
+Intruders fly at a fixed ground speed and climb at 3 m/s whatever the wind. They cannot be commanded, and are never given conflict advisories.
+
+### Manned aircraft
+
+An aircraft is a manned aeroplane flying a published route: an arrival down an approach, a departure climbing out. It flies from the first point of its `route` to the last, then is parked out of sight until its next start. While parked it is not drawn, not sent over CoT and not assessed for conflicts. Drones' cameras never report aircraft. A seed aircraft needs no `lon`/`lat`: it starts at its first route point.
+
+| `state` key | Default | Meaning |
+|---|---|---|
+| `route` | required | At least two points `{"lon", "lat", "alt_m", "speed_ms"}`, each inside the world. `alt_m` is above mean sea level, as ATM gives altitudes. `speed_ms` is the airspeed by that point; absent, the one before it. |
+| `speed_ms` | 70 | Airspeed for route points that set none before them. |
+| `start_s` | 0 | Simulated seconds before its first start, rounded to whole ticks. |
+| `repeat_s` | none | Seconds from one start to the next. Starts keep to this timetable however long a flight takes. Without it the route is flown once. |
+| `callsign` | empty | Name on the map, in CoT and in conflict advisories. |
+
+Along each leg the altitude and the airspeed change evenly with distance, so a constant gradient, such as a 3° glide path, is one straight leg. It flies its airspeed through the wind, holding the track, and publishes the airspeed and heading it flew (`air_cms`, `yaw_cdeg`) beside its ground speed and track. It turns at once at each point; at airliner speeds that is a few seconds early or late against a flown turn. The conflict service assesses aircraft with `sim-conflict`'s generic narrowbody (fixed-wing) performance, with a protected volume (`manned_lateral_m`, `manned_vertical_m`: 300 m and ±150 m) that drones must keep out of. Drones are advised to give way first; the aircraft is advised only when no drone can resolve the conflict, and flies its advisory like a drone does, then climbs or descends back to its route's profile at no more than 15 m/s. While it flies one, its `activity` is the manoeuvre (`descend`, `level off`). See [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) and [Advisories are flown](conflicts.md#advisories-are-flown). On the map an aircraft is APP-6 neutral air, civilian fixed-wing; over CoT it is `a-n-A-C-F`.
 
 ### People and vehicles
 
@@ -55,22 +69,22 @@ A point of interest is a named place that never moves. Its name is its `state`'s
 
 ### Spawning while running
 
-A `Spawn` intent adds people, vehicles or points of interest at the centre of the intent's cell: payload `kind` (`person`, the default, `vehicle` or `poi`), `count` (1 to 1000), and optionally `type` for a vehicle and `name` for a point of interest. Drones and intruders cannot be spawned. A `Despawn` intent removes one agent, or everything in a cell. `Move` and `SetField` are refused: drones move by mission, and everything else moves on its own.
+A `Spawn` intent adds people, vehicles or points of interest at the centre of the intent's cell: payload `kind` (`person`, the default, `vehicle` or `poi`), `count` (1 to 1000), and optionally `type` for a vehicle and `name` for a point of interest. Drones, intruders and aircraft cannot be spawned. A `Despawn` intent removes one agent, or everything in a cell. `Move` and `SetField` are refused: drones move by mission, and everything else moves on its own.
 
 ## How a tick works
 
 A tick is `tick_seconds` of simulated time, 0.1 s by default. Nothing paces it to the wall clock; the gateways keep MAVLink and CoT on real time however fast the simulation runs. A step goes:
 
 1. The tick advances, and agents added by intents or as replacements join the schedule.
-2. The dispatcher steps first. It closes geofences whose time is up, makes the geofence, station and region changes asked for since the last tick, opens scheduled fences that are due, turns away queued orders a new fence covers (with `reject_orders_in_geofences`), works out the delivery range again if anything it depends on changed, and places the orders due.
-3. Every agent steps in id order. Each reads the committed world (everything as it was at the end of the last step) and writes itself to the uncommitted side. A drone runs its behaviour tree; a person, vehicle or intruder moves; a point of interest stays put.
+2. The dispatcher steps first. It closes geofences whose time is up, makes the geofence, station and region changes asked for since the last tick, opens scheduled fences that are due, turns away queued orders a new fence covers (with `reject_orders_in_geofences`), works out the delivery range again if anything it depends on changed, and places the orders due. Every `atc_every_s` it assesses conflicts between the drones, intruders and aircraft in the air and hands out advisories; see [Conflict advisories](#conflict-advisories).
+3. Every agent steps in id order. Each reads the committed world (everything as it was at the end of the last step) and writes itself to the uncommitted side. A drone runs its behaviour tree; a person, vehicle, intruder or aircraft moves; a point of interest stays put.
 4. The grid and the published board are committed together.
 
 Intents are checked against the committed world as they arrive, and applied by the agent they address at the start of its next step. Nothing an intent does is visible until the step that applies it commits.
 
 ### A drone's step
 
-Each drone first takes up any courier duty it has been called up for, looks up the wind in its cell, and then ticks its behaviour tree from the root. The default tree, [`../crates/sim-drones/behaviour/drone.json`](../crates/sim-drones/behaviour/drone.json), does this, in order:
+Each drone first takes up any courier duty it has been called up for and any advisory it has been given, looks up the wind in its cell, and then ticks its behaviour tree from the root. The default tree, [`../crates/sim-drones/behaviour/drone.json`](../crates/sim-drones/behaviour/drone.json), does this, in order:
 
 1. If the simulation flies it, plan round the geofences and queue what a ground station would send.
 2. Obey the commands that arrived since the last tick: from ground stations, the API, and step 1.
@@ -84,13 +98,17 @@ Each drone first takes up any courier duty it has been called up for, looks up t
 
 A pack can replace the tree with its own `world/behaviour.json`. The leaves and the rules for writing one are in [Drone behaviours](drone-behaviours.md).
 
-Each drone also publishes an `activity`, derived each step for people to read: `surveying`, `delivering`, `returning`, `charging`, `idle` or `flying`.
+Each drone also publishes an `activity`, derived each step for people to read: `avoiding` (flying a conflict advisory), `surveying`, `delivering`, `returning`, `charging`, `idle` or `flying`, the first that applies.
 
 ## Flight
 
 Positions and motion are integers in the units MAVLink's `_INT` messages use: degrees × 10⁷, millimetres, centidegrees and centimetres per second. Each step converts to floating point, moves, and rounds back. Distances use a local flat-Earth approximation, good to well under a metre over a scenario's few kilometres. The flight code is [`../crates/sim-drones/src/flight.rs`](../crates/sim-drones/src/flight.rs) and the autopilot [`../crates/sim-drones/src/mission.rs`](../crates/sim-drones/src/mission.rs).
 
 A drone flies straight at its target, horizontally at its cruise airspeed and vertically at `climb_ms`, independently, as a multirotor does: it turns at once and never overshoots. In still air its nose points along the track. In wind it holds the straight track by crabbing into the crosswind, so its ground speed is what the wind leaves of its airspeed; a wind stronger than it can fly blows it backwards, nose into the wind. Hovering in wind costs airspeed but not position. On the ground it is not blown about. The wind it flies in is that of its cell at its height above the ground; without weather it is calm. See [Weather](weather.md).
+
+### Conflict advisories
+
+Unless the pack sets `atc = false`, the model assesses conflicts itself every `atc_every_s` (5 s) and each drone advised flies its manoeuvre for `advisory_hold_s` (10 s): a climb or descent, a level-off, a turn or a change of speed. The advisory overrides the mode and the mission, whoever flies the drone; the mode is unchanged, and the autopilot carries on from wherever the drone is once the advisory runs out. A descent never takes the drone below 20 m above the ground, and an advisory is dropped once the drone is on the ground. Drones on the ground, taking off or landing are not assessed. The advisory is flown as given, without regard to geofences. Drones give way before manned aircraft, and intruders are never advised. See [Conflicts: advisories are flown](conflicts.md#advisories-are-flown).
 
 ### Modes
 
@@ -166,7 +184,7 @@ The battery is held in parts per million of a full charge, fine enough to drain 
 Each drone carries a downward-looking camera ([`../crates/sim-drones/src/sensor.rs`](../crates/sim-drones/src/sensor.rs)). It scans every `sensor_period_s`, on ticks that are a whole multiple of the period, and only in the air.
 
 - Its footprint on the ground is a circle of radius height-above-ground × tan(`hfov_deg` / 2), capped at `max_range_m`. Below 1 m, it sees nothing.
-- People, vehicles and points of interest inside the footprint can be seen. Intruders are searched for by slant range out to `max_range_m` instead, since they are not on the ground. Other drones are not reported.
+- People, vehicles and points of interest inside the footprint can be seen. Intruders are searched for by slant range out to `max_range_m` instead, since they are not on the ground. Other drones and manned aircraft are not reported.
 - The chance of seeing a target on a scan falls linearly from `p_detect` at the centre to `p_detect` × (1 − `edge_falloff`) at the edge.
 - The same target is reported to the same drone at most once every `report_interval_s`.
 
@@ -234,7 +252,7 @@ With the defaults, from 70 m that is about 75 s.
 
 ### Orders that do not get delivered
 
-A courier that comes down and disarms still holding an undelivered order (its low-battery failsafe sent it home, a ground station landed it, or the simulation sent it home because a fence opened over the address) puts the order back at the front of its depot's queue, and starts loading.
+A courier that comes down and disarms still holding an undelivered order (its low-battery failsafe sent it home, a ground station landed it, or the simulation sent it home because a fence opened over the address) puts the order back at the front of its depot's queue, and starts loading. An order whose courier has come back or crashed without delivering it three times is turned away instead, whatever `reject_orders_in_geofences` says: an `order_rejected` report with `stage` `returned` and the reason "no courier could reach the address", so that one unreachable address cannot hold up its depot's queue.
 
 By default an order whose address is under a geofence waits in the queue until the fence closes. With `reject_orders_in_geofences = true` it is turned away instead, at whichever of three moments comes first:
 
@@ -314,7 +332,7 @@ The drones model is built to replay bit for bit:
 - Intents are applied at the start of a step and logged with the tick they were applied on. Live weather arrives as intent 140, so it is logged too.
 - A behaviour tree starts afresh every tick and keeps nothing between ticks; what a drone is in the middle of lives in its state, which checkpoints keep.
 
-This holds in both profiles. Run the pack in the `gold` profile to make use of it: the driver then hashes every published view and keeps the intent log, so `simctl replay` can check two runs agree and a run with ground stations and dashboard actions in it can be replayed. Checkpoints carry every agent's full state, the order queues, spares, fences, stations, regions and the wind, so a restored run carries on exactly as an uninterrupted one would.
+This holds in both profiles. Run the pack in the `gold` profile to make use of it: the driver then hashes every published view and keeps the intent log, so `simctl replay` can check two runs agree and a run with ground stations and dashboard actions in it can be replayed. Checkpoints carry every agent's full state (advisories being flown and the published `activity` included), the order queues, spares, fences, stations, regions, the last conflict assessment and the wind, so a restored run carries on exactly as an uninterrupted one would.
 
 ## Running without the server
 

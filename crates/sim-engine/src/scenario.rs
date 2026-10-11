@@ -42,7 +42,7 @@ impl ScenarioStore {
         let mut packs: Vec<ScenarioSummary> = entries
             .flatten()
             .filter(|e| e.path().is_dir())
-            .filter_map(|entry| match read_pack(&entry.path()) {
+            .filter_map(|entry| match read_named(&entry.path()) {
                 Ok(blob) => Some(summarise(&blob, &entry.file_name().to_string_lossy())),
                 Err(err) => {
                     tracing::warn!(path = %entry.path().display(), %err, "skipping unreadable scenario pack");
@@ -54,10 +54,11 @@ impl ScenarioStore {
         packs
     }
 
-    /// Load one pack by manifest id.
+    /// Load one pack by id: its directory name, which its manifest's id must
+    /// match.
     pub fn load(&self, id: &str) -> Result<ScenarioBlob, ScenarioError> {
         let dir = self.resolve(id)?;
-        read_pack(&dir)
+        read_named(&dir)
     }
 
     pub fn exists(&self, id: &str) -> bool {
@@ -109,6 +110,27 @@ impl ScenarioStore {
         }
         Ok(dir)
     }
+}
+
+/// Read a pack in the store, whose manifest id must be its directory's name:
+/// a pack is found by id, so one whose names differ is listed under one and
+/// looked for under the other. Uploads are held to the same rule.
+fn read_named(dir: &Path) -> Result<ScenarioBlob, ScenarioError> {
+    let blob = read_pack(dir)?;
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if blob.manifest.id != name {
+        return Err(ScenarioError::Malformed {
+            file: "manifest.toml".to_owned(),
+            message: format!(
+                "manifest id '{}' does not match the pack's directory '{name}'; rename one to match",
+                blob.manifest.id
+            ),
+        });
+    }
+    Ok(blob)
 }
 
 fn summarise(blob: &ScenarioBlob, source: &str) -> ScenarioSummary {
@@ -359,6 +381,21 @@ profile = "gold"
 
         assert!(store.import_zip("claimed", &buffer).is_err());
         assert!(!store.exists("claimed"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pack_whose_manifest_id_is_not_its_directory_is_refused_and_not_listed() {
+        let root = temp_dir("renamed");
+        let store = ScenarioStore::new(&root);
+        write_pack(&root, "good");
+        let dir = write_pack(&root, "named");
+        std::fs::rename(&dir, root.join("moved")).unwrap();
+
+        let err = store.load("moved").unwrap_err().to_string();
+        assert!(err.contains("'named'") && err.contains("'moved'"), "{err}");
+        let ids: Vec<String> = store.list().into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec!["good"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

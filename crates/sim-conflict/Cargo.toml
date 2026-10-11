@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 sim-core.workspace = true
+# Predictions are independent of each other, so they are flown in parallel;
+# the results are collected in order, so an assessment repeats exactly.
+rayon = "1.12"
 libm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

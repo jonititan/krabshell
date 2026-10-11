@@ -34,6 +34,7 @@ const STATIONS_JS: &str = include_str!("../../../sim-dashboard/assets/stations.j
 const LIVE_JS: &str = include_str!("../../../sim-dashboard/assets/live.js");
 const WEATHER_JS: &str = include_str!("../../../sim-dashboard/assets/weather.js");
 const CONFLICTS_JS: &str = include_str!("../../../sim-dashboard/assets/conflicts.js");
+const TIMELINE_JS: &str = include_str!("../../../sim-dashboard/assets/timeline.js");
 const HTMX_JS: &str = include_str!("../../../sim-dashboard/assets/htmx.min.js");
 /// milsymbol 3.0.4 (MIT), which draws the maps' APP-6 / MIL-STD-2525 symbols.
 /// Vendored so the dashboard works offline. Its path carries the version, so
@@ -66,6 +67,10 @@ pub fn router(auth: Arc<Auth>) -> Router<AppState> {
         .route(
             "/assets/conflicts.js",
             get(|| asset(CONFLICTS_JS, "text/javascript")),
+        )
+        .route(
+            "/assets/timeline.js",
+            get(|| asset(TIMELINE_JS, "text/javascript")),
         )
         .route(
             "/assets/htmx.min.js",
@@ -209,6 +214,10 @@ pub struct ControlView {
     /// action's reply (out of band). The once-a-second poll leaves it out, so
     /// it never wipes the outcome of the last action.
     pub flash_slot: bool,
+    /// Render the rewind timeline beside the panel: on a page only. Script
+    /// drives it from then on (timeline.js), so neither the poll nor an
+    /// action's reply touches it.
+    pub timeline: bool,
 }
 
 impl ControlView {
@@ -271,6 +280,7 @@ impl ControlView {
             truncated: view.truncated,
             fault: health.fault.clone(),
             last_good_tick: thousands(health.last_good_tick),
+            timeline: flash.is_none(),
             flash,
             flash_slot: true,
         }
@@ -472,11 +482,24 @@ pub struct CellRow {
     pub aircraft: Vec<(String, String)>,
 }
 
+/// A row of the advisories-being-flown table: what the world's own
+/// assessment told an aircraft.
+pub struct FlownRow {
+    pub callsign: String,
+    pub action: String,
+    pub against: String,
+}
+
 /// The Conflicts screen's tables.
 pub struct ConflictsView {
     pub ready: bool,
     pub error: Option<String>,
     pub summary: String,
+    /// What the world last advised, which the aircraft fly; `None` when the
+    /// pack turns advisories off.
+    pub flown: Option<Vec<FlownRow>>,
+    /// When that was, and what it left unresolved.
+    pub flown_summary: String,
     pub requests: Vec<RequestRow>,
     pub cells: Vec<CellRow>,
     pub more_cells: usize,
@@ -508,14 +531,26 @@ fn action_text(m: sim_conflict::Manoeuvre, t: &sim_conflict::Targets) -> String 
 }
 
 impl ConflictsView {
-    async fn build(state: &AppState) -> ConflictsView {
-        let report = match state.conflicts.report(&state.driver, &state.weather).await {
+    async fn build(state: &AppState, at: Option<u64>) -> ConflictsView {
+        let shown = crate::routes::api::view_for(state, at).await;
+        let (flown, flown_summary) = shown
+            .as_ref()
+            .map(|view| flown_rows(view))
+            .unwrap_or_default();
+        let report = match (at, shown) {
+            (None, _) => state.conflicts.report(&state.driver, &state.weather).await,
+            (Some(_), Ok(view)) => state.conflicts.report_at(view, &state.weather).await,
+            (Some(_), Err(err)) => Err(anyhow::anyhow!("{}", err.0.detail)),
+        };
+        let report = match report {
             Ok(r) => r,
             Err(err) => {
                 return ConflictsView {
                     ready: false,
                     error: Some(format!("{err:#}")),
                     summary: String::new(),
+                    flown,
+                    flown_summary,
                     requests: Vec::new(),
                     cells: Vec::new(),
                     more_cells: 0,
@@ -600,11 +635,93 @@ impl ConflictsView {
                 report.threshold,
                 report.took_ms
             ),
+            flown,
+            flown_summary,
             requests,
             more_cells: report.cells.len().saturating_sub(cells.len()),
             cells,
         }
     }
+}
+
+/// The advisories the world last gave, from its `atc` overlay, and a line
+/// on when and what was left. `None` when the pack turns advisories off.
+fn flown_rows(view: &Published) -> (Option<Vec<FlownRow>>, String) {
+    let off = matches!(
+        view.config.model.get("atc"),
+        Some(sim_core::config::Param::Bool(false))
+    );
+    let atc = &view.overlays["atc"];
+    if off || atc.is_null() {
+        return (None, String::new());
+    }
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
+    let rows = atc["advisories"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            let number = |k: &str| a[k].as_f64();
+            let action = match text(&a["action"]).as_str() {
+                "climb" | "descend" => format!(
+                    "{} at {:.1} m/s",
+                    if a["action"] == "climb" {
+                        "Climb"
+                    } else {
+                        "Descend"
+                    },
+                    number("vs_ms").unwrap_or(0.0).abs()
+                ),
+                "turn_left" | "turn_right" => format!(
+                    "Turn {} to {:03.0}°",
+                    if a["action"] == "turn_left" {
+                        "left"
+                    } else {
+                        "right"
+                    },
+                    number("heading_deg").unwrap_or(0.0)
+                ),
+                "speed_up" | "slow_down" => format!(
+                    "{} to {:.1} m/s",
+                    if a["action"] == "speed_up" {
+                        "Speed up"
+                    } else {
+                        "Slow down"
+                    },
+                    number("speed_ms").unwrap_or(0.0)
+                ),
+                "level_off" => "Level off".into(),
+                other => other.replace('_', " "),
+            };
+            FlownRow {
+                callsign: text(&a["callsign"]),
+                action,
+                against: a["against"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(text)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+        })
+        .collect();
+    let unresolved: Vec<String> = atc["unresolved"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some(format!("{} and {}", p[0].as_str()?, p[1].as_str()?)))
+        .collect();
+    let tick = atc["tick"].as_u64().unwrap_or(0);
+    let mut summary = format!(
+        "Assessed at tick {} · {} aircraft in the air",
+        thousands(tick),
+        atc["aircraft"].as_u64().unwrap_or(0)
+    );
+    if !unresolved.is_empty() {
+        summary.push_str(&format!(" · still in conflict: {}", unresolved.join("; ")));
+    }
+    (Some(rows), summary)
 }
 
 #[derive(Template)]
@@ -904,7 +1021,7 @@ async fn conflicts_page(State(state): State<AppState>) -> Response {
     render(ConflictsTemplate {
         nav: "conflicts",
         control: ControlView::build(&state, None),
-        conflicts: ConflictsView::build(&state).await,
+        conflicts: ConflictsView::build(&state, None).await,
         basemaps: BASEMAPS,
         resolutions: resolution_options(&state),
     })
@@ -916,9 +1033,9 @@ async fn action_conflict_resolution(
 ) -> Response {
     let chosen = form.resolution.trim().parse::<i32>().ok();
     let mut view = match state.conflicts.choose_resolution(chosen) {
-        Ok(()) => ConflictsView::build(&state).await,
+        Ok(()) => ConflictsView::build(&state, None).await,
         Err(err) => {
-            let mut v = ConflictsView::build(&state).await;
+            let mut v = ConflictsView::build(&state, None).await;
             v.error = Some(err);
             v
         }
@@ -929,9 +1046,12 @@ async fn action_conflict_resolution(
     render(ConflictsFragment { conflicts: view })
 }
 
-async fn conflicts_fragment(State(state): State<AppState>) -> Response {
+async fn conflicts_fragment(
+    State(state): State<AppState>,
+    Query(q): Query<crate::routes::api::AtQuery>,
+) -> Response {
     render(ConflictsFragment {
-        conflicts: ConflictsView::build(&state).await,
+        conflicts: ConflictsView::build(&state, q.at).await,
     })
 }
 
@@ -1084,6 +1204,7 @@ async fn io_page(State(state): State<AppState>) -> Response {
 async fn control_fragment(State(state): State<AppState>) -> Response {
     let mut control = ControlView::build(&state, None);
     control.flash_slot = false;
+    control.timeline = false;
     render(ControlFragment { control })
 }
 
@@ -1097,10 +1218,16 @@ async fn scenarios_fragment(State(state): State<AppState>) -> Response {
 pub struct CellQuery {
     #[serde(default)]
     cell: Option<String>,
+    /// Rewound to this tick.
+    #[serde(default)]
+    at: Option<u64>,
 }
 
 async fn cell_fragment(State(state): State<AppState>, Query(query): Query<CellQuery>) -> Response {
-    let view = state.driver.view();
+    // A tick that has left the history shows the live cell rather than nothing.
+    let view = crate::routes::api::view_for(&state, query.at)
+        .await
+        .unwrap_or_else(|_| state.driver.view());
     render(CellFragment {
         cell: cell_view(&view, query.cell.as_deref()),
     })

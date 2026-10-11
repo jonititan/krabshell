@@ -27,6 +27,7 @@ use sim_core::{
 use uuid::Uuid;
 
 use crate::admission::{Admission, AdmissionOutcome};
+use crate::history::{History, HistoryHandle, HistoryRange};
 use crate::model::{Model, ModelRegistry};
 use crate::publisher::{Cells, Publisher};
 
@@ -243,12 +244,33 @@ pub struct DriverHandle {
     control: Sender<Command>,
     intents: Sender<Submission>,
     published: Arc<ArcSwap<Published>>,
+    history: HistoryHandle,
 }
 
 impl DriverHandle {
     /// Latest committed view. Cheap: one atomic load and an `Arc` clone.
     pub fn view(&self) -> Arc<Published> {
         self.published.load_full()
+    }
+
+    /// The ticks rewind can show: from the oldest keyframe up to the live
+    /// tick. See [`crate::history`].
+    pub fn history_range(&self) -> HistoryRange {
+        self.history.range()
+    }
+
+    /// The world as it was at `tick`, rebuilt from the history; the live view
+    /// if `tick` is now. Blocking (it may replay up to
+    /// `run.history_every_ticks` ticks), so callers on Tokio must wrap it in
+    /// `spawn_blocking`.
+    pub fn view_at(&self, tick: u64) -> Result<Arc<Published>, DriverError> {
+        let live = self.view();
+        if tick == live.meta.tick {
+            return Ok(live);
+        }
+        self.history
+            .view_at(tick, live)
+            .map_err(DriverError::Refused)
     }
 
     /// Liveness, with the publish age recomputed against the current clock.
@@ -348,15 +370,17 @@ impl Driver {
             &blob,
         )));
 
+        let publisher = Publisher::spawn(Arc::clone(&published))?;
+        let mut history = History::spawn(registry.clone())?;
+        history.begin(&blob, model.as_ref(), 0);
         let handle = DriverHandle {
             control: control_tx,
             intents: intent_tx,
             published: Arc::clone(&published),
+            history: history.handle(),
         };
-
-        let publisher = Publisher::spawn(Arc::clone(&published))?;
         let mut loop_state = DriverLoop::new(
-            registry, blob, model, control_rx, intent_rx, published, publisher,
+            registry, blob, model, control_rx, intent_rx, published, publisher, history,
         );
         // Publish before the thread exists, so a caller that reads the view on
         // the line after `spawn` sees the seeded world rather than an empty one.
@@ -404,6 +428,7 @@ struct DriverLoop {
     intents: Receiver<Submission>,
     published: Arc<ArcSwap<Published>>,
     publisher: Publisher,
+    history: History,
 
     mode: RunMode,
     tick: u64,
@@ -441,6 +466,7 @@ impl DriverLoop {
         intents: Receiver<Submission>,
         published: Arc<ArcSwap<Published>>,
         publisher: Publisher,
+        history: History,
     ) -> Self {
         let config = blob.config.clone();
         DriverLoop {
@@ -452,6 +478,7 @@ impl DriverLoop {
             intents,
             published,
             publisher,
+            history,
             mode: RunMode::Paused,
             tick: 0,
             steps_remaining: 0,
@@ -601,6 +628,7 @@ impl DriverLoop {
         self.reports.clear();
         self.metrics = Metrics::default();
         self.publisher.reset_dropped();
+        self.history.begin(&self.blob, self.model.as_ref(), 0);
         self.mode = RunMode::Paused;
         self.publish();
         Ok(())
@@ -644,6 +672,7 @@ impl DriverLoop {
         model.load_cells(checkpoint.cells.clone())?;
         model.restore_fields(&checkpoint.fields)?;
         model.set_rng_state(checkpoint.rng);
+        model.set_tick(checkpoint.meta.tick);
 
         self.model = model;
         self.config = checkpoint.config;
@@ -655,6 +684,8 @@ impl DriverLoop {
         self.discard_pending("a checkpoint was restored");
         self.intent_log = checkpoint.intent_log.unwrap_or_default();
         self.reports.clear();
+        self.history
+            .begin(&self.blob, self.model.as_ref(), self.tick);
         self.mode = RunMode::Paused;
         self.publish();
         Ok(())
@@ -718,6 +749,7 @@ impl DriverLoop {
             Ok(()) => {
                 self.tick = target_tick;
                 self.last_good_tick = target_tick;
+                self.history.ticked(self.model.as_ref(), target_tick);
                 self.collect_reports();
                 self.window_ticks += 1;
                 if self.mode == RunMode::Stepping {
@@ -779,6 +811,7 @@ impl DriverLoop {
                     if self.config.run.profile == Profile::Gold {
                         self.log_intent(tick, &submission.intent);
                     }
+                    self.history.applied(tick, &submission.intent);
                     self.note_intent(&submission.intent, Ok(tick));
                     submission.resolve(IntentAck::Applied { tick });
                 }
@@ -962,6 +995,7 @@ impl DriverLoop {
     fn publish_final(&mut self) {
         // Let the last view in flight land first, so this one is not overwritten.
         self.publisher.stop();
+        self.history.stop();
         let mut view = (**self.published.load()).clone();
         view.health.alive = false;
         view.health.mode = RunMode::Paused;

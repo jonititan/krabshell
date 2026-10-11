@@ -40,6 +40,21 @@ pub(crate) struct Settings {
     /// Turn away orders whose address is inside a geofence when they are
     /// placed, rather than queue them until it closes.
     pub(crate) reject_orders_in_geofences: bool,
+    /// Conflict advisories, assessed and flown in the world.
+    pub(crate) atc: AtcSettings,
+}
+
+/// When the world assesses conflicts and how long an advisory is flown.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AtcSettings {
+    /// `atc`: on unless a pack turns it off.
+    pub(crate) on: bool,
+    /// `atc_every_s`: ticks between assessments.
+    pub(crate) every_ticks: u64,
+    /// `advisory_hold_s`: how long an advisory is flown before the autopilot
+    /// or route takes over again, ms. A conflict still there at the next
+    /// assessment is advised again.
+    pub(crate) hold_ms: u32,
 }
 
 pub(crate) fn param_f64(params: &BTreeMap<String, Param>, key: &str, default: f64) -> f64 {
@@ -129,5 +144,11 @@ pub(crate) fn settings(params: &BTreeMap<String, Param>) -> Settings {
             params.get("reject_orders_in_geofences"),
             Some(Param::Bool(true))
         ),
+        atc: AtcSettings {
+            on: !matches!(params.get("atc"), Some(Param::Bool(false))),
+            every_ticks: ticks(param_f64(params, "atc_every_s", 5.0).clamp(0.1, 600.0)),
+            hold_ms: (param_f64(params, "advisory_hold_s", 10.0).clamp(0.1, 600.0) * 1_000.0)
+                as u32,
+        },
     }
 }

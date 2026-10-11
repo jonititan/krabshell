@@ -9,7 +9,7 @@ text{fill:var(--ink);font-size:13px}
 .halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
 .grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
 </style>
-<clipPath id="clip132400716572848"><rect x="56.0" y="48" width="218.66666666666666" height="242"/></clipPath>
+<clipPath id="clip4"><rect x="56.0" y="48" width="218.66666666666666" height="242"/></clipPath>
 <line x1="78.7" y1="48.0" x2="78.7" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
 <text x="78.7" y="305.0" text-anchor="middle" class="tm">0</text>
 <line x1="152.6" y1="48.0" x2="152.6" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
@@ -23,7 +23,7 @@ text{fill:var(--ink);font-size:13px}
 <line x1="56.0" y1="91.9" x2="274.7" y2="91.9" stroke="var(--grid)" stroke-width="1"/>
 <text x="50.0" y="95.9" text-anchor="end" class="tm">500</text>
 <rect x="56.0" y="48" width="218.66666666666666" height="242" fill="none" stroke="var(--axis)"/>
-<g clip-path="url(#clip132400716572848)">
+<g clip-path="url(#clip4)">
 <path d="M210.1,207.8L221.2,227.4L233.4,210.7L228.5,188.4L208.7,185.2L210.1,207.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M208.7,185.2L197.5,165.6L185.4,182.3L190.2,204.6L210.1,207.8L208.7,185.2Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M224.7,129.8L235.8,149.4L248.0,132.7L243.1,110.4L223.3,107.2L224.7,129.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
@@ -50,7 +50,7 @@ text{fill:var(--ink);font-size:13px}
 </g>
 <text x="56.0" y="16.0" text-anchor="start" class="h">20 s ahead</text>
 <text x="56.0" y="34.0" text-anchor="start" class="small t2">peak 1.00, no conflict</text>
-<clipPath id="clip132400716577472"><rect x="290.66666666666663" y="48" width="218.66666666666666" height="242"/></clipPath>
+<clipPath id="clip5"><rect x="290.66666666666663" y="48" width="218.66666666666666" height="242"/></clipPath>
 <line x1="313.4" y1="48.0" x2="313.4" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
 <line x1="387.2" y1="48.0" x2="387.2" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
 <line x1="461.1" y1="48.0" x2="461.1" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
@@ -61,7 +61,7 @@ text{fill:var(--ink);font-size:13px}
 <text x="313.4" y="305.0" text-anchor="middle" class="tm">0</text>
 <text x="387.2" y="305.0" text-anchor="middle" class="tm">500</text>
 <text x="461.1" y="305.0" text-anchor="middle" class="tm">1000</text>
-<g clip-path="url(#clip132400716577472)">
+<g clip-path="url(#clip5)">
 <path d="M324.6,175.1L329.5,197.3L343.4,214.6L355.6,197.9L344.5,178.3L324.6,175.1Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M343.1,155.7L331.9,136.1L319.7,152.8L324.6,175.1L344.5,178.3L343.1,155.7Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M339.2,97.1L344.1,119.3L358.0,136.6L370.2,119.9L359.0,100.3L339.2,97.1Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
@@ -92,7 +92,7 @@ text{fill:var(--ink);font-size:13px}
 </g>
 <text x="290.7" y="16.0" text-anchor="start" class="h">40 s ahead</text>
 <text x="290.7" y="34.0" text-anchor="start" class="small t2">peak 1.31, 1 cell in conflict</text>
-<clipPath id="clip132400715980624"><rect x="525.3333333333333" y="48" width="218.66666666666666" height="242"/></clipPath>
+<clipPath id="clip6"><rect x="525.3333333333333" y="48" width="218.66666666666666" height="242"/></clipPath>
 <line x1="548.1" y1="48.0" x2="548.1" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
 <line x1="621.9" y1="48.0" x2="621.9" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
 <line x1="695.8" y1="48.0" x2="695.8" y2="290.0" stroke="var(--grid)" stroke-width="1"/>
@@ -103,7 +103,7 @@ text{fill:var(--ink);font-size:13px}
 <text x="548.1" y="305.0" text-anchor="middle" class="tm">0</text>
 <text x="621.9" y="305.0" text-anchor="middle" class="tm">500</text>
 <text x="695.8" y="305.0" text-anchor="middle" class="tm">1000</text>
-<g clip-path="url(#clip132400715980624)">
+<g clip-path="url(#clip6)">
 <path d="M659.6,204.6L664.5,226.9L678.4,244.2L690.6,227.4L679.4,207.8L659.6,204.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M679.4,207.8L690.6,227.4L702.7,210.7L697.9,188.4L678.0,185.2L679.4,207.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M697.9,188.4L693.0,166.2L679.1,148.9L666.9,165.6L678.0,185.2L697.9,188.4Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>

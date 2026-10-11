@@ -17,7 +17,7 @@ use crate::mission::{self, Drone, Event, MissionItem, Mode};
 use crate::regions::{self, Survey};
 use crate::sensor::{Candidate, Sighting};
 use crate::stations::{self, Planner, Range};
-use crate::targets::{Route, VehicleType, Wander};
+use crate::targets::{Flight, Route, VehicleType, Wander};
 use crate::world::{draw_pair, refresh_key, Kind, Record, Saved, World, WANDER_SALT};
 
 fn world(state: &mut dyn State) -> &mut World {
@@ -73,6 +73,7 @@ impl Body {
             callsign: self.callsign.clone(),
             drone: None,
             route: None,
+            flight: None,
             wander: None,
             vehicle_type: None,
             courier: None,
@@ -127,6 +128,13 @@ pub struct IntruderAgent {
     pub route: Route,
 }
 
+/// A manned aircraft flying a published route; see [`Flight`].
+#[derive(Debug, Clone)]
+pub struct AircraftAgent {
+    pub body: Body,
+    pub flight: Flight,
+}
+
 /// A named point of interest. It never moves, but it is on the grid like
 /// everything else, so it steps to stay there.
 #[derive(Debug, Clone)]
@@ -146,6 +154,7 @@ impl Agent for Dispatcher {
         world.update_sites();
         world.refresh_range();
         world.place_orders();
+        world.run_atc();
     }
 }
 
@@ -160,6 +169,10 @@ impl Agent for DroneAgent {
         // A spare called up to replace a courier that crashed.
         if let Some(courier) = world.call_ups.remove(&self.body.id) {
             self.courier = Some(courier);
+        }
+        // A conflict advisory from this tick's assessment.
+        if let Some(avoid) = world.advice.remove(&self.body.id) {
+            self.drone.avoid = Some(avoid);
         }
 
         // The wind where it is, and at its takeoff height, for everything
@@ -618,7 +631,9 @@ impl DroneAgent {
             .courier
             .as_ref()
             .and_then(|c| c.order.as_ref().map(|_| c.delivered));
-        if self.survey.as_ref().is_some_and(|s| !s.done) {
+        if self.drone.avoid.is_some() {
+            "avoiding"
+        } else if self.survey.as_ref().is_some_and(|s| !s.done) {
             "surveying"
         } else if order == Some(false) {
             "delivering"
@@ -917,7 +932,7 @@ impl DroneAgent {
             .nearby(self.body.cell)
             .into_iter()
             .filter_map(|id| world.record(id))
-            .filter(|r| r.kind != Kind::Drone)
+            .filter(|r| r.kind != Kind::Drone && r.kind != Kind::Aircraft)
             .map(|r| Candidate {
                 id: r.id,
                 at: r.saved.pose.point(),
@@ -1033,6 +1048,54 @@ impl IntruderAgent {
     }
 }
 
+impl Agent for AircraftAgent {
+    fn step(&mut self, state: &mut dyn State) {
+        let world = world(state);
+        if world.retiring(self.body.id) {
+            return;
+        }
+        let wind = if self.flight.active && world.weather.is_some() {
+            let pose = &self.body.pose;
+            let ground = world.terrain.ground_mm(pose.lat_e7, pose.lon_e7);
+            let w = world.wind_at(self.body.cell, f64::from(pose.alt_mm - ground) * 1e-3);
+            (w.east_ms, w.north_ms)
+        } else {
+            (0.0, 0.0)
+        };
+        if let Some(avoid) = world.advice.remove(&self.body.id) {
+            self.flight.avoid = Some(avoid);
+        }
+        let ground_mm = world
+            .terrain
+            .ground_mm(self.body.pose.lat_e7, self.body.pose.lon_e7);
+        self.flight.step(
+            &mut self.body.pose,
+            world.tick,
+            world.settings.tuning.dt,
+            wind,
+            ground_mm,
+        );
+        self.body.refresh(world);
+        world.place(self.record());
+    }
+
+    fn is_stopped(&mut self, state: &mut dyn State) -> bool {
+        world(state).retiring(self.body.id)
+    }
+}
+
+impl AircraftAgent {
+    pub(crate) fn record(&self) -> Record {
+        let mut saved = self.body.saved();
+        // What it is doing, for people: the advisory it is flying, if any.
+        if let Some(avoid) = &self.flight.avoid {
+            saved.activity = avoid.action.replace('_', " ");
+        }
+        saved.flight = Some(self.flight.clone());
+        self.body.record(saved)
+    }
+}
+
 impl Agent for PoiAgent {
     fn step(&mut self, state: &mut dyn State) {
         let world = world(state);
@@ -1059,6 +1122,7 @@ pub(crate) enum Member {
     Drone(Box<DroneAgent>),
     Ground(GroundAgent),
     Intruder(IntruderAgent),
+    Aircraft(AircraftAgent),
     Poi(PoiAgent),
 }
 
@@ -1068,6 +1132,7 @@ impl Member {
             Member::Drone(a) => &a.body,
             Member::Ground(a) => &a.body,
             Member::Intruder(a) => &a.body,
+            Member::Aircraft(a) => &a.body,
             Member::Poi(a) => &a.body,
         }
     }
@@ -1077,6 +1142,7 @@ impl Member {
             Member::Drone(a) => a.record(),
             Member::Ground(a) => a.record(),
             Member::Intruder(a) => a.record(),
+            Member::Aircraft(a) => a.record(),
             Member::Poi(a) => a.record(),
         }
     }
@@ -1086,6 +1152,7 @@ impl Member {
             Member::Drone(a) => a,
             Member::Ground(a) => Box::new(a),
             Member::Intruder(a) => Box::new(a),
+            Member::Aircraft(a) => Box::new(a),
             Member::Poi(a) => Box::new(a),
         }
     }
@@ -1115,6 +1182,10 @@ impl Member {
             Kind::Intruder => Member::Intruder(IntruderAgent {
                 body,
                 route: saved.route.ok_or_else(|| missing("route"))?,
+            }),
+            Kind::Aircraft => Member::Aircraft(AircraftAgent {
+                body,
+                flight: saved.flight.ok_or_else(|| missing("flight"))?,
             }),
             Kind::Person | Kind::Vehicle => Member::Ground(GroundAgent {
                 body,
@@ -1194,6 +1265,7 @@ fn mission_item(command: u16, at: &Point, agl_m: f32) -> MissionItem {
 /// restored board hashes the same as the one saved. Anything else is blank.
 fn activity_named(word: &str) -> &'static str {
     [
+        "avoiding",
         "surveying",
         "delivering",
         "charging",

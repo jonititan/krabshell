@@ -74,6 +74,7 @@ pub const FIGURES: &[(&str, &str)] = &[
     figure!("conflict-cells.svg"),
     figure!("conflict-layers.svg"),
     figure!("conflict-detection.svg"),
+    figure!("conflict-protection.svg"),
     figure!("conflict-search.svg"),
     figure!("conflict-resolution.svg"),
     figure!("conflict-energy.svg"),

@@ -151,8 +151,8 @@ default). A larger world is cut at the cap, and every view of it says so with
 
 ## Routes
 
-The groups, in the order of the [reference](/docs/api). All paths are under
-`/api/v1`.
+The routes by group; the [reference](/docs/api) has each in full. All paths
+are under `/api/v1`.
 
 | Group | Routes | What for |
 |---|---|---|
@@ -160,7 +160,7 @@ The groups, in the order of the [reference](/docs/api). All paths are under
 | Run | `GET /run`, `POST /run/start`, `/run/pause`, `/run/step`, `/run/reset`, `/run/rate` | The clock: mode, tick, rates, counters and recent intents; start (optionally at `target_tps`), pause, step `n` ticks, reset, change rate. |
 | Scenarios | `GET /scenarios`, `POST /scenarios`, `POST /scenarios/{id}/load` | List packs, install one from a zip (multipart field `pack` or `file`, and `id`), load one paused at tick 0. See [Scenarios](scenarios.md). |
 | Config | `GET /config`, `PUT /config`, `GET /config/download` | The effective config, as JSON or TOML. A change to `run.profile`, `run.parallel`, `run.threads`, `grid.resolution`, `grid.root` or `model` rebuilds the world; the answer lists them in `reset_fields`. |
-| State | `GET /state`, `/state/map`, `/state/cells/{cell}`, `/state/entities`, `/state/overlays`, `/state/addresses`, `/state/download`, `POST /state/upload` | The published world: bags by cell, an aggregated map, one cell, positioned objects, model overlays, and checkpoints. See [State](#state-and-the-cell-model) and [Checkpoints](#checkpoints). |
+| State | `GET /state`, `/state/map`, `/state/cells/{cell}`, `/state/entities`, `/state/overlays`, `/state/addresses`, `/state/download`, `POST /state/upload`, `GET /history` | The published world: bags by cell, an aggregated map, one cell, positioned objects, model overlays, checkpoints, and how far back it can be rewound. See [State](#state-and-the-cell-model), [Rewinding](#rewinding) and [Checkpoints](#checkpoints). |
 | Intents | `POST /intents`, `GET /intents/log` | Submit one intent; download the gold replay log. See [Intents](#intents). |
 | Metrics and reports | `GET /metrics`, `GET /reports?since=` | Prometheus gauges; model events (sightings, waypoints, deliveries) newer than a sequence number. |
 | Cells | `GET /cells/lookup?lon=&lat=&res=` | A coordinate to its cell, with outline, parent, edge length and whether it is in this world. |
@@ -306,8 +306,8 @@ digits, zero-padded, such as `"636119e9a0000000"`, never a JSON number:
 browsers would silently round ids above 2⁵³.
 
 On input the server also accepts a `0x` prefix, and a decimal `u64`. Without
-a prefix, a string is hex when it is 16 characters long or contains a letter
-a–f, and decimal otherwise. So a decimal id of exactly 16 digits is read as
+a prefix, a string is hex when it is 16 characters long or contains a letter,
+and decimal otherwise. So a decimal id of exactly 16 digits is read as
 hex; send hex.
 
 A world has two resolutions:
@@ -366,8 +366,8 @@ MAVLink's integer units: `lat_e7` and `lon_e7` (degrees × 10⁷), `alt_mm`,
 | `GET /state` | Every published bag, if there are at most 20 000. |
 | `GET /state/cells/{cell}` | One bag; an empty bag for an empty cell, or `404` if the view was truncated and the cell may have been cut. |
 | `GET /state/map?res=n` | Counts aggregated to resolution `n` (the view resolution by default), each with its outline as `[lon, lat]` pairs, and the largest count. This is what the dashboard map draws. |
-| `GET /state/entities?kind=drone,poi` | Every object with an exact position, flattened to degrees, metres and metres a second. The headers `x-sim-tick`, `x-sim-mode` and `x-sim-tick-seconds` let a client predict movement between polls. |
-| `GET /state/overlays` | What the model publishes beside its agents: for the drones, geofences, open orders, stations, delivery range and regions of interest. The tick is in `x-sim-tick`. |
+| `GET /state/entities?kind=drone,poi` | Every object with an exact position, flattened to degrees, metres and metres a second. A manned aircraft parked between flights is left out. The headers `x-sim-tick`, `x-sim-mode` and `x-sim-tick-seconds` let a client predict movement between polls. |
+| `GET /state/overlays` | What the model publishes beside its agents: for the drones, geofences, open orders, stations, delivery range, regions of interest, the conflict advisories last given (`atc`) and a summary of the wind (`weather`). The tick is in `x-sim-tick`. |
 | `GET /state/addresses` | Every address in the loaded pack's address book, `[lat_e7, lon_e7, depot, label]` with `depot` indexing `depots`. The ETag is the scenario: send it in `If-None-Match` for a `304` until another is loaded. |
 
 `GET /state` also accepts `res`, and ignores it; use `/state/map` to aggregate.
@@ -375,6 +375,31 @@ MAVLink's integer units: `lat_e7` and `lon_e7` (degrees × 10⁷), `alt_mm`,
 The `hash` is an unsigned 64-bit integer sent as a JSON number. JavaScript
 cannot hold it exactly; compare hashes in a language with 64-bit integers, or
 as the raw text.
+
+### Rewinding
+
+In the `gold` profile the driver keeps the recent past and rebuilds any tick
+in it on request. `GET /history` says what it covers:
+
+```json
+{"available": true, "first_tick": 1800, "live_tick": 7800, "every_ticks": 100, "tick_seconds": 0.1}
+```
+
+Add `at=<tick>` to `GET /state/map`, `/state/entities`, `/state/overlays`,
+`/state/cells/{cell}`, `/reports` or `/conflicts` to read the world as it was
+at that tick, anywhere from `first_tick` to `live_tick`. A tick outside that is
+`404`. The answer is rebuilt from a keyframe (one every `run.history_every_ticks`
+ticks, the last `run.history_keyframes` kept) by replaying the logged intents
+and steps, so it is the world exactly as it was. It costs up to
+`history_every_ticks` steps from the keyframe, one step for the tick after
+the last one shown, and nothing for a tick asked for again recently.
+
+Rewind needs the `gold` profile, a model that can hand its world over cheaply
+(the drones; not the walkers) and `run.history_keyframes` above 0. Otherwise
+`available` is false, `first_tick` is null, `reason` says why, and any `at`
+but the live tick is `404`. A load, reset, checkpoint restore or config
+change that rebuilds the world starts the history again; a change to
+`run.history_every_ticks` or `run.history_keyframes` takes effect then.
 
 ### Looking up a cell
 

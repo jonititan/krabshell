@@ -61,7 +61,10 @@ weather_model = "best_match"                # an Open-Meteo model token
 | `max_gust_ms` | 15 | 0 or more; 0 is no limit | Launch limit on gusts. |
 
 The bundled `kaunas-deliveries` pack uses `recorded` weather from
-2026-03-14 09:00 UTC for 6 hours.
+2026-03-14 09:00 UTC for 6 hours. `iron-wolf` uses `recorded` weather from
+2026-05-12 08:00 UTC for 12 hours, over a `weather_bbox` that takes in Kaunas
+Airport and its traffic, at `weather_resolution` 11 (about 2.8 km cells) to
+keep the number of weather cells down.
 
 ## What is fetched
 
@@ -71,6 +74,10 @@ at the cell's centroid. Levels that Open-Meteo has no data for are dropped. A
 missing value at one level is filled from the nearest level that has one. A
 missing hour is filled from the hour before (or, at the start, from the first
 hour with data).
+
+180 m is the highest level. Wind above it is the 180 m wind (see
+[How the wind is read](#how-the-wind-is-read)), so a manned aircraft
+hundreds of metres up flies in the 180 m wind.
 
 The window runs from the hour at or before tick 0 to the hour at or after
 tick 0 plus `weather_hours`. Six hours from 09:00 is therefore seven frames,
@@ -85,7 +92,9 @@ used, for example `Open-Meteo best_match historical forecast`.
 location as one call. The Kaunas pack has 169 weather cells, so it is two
 requests and 169 calls. One area may hold at most 1 000 weather cells. Beyond
 that the load is refused with a message to lower `weather_resolution` or
-shrink `weather_bbox`.
+shrink `weather_bbox`. An area too big to list at the world's own resolution
+(more than 2 million world cells) is refused too, asking for a smaller
+`weather_bbox`.
 
 ## The area
 
@@ -138,7 +147,10 @@ the wind it predicts in (see [Conflicts](conflicts.md)).
 ## How wind affects the drones
 
 Wind applies to the drones the simulation flies and to drones flown by a
-ground station. People, vehicles and scripted intruders are not affected.
+ground station. Manned aircraft (the drones model's `aircraft` kind) fly
+their route's airspeed through the wind and hold the track, so their ground
+speed changes with it. People, vehicles and scripted intruders are not
+affected: intruders fly their routes at a set ground speed.
 
 - **Flight.** A drone holds a straight track by crabbing into the crosswind.
   Its ground speed is what the wind leaves of its airspeed: slower into a
@@ -223,7 +235,13 @@ is not resent: the status shows a banner instead.
 ## Licence
 
 Open-Meteo's free API is for non-commercial use, at up to 10 000 calls a day,
-and each location counts as a call. Commercial use needs a key
+and each location counts as a call. It also limits calls a minute and an
+hour (600 and 5 000 at the time of writing), and counts a location as more
+than one call when the window is longer than two weeks. Over a limit,
+Open-Meteo answers HTTP 429 and the fetch fails with `rate limited`, like any
+other failed fetch (see [Modes](#modes)): krabshell does not wait and try
+again within a load. Nothing is cached from a failed fetch, so a recorded
+pack is fetched whole once the limit has passed. Commercial use needs a key
 (`--open-meteo-key`). The data is CC BY 4.0. The Weather screen and the API
 carry the credit: "Weather data by Open-Meteo.com (CC BY 4.0)".
 

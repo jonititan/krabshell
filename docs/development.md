@@ -15,7 +15,7 @@ crates/
   sim-conflict/   conflict detection and resolution advisories
   sim-axum/       HTTP and WebSocket edge, dashboard routes; krabshell
   sim-dashboard/  Askama templates and static assets (not a Cargo crate)
-scenarios/        drone packs: london-patrol, kaunas-deliveries, swarm-survey
+scenarios/        drone packs: iron-wolf, kaunas-deliveries, london-patrol, swarm-survey
 bench/scenarios/  random-walker packs: london-walkers, global-drift
 docs/             these guides
 tools/            Python scripts for building packs and checking the gateways
@@ -27,11 +27,11 @@ Types only: no Bevy, Axum, Tokio or krABMaga. It is the vocabulary every other l
 
 ### sim-drones
 
-The drones model, as a krABMaga model. Every drone, intruder, person, vehicle and point of interest is a krABMaga agent on a krABMaga `Schedule`, and `World` is the `State` they step against, with a `SparseA5Grid` as occupancy of record, double-buffered the krABMaga way. A `Dispatcher` agent steps first each tick to open and close geofences and place delivery orders. What each drone does is decided by a behaviour tree (`behaviour/drone.json` by default). Poses are integers and every random draw comes from a (seed, entity, tick) stream, so gold runs replay bit for bit. It does not depend on the driver, Axum or Tokio, and has its own binary, `krab-drones`. Source: [`crates/sim-drones/src/lib.rs`](../crates/sim-drones/src/lib.rs).
+The drones model, as a krABMaga model. Every drone, intruder, manned aircraft, person, vehicle and point of interest is a krABMaga agent on a krABMaga `Schedule`, and `World` is the `State` they step against, with a `SparseA5Grid` as occupancy of record, double-buffered the krABMaga way. A `Dispatcher` agent steps first each tick to open and close geofences, place delivery orders and, every `atc_every_s`, assess conflicts with `sim-conflict` (`World::run_atc`, [`atc.rs`](../crates/sim-drones/src/atc.rs)); the drones and aircraft advised fly the advisories. What each drone does is decided by a behaviour tree (`behaviour/drone.json` by default). Poses are integers and every random draw comes from a (seed, entity, tick) stream, so gold runs replay bit for bit. It does not depend on the driver, Axum or Tokio (of krabshell's crates it uses only `sim-core` and `sim-conflict`), and has its own binary, `krab-drones`. Source: [`crates/sim-drones/src/lib.rs`](../crates/sim-drones/src/lib.rs).
 
 ### sim-engine
 
-The simulation side of krabshell. One thread owns the world and runs it as fast as the model allows; nothing in this crate awaits, opens a socket or reads a file during a tick. It holds the `Driver` and its control, intent and snapshot channels, the publisher thread, the `Model` trait and `ModelRegistry`, the built-in models (`drones`, wrapping `sim_drones::World`; `walkers` on a built-in grid; `walkers-krabmaga` on krABMaga's), intent admission, the edge checks every transport shares (cell bounds and the per-actor rate limiter), the scenario store, checkpoint encoding, the drones run log, and the `simctl` binary. Source: [`crates/sim-engine/src/lib.rs`](../crates/sim-engine/src/lib.rs).
+The simulation side of krabshell. One thread owns the world and runs it as fast as the model allows; nothing in this crate awaits, opens a socket or reads a file during a tick. It holds the `Driver` and its control, intent and snapshot channels, the publisher thread, the `Model` trait and `ModelRegistry`, the built-in models (`drones`, wrapping `sim_drones::World`; `walkers` on a built-in grid; `walkers-krabmaga` on krABMaga's), intent admission, the rewind history (a `sim-history` thread that keeps keyframes in the `gold` profile and rebuilds past ticks; [`history.rs`](../crates/sim-engine/src/history.rs)), the edge checks every transport shares (cell bounds and the per-actor rate limiter), the scenario store, checkpoint encoding, the drones run log, and the `simctl` binary. Source: [`crates/sim-engine/src/lib.rs`](../crates/sim-engine/src/lib.rs).
 
 ### sim-mavlink
 
@@ -39,7 +39,7 @@ The MAVLink gateway: every simulated drone presented to ground stations as its o
 
 ### sim-cot
 
-The Cursor-on-Target emitter, for ATAK, WinTAK and TAK Server: drones once a second, sightings as the model reports them, points of interest every 15 seconds, one XML event per UDP datagram. Event times are wall-clock UTC so TAK clients never see them arrive stale; the simulation tick goes in `<remarks>`. Source: [`crates/sim-cot/src/lib.rs`](../crates/sim-cot/src/lib.rs).
+The Cursor-on-Target emitter, for ATAK, WinTAK and TAK Server: drones and manned aircraft once a second, sightings as the model reports them, points of interest every 15 seconds, one XML event per UDP datagram. Event times are wall-clock UTC so TAK clients never see them arrive stale; the simulation tick goes in `<remarks>`. Source: [`crates/sim-cot/src/lib.rs`](../crates/sim-cot/src/lib.rs).
 
 ### sim-weather
 
@@ -47,15 +47,17 @@ Wind for a world, from Open-Meteo, one series per A5 cell, at 10, 80, 120 and 18
 
 ### sim-conflict
 
-Probabilistic conflict detection and resolution advisories for aircraft on A5 cells. `assess` predicts each aircraft as a seeded cloud of particles flown under an energy model (BADA's Total Energy Model for fixed-wing aircraft, an excess-power envelope for multirotors), sums the probabilities in each cell and altitude layer, flags cells where two or more aircraft reach the threshold, and tries climbs, descents, level-offs, turns and speed changes to advise what removes the most risk. It is deterministic and has no dependency on the rest of krabshell beyond `sim-core`. Source: [`crates/sim-conflict/src/lib.rs`](../crates/sim-conflict/src/lib.rs).
+Probabilistic conflict detection and resolution advisories for aircraft on A5 cells. `assess` predicts each aircraft as a seeded cloud of particles flown under an energy model (BADA's Total Energy Model for fixed-wing aircraft, an excess-power envelope for multirotors), sums the probabilities in each cell and altitude layer, flags cells where two or more aircraft reach the threshold, and tries climbs, descents, level-offs, turns and speed changes to advise what removes the most risk. Each aircraft has a giving-way order (`GiveWay`: advised first, last or never) and may carry a protected volume (`Protection`) that others must keep out of. Predictions are flown in parallel with rayon and collected in order, so it is deterministic. It has no dependency on the rest of krabshell beyond `sim-core`. Source: [`crates/sim-conflict/src/lib.rs`](../crates/sim-conflict/src/lib.rs).
 
 ```sh
 cargo run --release -p sim-conflict --example head_on
 ```
 
+The `figures` example writes the data behind the figures in `docs/figures` as JSON; see `conflict_figures.py` under [Tools](#tools).
+
 ### sim-axum
 
-The HTTP edge and the operator dashboard, and the `krabshell` binary that wires everything together. Nothing here owns the world: every route reads the driver's published snapshot or posts a message to it, so a slow client, a large download or a wedged browser cannot cost the simulation a tick. It also holds auth, the weather service, the conflict service, the run logger, the hand-written OpenAPI document and the rendered docs. Source: [`crates/sim-axum/src/lib.rs`](../crates/sim-axum/src/lib.rs), [`main.rs`](../crates/sim-axum/src/main.rs).
+The HTTP edge and the operator dashboard, and the `krabshell` binary that wires everything together. Nothing here owns the world: every route reads the driver's published snapshot or posts a message to it, so a slow client, a large download or a wedged browser cannot cost the simulation a tick. It also holds auth, the weather service, the conflict service (which uses `sim_drones::atc` so its assessment matches the world's own), the run logger, the hand-written OpenAPI document and the rendered docs. Source: [`crates/sim-axum/src/lib.rs`](../crates/sim-axum/src/lib.rs), [`main.rs`](../crates/sim-axum/src/main.rs).
 
 ### sim-dashboard
 
@@ -102,6 +104,7 @@ Run one suite with `--test`, for example `cargo test -p sim-axum --test openapi`
 | Suite | What it checks |
 |---|---|
 | `sim-engine/tests/driver.rs` | The tick thread end to end over its real channels: a paused world stays put, a panicking model does not take the process with it, an intent lands on the next tick. |
+| `sim-engine/tests/history.rs` | Rewind: a tick rebuilt from the history, intents and all, is the world as it was; the window is kept and starts again with a new world; the `fast` profile has none. |
 | `sim-engine/src/models/drones/tests.rs` | The drones model through the driver's `Model` seam. |
 | `sim-drones/src/tests.rs` | The model on krABMaga alone. |
 | `sim-axum/tests/api.rs` | Every route against a real router and a real driver, so a handler that answers from a stale view fails here rather than in a browser. |
@@ -193,6 +196,17 @@ Because everything is compiled in, the dashboard works with no internet (except 
 
 These guides are the Markdown files in `docs/`, plus `krabshell_spec.md`, listed in `SOURCES` in [`crates/sim-axum/src/docs.rs`](../crates/sim-axum/src/docs.rs) and compiled in with `include_str!`. The server renders each at `/docs/<slug>`, the slug being the file name without `.md`. A new page needs an entry in `SOURCES`, and an edit takes a rebuild to show. Link between pages with relative paths (`operating.md`, `operating.md#authentication`) so they work on GitHub too; the server rewrites them to `/docs/...`, and links to source files to the repository.
 
+### As a PDF
+
+`tools/docs_pdf.py` exports the same guides, in the same order and groups, as one PDF: a cover, a contents index of every guide and its sections with page numbers, PDF bookmarks for every heading, and page numbers on every page. Links between guides become links inside the PDF; links to source files go to GitHub; the figures are embedded. It drives the installed Google Chrome through Playwright, so it needs Chrome but no LaTeX or pandoc:
+
+```sh
+uv run --with markdown --with playwright --with pypdf tools/docs_pdf.py   # target/krabshell-docs.pdf
+uv run --with markdown --with playwright --with pypdf tools/docs_pdf.py docs.pdf
+```
+
+It prints twice: the first pass reads the page each heading landed on from the PDF's bookmarks, the second puts those numbers in the contents. The cover gives the date and the commit it was made from.
+
 ## Tools
 
 `tools/` holds Python scripts, run with [uv](https://docs.astral.sh/uv/) (`uv run tools/<script>.py`):
@@ -204,3 +218,5 @@ These guides are the Markdown files in `docs/`, plus `krabshell_spec.md`, listed
 | `fleet_pareto.py`, `fleet_pareto_chart.py` | Sweep the Kaunas fleet size with `simctl fly` and chart the Pareto frontier of delivery wait against fleet size. |
 | `mavlink_check.py` | Acts as a ground station against a running krabshell and flies one drone. |
 | `cot_listen.py` | Prints the CoT events krabshell sends, as a TAK client would see them. No dependencies. |
+| `docs_pdf.py` | Exports these guides as one PDF with a contents index; see [As a PDF](#as-a-pdf). |
+| `conflict_figures.py` | Draws the conflict figures in `docs/figures` from the `sim-conflict` `figures` example. |

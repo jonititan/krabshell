@@ -67,8 +67,9 @@ one charge will do the trip. The estimate covers:
 The total is multiplied by 1.25 as a margin for detours. It must fit within the
 charge the drone has, keeping `battery_reserve_pct` (default 15). Drain goes with
 the square of airspeed, so a hop into the wind costs more than the same hop with
-it. Surveys, diversions and the published delivery range take the wind into
-account. A courier's own delivery planning currently assumes still air.
+it. Deliveries, surveys, diversions and trips home plan for the wind in the
+drone's cell at its cruise height; the published delivery range plans for the
+wind at home, blowing the worst way.
 
 If one charge will not do, and there is a usable station and a charger, the drone
 plans the trip as hops between stations. It takes the shortest chain of hops out
@@ -211,8 +212,9 @@ for each station, as it is for any other.
 ```
 
 An entry that is malformed or outside the world stops the pack loading. See
-[Scenarios](scenarios.md) for the rest of a pack's layout. No pack in
-`scenarios/` ships either file yet.
+[Scenarios](scenarios.md) for the rest of a pack's layout. `iron-wolf` ships
+`world/stations.json`. No pack in `scenarios/` ships `world/regions.json`; the
+`world/regions.js` in `iron-wolf` is not read, as only `.json` files are.
 
 ## The dashboard's Stations & regions tab
 

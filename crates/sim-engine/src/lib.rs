@@ -21,6 +21,7 @@ pub mod checkpoint;
 pub mod driver;
 pub mod edge;
 pub mod grid;
+pub mod history;
 pub mod model;
 pub mod models;
 mod publisher;
@@ -33,6 +34,7 @@ pub use driver::{
 };
 pub use edge::{check_intent_cell, ActorLimiter, CellCheck};
 pub use grid::SparseCellGrid;
+pub use history::{HistoryHandle, HistoryRange};
 pub use model::{Frame, Model, ModelFactory, ModelRegistry, Truncation};
 pub use scenario::{read_pack, ScenarioStore};
 

@@ -161,6 +161,10 @@ impl Model for Drones {
         self.world.step_at(&mut self.schedule, tick);
     }
 
+    fn set_tick(&mut self, tick: u64) {
+        self.world.set_tick(tick);
+    }
+
     fn frame(&self) -> Option<Box<dyn Frame>> {
         Some(Box::new(DronesFrame(self.world.committed())))
     }

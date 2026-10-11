@@ -54,7 +54,9 @@
 
   async function refresh() {
     try {
-      const response = await fetch('/api/v1/conflicts', { headers: { accept: 'application/json' } });
+      const at = window.krabshellRewind ? window.krabshellRewind.at() : null;
+      const url = at === null ? '/api/v1/conflicts' : `/api/v1/conflicts?at=${at}`;
+      const response = await fetch(url, { headers: { accept: 'application/json' } });
       if (!response.ok) return;
       report = await response.json();
     } catch {
@@ -207,6 +209,7 @@
 
   map.setTool(tool);
   refresh();
+  document.addEventListener('krabshell:at', refresh);
   setInterval(() => {
     if (!document.hidden) refresh();
   }, 2000);

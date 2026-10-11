@@ -431,9 +431,13 @@ async fn without_weather_the_cell_routes_say_so() {
 }
 
 /// london-patrol with two more drones flying at each other at 40 m: a
-/// conflict to resolve.
+/// conflict to resolve. The world's own advisories are off, so the pair
+/// carries on into it rather than getting out of the way first.
 fn head_on_harness() -> Harness {
     let mut blob = pack("london-patrol");
+    blob.config
+        .model
+        .insert("atc".into(), sim_core::config::Param::Bool(false));
     let (lat, lon0, lon1) = (51.51, -0.11, -0.0927);
     let mission = |to_lon: f64| {
         json!([

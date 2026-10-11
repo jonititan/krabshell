@@ -1,0 +1,1322 @@
+[
+  {
+    "id": 1,
+    "kind": "drone",
+    "lon": 24.385,
+    "lat": 55.018,
+    "state": {
+      "sysid": 1,
+      "callsign": "STRIKE-1",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 40.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 40.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550268302,
+          "y": 243742154,
+          "z": 40.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550287797,
+          "y": 243850000,
+          "z": 40.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550268302,
+          "y": 243957846,
+          "z": 40.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550180000,
+          "y": 243850000,
+          "z": 40.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550180000,
+          "y": 243850000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 2,
+    "kind": "drone",
+    "lon": 24.3875,
+    "lat": 55.0195,
+    "state": {
+      "sysid": 2,
+      "callsign": "STRIKE-2",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 50.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 50.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550308237,
+          "y": 243909828,
+          "z": 50.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550276306,
+          "y": 244016821,
+          "z": 50.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550214967,
+          "y": 244072519,
+          "z": 50.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550195000,
+          "y": 243875000,
+          "z": 50.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550195000,
+          "y": 243875000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 3,
+    "kind": "drone",
+    "lon": 24.39,
+    "lat": 55.021,
+    "state": {
+      "sysid": 3,
+      "callsign": "STRIKE-3",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 30.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 30.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550280074,
+          "y": 244074569,
+          "z": 30.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550210000,
+          "y": 244113109,
+          "z": 30.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550139926,
+          "y": 244074569,
+          "z": 30.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550210000,
+          "y": 243900000,
+          "z": 30.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550210000,
+          "y": 243900000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 4,
+    "kind": "drone",
+    "lon": 24.3925,
+    "lat": 55.017,
+    "state": {
+      "sysid": 4,
+      "callsign": "STRIKE-4",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 60.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 60.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550147537,
+          "y": 244147195,
+          "z": 60.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550078531,
+          "y": 244084539,
+          "z": 60.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550042608,
+          "y": 243964179,
+          "z": 60.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550170000,
+          "y": 243925000,
+          "z": 60.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550170000,
+          "y": 243925000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 5,
+    "kind": "drone",
+    "lon": 24.388,
+    "lat": 55.023,
+    "state": {
+      "sysid": 5,
+      "callsign": "STRIKE-5",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 35.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 35.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550118150,
+          "y": 244016622,
+          "z": 35.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550093457,
+          "y": 243880000,
+          "z": 35.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550118150,
+          "y": 243743378,
+          "z": 35.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550230000,
+          "y": 243880000,
+          "z": 35.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550230000,
+          "y": 243880000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 6,
+    "kind": "drone",
+    "lon": 24.394,
+    "lat": 55.0205,
+    "state": {
+      "sysid": 6,
+      "callsign": "STRIKE-6",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 45.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 45.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550063454,
+          "y": 243896464,
+          "z": 45.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550103368,
+          "y": 243762719,
+          "z": 45.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550180042,
+          "y": 243693096,
+          "z": 45.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550205000,
+          "y": 243940000,
+          "z": 45.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550205000,
+          "y": 243940000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 7,
+    "kind": "drone",
+    "lon": 24.3865,
+    "lat": 55.016,
+    "state": {
+      "sysid": 7,
+      "callsign": "STRIKE-7",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 55.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 55.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550073438,
+          "y": 243649383,
+          "z": 55.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550160000,
+          "y": 243601781,
+          "z": 55.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550246562,
+          "y": 243649383,
+          "z": 55.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550160000,
+          "y": 243865000,
+          "z": 55.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550160000,
+          "y": 243865000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 8,
+    "kind": "drone",
+    "lon": 24.3915,
+    "lat": 55.0225,
+    "state": {
+      "sysid": 8,
+      "callsign": "STRIKE-8",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 25.0,
+      "role": "strike",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 25.0
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550252454,
+          "y": 243643392,
+          "z": 25.0
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550336796,
+          "y": 243719981,
+          "z": 25.0
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 15,
+          "param3": 0,
+          "param4": null,
+          "x": 550380701,
+          "y": 243867108,
+          "z": 25.0
+        },
+        {
+          "seq": 4,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550225000,
+          "y": 243915000,
+          "z": 25.0
+        },
+        {
+          "seq": 5,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550225000,
+          "y": 243915000,
+          "z": 0
+        },
+        {
+          "seq": 6,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 11,
+    "kind": "drone",
+    "lon": 24.38,
+    "lat": 55.015,
+    "state": {
+      "sysid": 11,
+      "callsign": "RELAY-1",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 450.0,
+      "role": "relay",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 40
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 20,
+          "param3": 0,
+          "param4": null,
+          "x": 550400000,
+          "y": 243950000,
+          "z": 300
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 19,
+          "autocontinue": 1,
+          "param1": 420,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550400000,
+          "y": 243950000,
+          "z": 300
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550150000,
+          "y": 243800000,
+          "z": 60
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550150000,
+          "y": 243800000,
+          "z": 0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 12,
+    "kind": "drone",
+    "lon": 24.382,
+    "lat": 55.0165,
+    "state": {
+      "sysid": 12,
+      "callsign": "RELAY-2",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 600.0,
+      "role": "relay",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 40
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 20,
+          "param3": 0,
+          "param4": null,
+          "x": 550300000,
+          "y": 244300000,
+          "z": 500
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 19,
+          "autocontinue": 1,
+          "param1": 360,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550300000,
+          "y": 244300000,
+          "z": 500
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550165000,
+          "y": 243820000,
+          "z": 60
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550165000,
+          "y": 243820000,
+          "z": 0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 13,
+    "kind": "drone",
+    "lon": 24.3785,
+    "lat": 55.018,
+    "state": {
+      "sysid": 13,
+      "callsign": "RELAY-3",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 750.0,
+      "role": "relay",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 40
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 20,
+          "param3": 0,
+          "param4": null,
+          "x": 550000000,
+          "y": 243700000,
+          "z": 700
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 19,
+          "autocontinue": 1,
+          "param1": 300,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550000000,
+          "y": 243700000,
+          "z": 700
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550180000,
+          "y": 243785000,
+          "z": 60
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550180000,
+          "y": 243785000,
+          "z": 0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 14,
+    "kind": "drone",
+    "lon": 24.3835,
+    "lat": 55.014,
+    "state": {
+      "sysid": 14,
+      "callsign": "RELAY-4",
+      "elevation_m": 85.0,
+      "cruise_agl_m": 550.0,
+      "role": "relay",
+      "mission": [
+        {
+          "seq": 0,
+          "frame": 3,
+          "command": 22,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 40
+        },
+        {
+          "seq": 1,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 20,
+          "param3": 0,
+          "param4": null,
+          "x": 549980000,
+          "y": 243930000,
+          "z": 900
+        },
+        {
+          "seq": 2,
+          "frame": 10,
+          "command": 19,
+          "autocontinue": 1,
+          "param1": 240,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 549980000,
+          "y": 243930000,
+          "z": 900
+        },
+        {
+          "seq": 3,
+          "frame": 10,
+          "command": 16,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 5,
+          "param3": 0,
+          "param4": null,
+          "x": 550140000,
+          "y": 243835000,
+          "z": 60
+        },
+        {
+          "seq": 4,
+          "frame": 3,
+          "command": 21,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": 0,
+          "param3": 0,
+          "param4": null,
+          "x": 550140000,
+          "y": 243835000,
+          "z": 0
+        },
+        {
+          "seq": 5,
+          "frame": 2,
+          "command": 177,
+          "autocontinue": 1,
+          "param1": 0,
+          "param2": -1,
+          "param3": 0,
+          "param4": null,
+          "x": 0,
+          "y": 0,
+          "z": 0.0
+        }
+      ],
+      "autostart": true
+    }
+  },
+  {
+    "id": 100,
+    "kind": "poi",
+    "lon": 24.39,
+    "lat": 55.02,
+    "state": {
+      "name": "Gaižiūnai Training Area"
+    }
+  },
+  {
+    "id": 101,
+    "kind": "poi",
+    "lon": 24.0847,
+    "lat": 54.9639,
+    "state": {
+      "name": "Kaunas Airport (EYKA)"
+    }
+  },
+  {
+    "id": 201,
+    "kind": "aircraft",
+    "state": {
+      "callsign": "ARR26",
+      "start_s": 120,
+      "repeat_s": 900,
+      "route": [
+        {
+          "lon": 24.572163,
+          "lat": 55.013232,
+          "alt_m": 1524,
+          "speed_ms": 110
+        },
+        {
+          "lon": 24.395248,
+          "lat": 54.995324,
+          "alt_m": 1063.6,
+          "speed_ms": 80
+        },
+        {
+          "lon": 24.109841,
+          "lat": 54.966435,
+          "alt_m": 93.0,
+          "speed_ms": 70
+        },
+        {
+          "lon": 24.100594,
+          "lat": 54.965499,
+          "alt_m": 78.0,
+          "speed_ms": 60
+        }
+      ]
+    }
+  },
+  {
+    "id": 202,
+    "kind": "aircraft",
+    "state": {
+      "callsign": "DEP26",
+      "start_s": 570,
+      "repeat_s": 900,
+      "route": [
+        {
+          "lon": 24.109841,
+          "lat": 54.966435,
+          "alt_m": 78.0,
+          "speed_ms": 20
+        },
+        {
+          "lon": 24.082102,
+          "lat": 54.963627,
+          "alt_m": 88.0,
+          "speed_ms": 75
+        },
+        {
+          "lon": 23.801626,
+          "lat": 54.935237,
+          "alt_m": 1500,
+          "speed_ms": 120
+        },
+        {
+          "lon": 23.493411,
+          "lat": 54.904039,
+          "alt_m": 3000,
+          "speed_ms": 130
+        }
+      ]
+    }
+  }
+]

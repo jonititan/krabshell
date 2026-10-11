@@ -90,6 +90,10 @@ pub trait Model: Send + 'static {
 
     fn set_rng_state(&mut self, state: u64);
 
+    /// The tick a restored world is at, before it steps again: what anything
+    /// reading the model's clock in between (an intent, the overlays) sees.
+    fn set_tick(&mut self, _tick: u64) {}
+
     /// Replace occupancy wholesale during a checkpoint restore.
     fn load_cells(&mut self, cells: Vec<CellBag>) -> anyhow::Result<()>;
 

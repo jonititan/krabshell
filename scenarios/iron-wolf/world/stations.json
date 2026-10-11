@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Gaižiūnai Pad A",
+    "lat": 55.0180,
+    "lon": 24.3850,
+    "slots": 8
+  },
+  {
+    "name": "Gaižiūnai Pad B",
+    "lat": 55.0195,
+    "lon": 24.3875,
+    "slots": 6
+  },
+  {
+    "name": "Relay Launch Pad",
+    "lat": 55.0150,
+    "lon": 24.3800,
+    "slots": 4
+  }
+]

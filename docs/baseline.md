@@ -113,6 +113,10 @@ Ticks per second, publishing at the packs' 20 Hz. Observations:
   pays for the locked grid and a mutex around the state while the schedule
   still runs on one thread, and gives the same gold hash.
 
+These figures predate the conflict assessment the drones now make inside the
+step (every `atc_every_s`, on by default) and the rewind keyframes the driver
+hands over in `gold`. Neither has been measured here yet.
+
 Re-run with:
 
 ```sh

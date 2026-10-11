@@ -9,12 +9,12 @@ did not know.
 | Crate | Owns | Must not |
 |---|---|---|
 | `sim-core` | `GeoCell` and A5 queries, intents, snapshots, checkpoints, config, scenario manifests and reading pack directories, WebSocket messages, problem codes, the deterministic RNG | depend on Bevy, Axum, Tokio or krABMaga |
-| `sim-drones` | the drones model as krABMaga agents and a krABMaga `State`; flight, missions, sensor, dispatch; the standalone `krab-drones` runner | depend on the driver, Axum or Tokio |
-| `sim-engine` | the driver thread, the `Model` trait and the `drones` adapter, the built-in grid, the walker models, the scenario store, checkpoint encoding, the shared edge checks, the run log, `simctl` | await, open sockets, or do file I/O inside a tick |
+| `sim-drones` | the drones model as krABMaga agents and a krABMaga `State`; flight, missions, sensor, dispatch, manned aircraft on their routes, conflict advisories flown inside the step (through `sim-conflict`); the standalone `krab-drones` runner | depend on the driver, Axum or Tokio |
+| `sim-engine` | the driver thread, the `Model` trait and the `drones` adapter, the built-in grid, the walker models, the scenario store, checkpoint encoding, the rewind history, the shared edge checks, the run log, `simctl` | await, open sockets, or do file I/O inside a tick |
 | `sim-mavlink` | the MAVLink gateway: one UDP socket presenting every drone as a vehicle, the mission handshake, command acks | step the schedule or touch model state; block on the driver |
 | `sim-cot` | the Cursor-on-Target emitter: drone tracks, sightings and POIs as XML over UDP | step the schedule or touch model state |
 | `sim-weather` | wind per A5 cell from Open-Meteo, recorded or live, and its on-disk cache | know about the driver or the model |
-| `sim-conflict` | conflict detection and resolution advisories: trajectory prediction under an energy model, summed probabilities per cell and altitude layer, trial manoeuvres | know about the driver, the model or the wire |
+| `sim-conflict` | conflict detection and resolution advisories: trajectory prediction under an energy model, summed probabilities per cell and altitude layer, protected volumes and the order of giving way, trial manoeuvres | know about the driver, the model or the wire |
 | `sim-axum` | REST, WebSocket, auth, the OpenAPI document, the dashboard and guides, the weather, conflict and run-log services, the `krabshell` binary | step the schedule or touch model state directly |
 | `sim-dashboard` | Askama templates and static assets, compiled into `sim-axum` | contain a build step |
 
@@ -55,6 +55,20 @@ The driver drains them after each successful step, stamps each with a `seq`
 that never goes backwards (not even across a reload), and keeps the last 512 in
 the published view. Consumers remember the last `seq` they handled and read
 `Published::reports_since`. A gap in `seq` means they fell behind.
+
+**Rewind.** In the `gold` profile, for a model that offers a `Frame` (today
+the drones), a `sim-history` thread keeps the recent past
+(`sim-engine/src/history.rs`). Every `run.history_every_ticks` ticks (100)
+the driver hands it a frame as a keyframe, the same cheap handover the
+publisher uses, and it is sent every intent the driver applies. It keeps the
+last `run.history_keyframes` (60). To show tick `T` it restores the keyframe
+at or before `T` into a model of its own (`Model::set_tick` puts the restored
+world at the keyframe's tick), applies the logged intents tick by tick as
+the driver did, and steps up to `T`. A gold run replays to the bit, so the
+view is the world as it was, not a recording. The edge reaches it through
+`DriverHandle::view_at`, on a blocking thread; `GET /api/v1/history` says what
+it covers and `?at=` on the state endpoints reads from it. A load, reset or
+restore starts the history afresh, and the live run never waits on it.
 
 ## Edges
 
@@ -101,14 +115,17 @@ Any walker pack can run on either with `--model`. Both follow the same intent
 rule: an agent placed by an intent (spawn or move) holds that cell for the tick
 that applies it instead of walking off it.
 
-- `drones`: drones, intruder drones, people, vehicles and points of
-  interest. Positions are continuous; occupancy is the cell each entity is in.
-  Each tick is `tick_seconds` of simulated time. Nothing paces it to the wall
+- `drones`: drones, intruder drones, manned aircraft, people, vehicles and
+  points of interest. Positions are continuous; occupancy is the cell each
+  entity is in. Each tick is `tick_seconds` of simulated time (0.1 s by
+  default). Every reader goes through `sim_core::config::tick_seconds`, and
+  `Config::validate` refuses a value outside 0.001..=10. Nothing paces it to the wall
   clock; that is the gateways' job.
   - **On krABMaga.** The model is the `sim-drones` crate. Each entity is a
     krABMaga `Agent` (`DroneAgent`, `GroundAgent` for people and vehicles,
-    `IntruderAgent`, `PoiAgent`) on a krABMaga `Schedule`, plus a `Dispatcher`
-    agent that places delivery orders first on every step. They step against
+    `IntruderAgent`, `AircraftAgent`, `PoiAgent`) on a krABMaga `Schedule`,
+    plus a `Dispatcher` agent that steps first on every step: it opens and
+    closes geofences, places delivery orders and assesses conflicts. They step against
     `World`, a krABMaga `State` that owns the `SparseA5Grid`, terrain,
     address book and order queues. `sim-engine`'s `drones` model is a thin
     adapter holding a `World` and its `Schedule`; `krab-drones` runs the same
@@ -137,6 +154,22 @@ that applies it instead of walking off it.
     intents would. Intents 120/121 and 130/131 add and remove stations and
     regions of interest, applied the same way. Intent 140 replaces the wind
     field.
+  - **Manned aircraft.** An `AircraftAgent` flies a published route of
+    fixes (`sim-drones/src/targets.rs`, `Flight`), starting at `start_s` and
+    again every `repeat_s`. Between flights it is parked out of sight at its
+    first fix, and nothing sees or assesses it.
+  - **Conflict advisories.** Every `atc_every_s` simulated seconds (5) the
+    dispatcher's `World::run_atc` assesses the drones, intruders and manned
+    aircraft in the air with `sim-conflict`, from the committed board
+    (`sim-drones/src/atc.rs`). Drones give way first, a manned aircraft only
+    when no drone can resolve the conflict, an intruder never. Each advisory
+    goes to its agent, which flies it for `advisory_hold_s` (10) before its
+    autopilot or route takes over again; one still closing on what it avoids
+    is renewed. `sim-conflict` flies its predictions on rayon's pool and
+    collects them in order, so this happens inside the step and a gold run
+    flies the same advisories every time. The latest assessment is in the
+    overlays as `atc` and in checkpoints. A pack turns it off with
+    `atc = false`.
   - **Wind.** The world holds the wind field its drones fly in, one series
     per weather cell, by height and hour. It arrives in the pack's fields
     when the scenario loads, and later as intent 140, and is checkpointed with
@@ -150,7 +183,8 @@ that applies it instead of walking off it.
     committed state; its messages join the mail after the intents', as
     they did when the dispatcher ran it for every drone first. Porting the
     old step to the default tree left every gold hash unchanged. The fences reach gateways through `Model::overlays`, a
-    small JSON value each published view carries beside the cells. An intent addressed to a drone's old cell is still
+    small JSON value each published view carries beside the cells (with the
+    stations, regions, open orders, weather and the latest `atc` assessment). An intent addressed to a drone's old cell is still
     accepted: the drone moves between publish and apply, and only the world
     bounds are checked.
   - **Gold determinism.** Poses are integers in MAVLink's `_INT` units, trig
@@ -180,14 +214,17 @@ None of them steps the schedule or holds up a tick.
   the tick thread; the world publishes its field's fingerprint and the status
   says whether the two agree. A restored checkpoint's field replaces the copy.
 - **Conflicts** (`sim-axum/src/conflicts.rs`, with `sim-conflict` doing the
-  work). The drones and intruders in the air are read out of the published
-  view and assessed with the run's wind: where two or more could meet in the
-  next minute, and which manoeuvre would clear each one. An assessment is made
-  at most once per published tick, and in the background only while someone
-  has asked in the last 30 seconds, so a run nobody watches pays nothing for
-  it. The advisories are advice: nothing feeds them back into the
-  simulation. The cell resolution is the operator's choice, else the pack's
-  `conflict_resolution`, else the world's.
+  work). The drones, intruders and manned aircraft in the air are read out of
+  the published view and assessed with the run's wind, using the world's own
+  fleet, protected volume and giving-way order (`sim_drones::atc`): where two
+  or more could meet in the next minute, and which manoeuvre would clear each
+  one. An assessment is made at most once per published tick, and in the
+  background only while someone has asked in the last 30 seconds, so a run
+  nobody watches pays nothing for it. This copy is for display: the advisories
+  the drones and aircraft fly come from the world's own assessment in the
+  step (see [Models](#models)). A rewound view (`?at=`) is assessed the same
+  way, with the weather field the run has now. The cell resolution is the
+  operator's choice, else the pack's `conflict_resolution`, else the world's.
 - **Run logs** (`sim-axum/src/runlog.rs`). A drones pack that sets
   `heatmap_resolution` or `order_rate_per_address_day` has its run sampled
   from the published view into a folder of files under `--log-dir`, rewritten

@@ -18,6 +18,7 @@ sim-mavlink.workspace = true
 sim-cot.workspace = true
 sim-weather.workspace = true
 sim-conflict.workspace = true
+sim-drones.workspace = true
 anyhow.workspace = true
 arc-swap.workspace = true
 askama = "0.16"

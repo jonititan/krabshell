@@ -1,7 +1,9 @@
 //! Whole encounters through `assess`: what is a conflict, and what is
 //! advised.
 
-use sim_conflict::{assess, AircraftState, Calm, Config, Fleet, Manoeuvre, Performance, FT};
+use sim_conflict::{
+    assess, AircraftState, Calm, Config, Fleet, GiveWay, Manoeuvre, Performance, Protection, FT,
+};
 
 const LAT: f64 = 54.9;
 const LON: f64 = 23.9;
@@ -40,6 +42,8 @@ fn aircraft(
         turn_rate_dps: 0.0,
         mass_kg: None,
         performance: perf.into(),
+        protection: None,
+        give_way: sim_conflict::GiveWay::First,
     }
 }
 
@@ -243,4 +247,145 @@ fn a_crowd_converging_is_advised_apart() {
         a.risk_before,
         a.risk_after
     );
+}
+
+/// An airliner level at 1 000 m, 80 m/s eastbound, with 300 m and ±150 m
+/// of protection, giving way last, and a drone hovering `ahead_m` up
+/// its track, `north_m` off it and `dz_m` above it.
+fn airliner_and_drone(ahead_m: f64, north_m: f64, dz_m: f64) -> Vec<AircraftState> {
+    let mut jet = aircraft(10, 0.0, 1_000.0, 80.0, 90.0, 0.0, "jet");
+    jet.protection = Some(Protection {
+        lateral_m: 300.0,
+        vertical_m: 150.0,
+    });
+    jet.give_way = GiveWay::Last;
+    let mut drone = aircraft(1, ahead_m, 1_000.0 + dz_m, 0.0, 0.0, 0.0, "quad");
+    drone.lat += (north_m / 6_371_000.0).to_degrees();
+    vec![jet, drone]
+}
+
+#[test]
+fn a_drone_inside_an_airliners_protected_volume_is_advised_before_the_airliner() {
+    let cfg = Config::drones();
+    // 30 s up the track, 80 m below: inside ±150 m, and too close for the
+    // drone alone (2.5 m/s down) to get out in time.
+    let a = assess(
+        &airliner_and_drone(2_400.0, 0.0, -80.0),
+        &fleet(),
+        &Calm,
+        &cfg,
+    )
+    .unwrap();
+    let e = &a.encounters[0];
+    assert_eq!((e.a, e.b), (1, 10), "{:?}", a.encounters);
+    assert_eq!(
+        a.advisories[0].aircraft, 1,
+        "the drone first: {:?}",
+        a.advisories
+    );
+    assert_eq!(a.advisories[0].against, vec![10]);
+    assert!(a.risk_after < a.risk_before);
+}
+
+#[test]
+fn an_airliner_is_left_alone_when_the_drone_can_get_out_of_the_way() {
+    let cfg = Config::drones();
+    // 45 s up the track, 120 m below: a short descent clears the volume.
+    let a = assess(
+        &airliner_and_drone(3_600.0, 0.0, -120.0),
+        &fleet(),
+        &Calm,
+        &cfg,
+    )
+    .unwrap();
+    assert!(!a.conflicts.is_empty());
+    assert!(
+        a.advisories.iter().any(|adv| adv.aircraft == 1),
+        "{:?}",
+        a.advisories
+    );
+    assert!(
+        a.advisories.iter().all(|adv| adv.aircraft != 10),
+        "{:?}",
+        a.advisories
+    );
+    assert!(a.residual.is_empty(), "{:?}", a.residual);
+}
+
+#[test]
+fn a_drone_outside_the_volume_is_no_conflict_with_the_airliner() {
+    let cfg = Config::drones();
+    for (what, north_m, dz_m) in [
+        ("200 m below", 0.0, -200.0),
+        ("200 m above", 0.0, 200.0),
+        ("600 m off the track", 600.0, 0.0),
+    ] {
+        let a = assess(
+            &airliner_and_drone(2_400.0, north_m, dz_m),
+            &fleet(),
+            &Calm,
+            &cfg,
+        )
+        .unwrap();
+        assert!(a.conflicts.is_empty(), "{what}: {:?}", a.encounters);
+    }
+    // Inside the lateral minimum, though, it is.
+    let a = assess(
+        &airliner_and_drone(2_400.0, 150.0, 0.0),
+        &fleet(),
+        &Calm,
+        &cfg,
+    )
+    .unwrap();
+    assert!(!a.conflicts.is_empty(), "150 m off the track");
+}
+
+#[test]
+fn the_protected_volume_is_the_minima_not_the_minima_plus_the_drones_zone() {
+    // Without protection the drone's own zone (a ring of ~200 m cells and
+    // 15 m) is what it keeps from anything; 120 m below the jet's track it
+    // is clear of that, but inside the 150 m the jet asks for.
+    let cfg = Config::drones();
+    let mut states = airliner_and_drone(2_400.0, 0.0, -120.0);
+    assert!(!assess(&states, &fleet(), &Calm, &cfg)
+        .unwrap()
+        .conflicts
+        .is_empty());
+    states[0].protection = None;
+    assert!(assess(&states, &fleet(), &Calm, &cfg)
+        .unwrap()
+        .conflicts
+        .is_empty());
+}
+
+#[test]
+fn an_airliner_is_advised_when_nothing_that_gives_way_first_can_help() {
+    let cfg = Config::drones();
+    // An uncontrolled intruder in its way: it never gives way, so the
+    // airliner has to.
+    let mut states = airliner_and_drone(2_400.0, 0.0, -80.0);
+    states[1].give_way = GiveWay::Never;
+    let a = assess(&states, &fleet(), &Calm, &cfg).unwrap();
+    assert!(
+        a.advisories.iter().all(|adv| adv.aircraft != 1),
+        "{:?}",
+        a.advisories
+    );
+    let adv = a
+        .advisories
+        .iter()
+        .find(|adv| adv.aircraft == 10)
+        .expect("the airliner is advised");
+    assert!(adv.risk_after < adv.risk_before, "{adv:?}");
+}
+
+#[test]
+fn nobody_who_never_gives_way_is_advised_and_their_conflict_is_left_over() {
+    let cfg = Config::drones();
+    let mut states = airliner_and_drone(2_400.0, 0.0, -80.0);
+    states[0].give_way = GiveWay::Never;
+    states[1].give_way = GiveWay::Never;
+    let a = assess(&states, &fleet(), &Calm, &cfg).unwrap();
+    assert!(a.advisories.is_empty(), "{:?}", a.advisories);
+    assert!(!a.residual.is_empty());
 }

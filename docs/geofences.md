@@ -67,7 +67,8 @@ heights before the model sees them.
 
 The autopilot knows nothing of fences. Clearance is the job of the **operator**:
 the part of the simulation that flies the drones the simulation flies itself
-(couriers, and drones a pack starts on a mission). It keeps those drones clear the
+(couriers, drones a pack starts on a mission, spares once called up, and their
+replacements). It keeps those drones clear the
 way a ground station would, by MAVLink. Drones flown by an outside ground station
 are left to that station (see [Ground stations](#ground-stations-and-mavlink)).
 
@@ -169,7 +170,9 @@ report is made per fence entered, on the way in. The report gives:
 Drones flown by a ground station are not rerouted, so they breach any fence they
 fly into. A drone flown by the simulation breaches a fence only if the fence opens
 round it, or if it is walled in with no way round. In that case it flies straight
-and the breach is logged.
+and the breach is logged. A [conflict advisory](drones.md#conflict-advisories)
+is flown as given, without regard to fences, so any drone flying one can breach
+a fence too.
 
 ## Scheduled and timed fences
 

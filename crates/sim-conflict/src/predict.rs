@@ -55,6 +55,41 @@ pub struct AircraftState {
     pub mass_kg: Option<f64>,
     /// Which entry of the [`crate::Fleet`] it flies like.
     pub performance: String,
+    /// A protected volume others must keep out of: a manned aircraft's
+    /// separation minima. See [`Protection`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protection: Option<Protection>,
+    /// When it is asked to manoeuvre: see [`GiveWay`].
+    #[serde(default)]
+    pub give_way: GiveWay,
+}
+
+/// Who is asked to manoeuvre out of a conflict, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GiveWay {
+    /// Advised first: a drone.
+    #[default]
+    First,
+    /// Advised only once nothing in [`GiveWay::First`] can help any more: a
+    /// manned aircraft, which drones get out of the way of.
+    Last,
+    /// Never advised, as it would not follow one: an uncontrolled intruder.
+    Never,
+}
+
+/// Separation others must keep from an aircraft: no closer than
+/// `lateral_m` across and `vertical_m` above or below.
+///
+/// Against it, everyone else counts only the cell and layer each of its
+/// particles is in, not their own protected zone, so the minima are these
+/// and not these plus theirs. They hold to within the grid: a cell is in
+/// the volume when its centre is within `lateral_m` of the aircraft, and a
+/// layer when any of it is within `vertical_m`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Protection {
+    pub lateral_m: f64,
+    pub vertical_m: f64,
 }
 
 impl AircraftState {
@@ -74,6 +109,13 @@ impl AircraftState {
             return Err(Error::BadState(self.id));
         }
         if self.tas_ms < 0.0 || self.mass_kg.is_some_and(|m| m.is_nan() || m <= 0.0) {
+            return Err(Error::BadState(self.id));
+        }
+        let distance = |m: f64| m >= 0.0 && m.is_finite();
+        if self
+            .protection
+            .is_some_and(|p| !distance(p.lateral_m) || !distance(p.vertical_m))
+        {
             return Err(Error::BadState(self.id));
         }
         Ok(())
@@ -190,11 +232,31 @@ pub fn targets(
     }
 }
 
-/// A cell and an altitude layer, numbered by [`crate::Layers`].
+/// A cell and an altitude layer, numbered by [`crate::Layers`], on one of
+/// two planes.
+///
+/// On [`Plane::Zones`] aircraft meet aircraft, each with the configuration's
+/// protected zone. On [`Plane::Protected`] aircraft meet a protected
+/// aircraft's [`Protection`]: that aircraft puts its volume there, everyone
+/// else only the cells and layers it is in. A key on the protected plane
+/// counts only with a protected aircraft in it, so two ordinary aircraft are
+/// never in conflict there as well.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Key {
     pub cell: GeoCell,
     pub layer: i32,
+    #[serde(default)]
+    pub plane: Plane,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Plane {
+    #[default]
+    Zones,
+    Protected,
 }
 
 /// Where an aircraft could be.
@@ -207,6 +269,10 @@ pub struct Prediction {
     pub times_s: Vec<f64>,
     /// For each step, the probability its protected zone covers each key.
     pub cells: Vec<BTreeMap<Key, f64>>,
+    /// It carries a [`Protection`]: its keys on the protected plane are its
+    /// volume, not where it is.
+    #[serde(default)]
+    pub protected: bool,
     /// The particles' mean position at each step: `[lat, lon, alt_m]`.
     pub mean: Vec<[f64; 3]>,
 }
@@ -251,6 +317,8 @@ pub struct Predictor<'a> {
     cfg: &'a Config,
     wind: &'a dyn WindSource,
     zones: HashMap<GeoCell, Vec<GeoCell>>,
+    /// Cells near a cell, with their centres, for protected volumes.
+    near: HashMap<GeoCell, Vec<(GeoCell, f64, f64)>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -296,13 +364,78 @@ fn turn_to(from: f64, to: f64) -> f64 {
     (to - from + 540.0).rem_euclid(360.0) - 180.0
 }
 
+/// The cells of a protected volume round a point at `lat`, `lon` in `cell`:
+/// every cell at `cell`'s resolution whose centre is within `lateral_m` of
+/// the point, and `cell` itself. Measured from the point, not from its
+/// cell's centre, so the volume moves with the aircraft rather than in
+/// cell-sized jumps.
+pub fn protected_cells(cell: GeoCell, lat: f64, lon: f64, lateral_m: f64) -> Vec<GeoCell> {
+    let mut out = vec![cell];
+    out.extend(centres_within(
+        &candidates(cell, lateral_m),
+        lat,
+        lon,
+        lateral_m,
+    ));
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Every cell that could have its centre within `lateral_m` of a point in
+/// `cell`, with that centre: A5's spherical cap round `cell`'s centre,
+/// widened by a cell's width since the point may be anywhere in `cell`.
+fn candidates(cell: GeoCell, lateral_m: f64) -> Vec<(GeoCell, f64, f64)> {
+    let edge = sim_core::cell::nominal_cell_edge_meters(cell.resolution()).max(1.0);
+    cell.spherical_cap(lateral_m + edge)
+        .unwrap_or_else(|_| vec![cell])
+        .into_iter()
+        .filter_map(|c| c.centroid().ok().map(|(clon, clat)| (c, clat, clon)))
+        .collect()
+}
+
+/// The candidates whose centres are within `lateral_m` of the point.
+fn centres_within(
+    candidates: &[(GeoCell, f64, f64)],
+    lat: f64,
+    lon: f64,
+    lateral_m: f64,
+) -> impl Iterator<Item = GeoCell> + '_ {
+    let cos_lat = libm::cos(lat.to_radians());
+    candidates.iter().filter_map(move |&(c, clat, clon)| {
+        let north = (clat - lat).to_radians() * EARTH_RADIUS_M;
+        let east = (clon - lon).to_radians() * EARTH_RADIUS_M * cos_lat;
+        (north * north + east * east <= lateral_m * lateral_m).then_some(c)
+    })
+}
+
 impl<'a> Predictor<'a> {
     pub fn new(cfg: &'a Config, wind: &'a dyn WindSource) -> Predictor<'a> {
         Predictor {
             cfg,
             wind,
             zones: HashMap::new(),
+            near: HashMap::new(),
         }
+    }
+
+    /// The cells whose centres are within `lateral_m` of a point in `cell`,
+    /// always with `cell` itself: [`protected_cells`], with the candidates
+    /// kept for every particle that lands in `cell`.
+    fn volume(
+        &mut self,
+        cell: GeoCell,
+        lat: f64,
+        lon: f64,
+        lateral_m: f64,
+        out: &mut Vec<GeoCell>,
+    ) {
+        let near = self
+            .near
+            .entry(cell)
+            .or_insert_with(|| candidates(cell, lateral_m));
+        out.push(cell);
+        out.extend(centres_within(near, lat, lon, lateral_m));
     }
 
     /// The cells a protected zone centred in `cell` covers.
@@ -415,7 +548,9 @@ impl<'a> Predictor<'a> {
         let turn_rate = perf.turn_rate_dps(state.tas_ms);
         let v_accel = perf.vertical_accel_ms2();
         let s_accel = perf.speed_accel_ms2();
-        let ceiling = perf.ceiling_m();
+        // Seen above its model's ceiling, it can fly there: the ceiling is
+        // the model's, not the aircraft's, so do not pull it down to it.
+        let ceiling = perf.ceiling_m().max(state.alt_m);
 
         let mut out = Prediction {
             id: state.id,
@@ -424,6 +559,7 @@ impl<'a> Predictor<'a> {
             times_s: Vec::with_capacity(cfg.steps),
             cells: Vec::with_capacity(cfg.steps),
             mean: Vec::with_capacity(cfg.steps),
+            protected: state.protection.is_some(),
         };
         let mut t = 0.0;
         for _ in 0..cfg.steps {
@@ -504,7 +640,7 @@ impl<'a> Predictor<'a> {
                 }
                 t += h;
             }
-            self.record(&particles, t, &mut out);
+            self.record(&particles, t, state.protection, &mut out);
             if let Some(clouds) = clouds.as_deref_mut() {
                 clouds.push(particles.iter().map(|p| [p.lat, p.lon, p.alt]).collect());
             }
@@ -512,12 +648,19 @@ impl<'a> Predictor<'a> {
         out
     }
 
-    fn record(&mut self, particles: &[Particle], t: f64, out: &mut Prediction) {
+    fn record(
+        &mut self,
+        particles: &[Particle],
+        t: f64,
+        protection: Option<Protection>,
+        out: &mut Prediction,
+    ) {
         let cfg = self.cfg;
         let share = 1.0 / particles.len() as f64;
         let mut cells: BTreeMap<Key, f64> = BTreeMap::new();
         let mut mean = [0.0; 3];
         let mut covered: Vec<Key> = Vec::new();
+        let mut volume: Vec<GeoCell> = Vec::new();
         for p in particles {
             mean[0] += p.lat * share;
             mean[1] += p.lon * share;
@@ -525,12 +668,43 @@ impl<'a> Predictor<'a> {
             let Ok(cell) = GeoCell::from_lonlat(p.lon, p.lat, cfg.resolution) else {
                 continue;
             };
-            let low = cfg.layers.index(p.alt - cfg.vertical_buffer_m);
-            let high = cfg.layers.index(p.alt + cfg.vertical_buffer_m);
             covered.clear();
-            for &c in self.zone(cell) {
-                for layer in low..=high {
-                    covered.push(Key { cell: c, layer });
+            match protection {
+                // Where it is, on the protected plane, and its zone among
+                // everyone else.
+                None => {
+                    covered.push(Key {
+                        cell,
+                        layer: cfg.layers.index(p.alt),
+                        plane: Plane::Protected,
+                    });
+                    let low = cfg.layers.index(p.alt - cfg.vertical_buffer_m);
+                    let high = cfg.layers.index(p.alt + cfg.vertical_buffer_m);
+                    for &c in self.zone(cell) {
+                        for layer in low..=high {
+                            covered.push(Key {
+                                cell: c,
+                                layer,
+                                plane: Plane::Zones,
+                            });
+                        }
+                    }
+                }
+                // Its volume, which the protected plane is for.
+                Some(guard) => {
+                    let low = cfg.layers.index(p.alt - guard.vertical_m);
+                    let high = cfg.layers.index(p.alt + guard.vertical_m);
+                    self.volume(cell, p.lat, p.lon, guard.lateral_m, &mut volume);
+                    for &c in &volume {
+                        for layer in low..=high {
+                            covered.push(Key {
+                                cell: c,
+                                layer,
+                                plane: Plane::Protected,
+                            });
+                        }
+                    }
+                    volume.clear();
                 }
             }
             covered.sort_unstable();
@@ -561,6 +735,8 @@ mod tests {
             turn_rate_dps: 0.0,
             mass_kg: None,
             performance: "quad".into(),
+            protection: None,
+            give_way: GiveWay::First,
         }
     }
 

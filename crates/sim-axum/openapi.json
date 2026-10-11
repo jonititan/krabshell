@@ -268,12 +268,14 @@
         "summary": "Occupancy for a map",
         "description": "Occupancy rolled up to a display resolution, each cell with its boundary ready to draw (spec §7.3).",
         "parameters": [
+          { "$ref": "#/components/parameters/At" },
           { "name": "res", "in": "query", "schema": { "type": "integer" }, "description": "Resolution to aggregate to. Defaults to the config's `view_resolution`; clamped to between 0 and the occupancy resolution." }
         ],
         "responses": {
           "200": { "description": "Aggregated cells.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MapBody" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -284,6 +286,7 @@
         "summary": "Positioned objects",
         "description": "Every object with an exact position, for drawing individual things rather than cell counts. The headers carry the tick, the tick length and the run mode, so a client can predict motion between polls.",
         "parameters": [
+          { "$ref": "#/components/parameters/At" },
           { "name": "kind", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated kinds to include. Omit for every kind.", "example": "drone,poi" }
         ],
         "responses": {
@@ -296,7 +299,8 @@
             },
             "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Entity" } } } }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -306,13 +310,15 @@
         "operationId": "stateOverlays",
         "summary": "Model overlays",
         "description": "What the model publishes beside its agents, as it publishes it. For the drones: geofences, open orders, stations, regions of interest and courier range. Null for a model with none.",
+        "parameters": [{ "$ref": "#/components/parameters/At" }],
         "responses": {
           "200": {
             "description": "The model's overlays.",
             "headers": { "x-sim-tick": { "$ref": "#/components/headers/SimTick" } },
             "content": { "application/json": { "schema": { "type": ["object", "null"], "additionalProperties": true } } }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -375,6 +381,7 @@
         "summary": "One cell",
         "description": "The objects in one cell; an empty list if there are none. 404 only when the cell is empty and the published view was capped, so it may have been dropped.",
         "parameters": [
+          { "$ref": "#/components/parameters/At" },
           { "name": "cell", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/GeoCell" } }
         ],
         "responses": {
@@ -437,12 +444,14 @@
         "summary": "Model events",
         "description": "Sightings, waypoints, deliveries, breaches and the like, newer than `since`. The driver keeps the latest few hundred; a caller that falls further behind sees a gap between its `since` and the first `seq` returned.",
         "parameters": [
+          { "$ref": "#/components/parameters/At" },
           { "name": "since", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 }, "description": "Only reports with a larger `seq`. Pass back the last answer's `last_seq`." }
         ],
         "responses": {
           "200": { "description": "Reports, oldest first.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportsBody" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -641,12 +650,14 @@
         "summary": "Conflicts and advisories",
         "description": "Assesses the drones and intruders in the air at the current tick: the A5 cells two or more could share in the next minute (each at its worst altitude layer and step, most aircraft expected first), the advisories that would resolve the conflicts, and any left unresolved. Worked out on the first ask for a tick, then reused until the tick moves. Times are simulated seconds ahead.",
         "parameters": [
+          { "$ref": "#/components/parameters/At" },
           { "name": "outlines", "in": "query", "schema": { "type": "boolean", "default": true }, "description": "`false` leaves out the cells' outlines." }
         ],
         "responses": {
           "200": { "description": "The assessment.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConflictReport" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
           "500": { "description": "The assessment failed.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
         }
       }
@@ -745,6 +756,33 @@
         }
       }
     },
+    "/history": {
+      "get": {
+        "tags": ["state"],
+        "operationId": "history",
+        "summary": "What rewind can show",
+        "description": "Rewind keeps a keyframe of the world every `run.history_every_ticks` ticks (the last `run.history_keyframes` of them) and rebuilds any tick from `first_tick` to `live_tick` on request: pass it as `at` to the map, entity, overlay, report, cell and conflict endpoints. Gold profile only, since only a gold run replays exactly.",
+        "responses": {
+          "200": {
+            "description": "The range rewind covers.",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "required": ["available", "first_tick", "live_tick", "every_ticks", "tick_seconds"],
+              "additionalProperties": false,
+              "properties": {
+                "available": { "type": "boolean", "description": "Rewind is on for this world." },
+                "reason": { "type": "string", "description": "Why it is off." },
+                "first_tick": { "type": ["integer", "null"], "description": "The oldest tick that can be shown." },
+                "live_tick": { "type": "integer", "description": "The live tick: the newest." },
+                "every_ticks": { "type": "integer", "description": "Ticks between keyframes." },
+                "tick_seconds": { "type": ["number", "null"], "description": "Simulated seconds per tick, when the model says." }
+              }
+            } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
     "/ws": {
       "get": {
         "tags": ["live"],
@@ -770,7 +808,8 @@
     "parameters": {
       "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 }, "description": "The id the list gives it." },
       "AltM": { "name": "alt_m", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 10000, "default": 50 }, "description": "Metres above the ground. Between fetched heights the wind is linear; below the lowest it falls off toward the ground as a 1/7 power law; above the highest it holds." },
-      "Utc": { "name": "utc", "in": "query", "schema": { "type": "string", "format": "date-time" }, "description": "An RFC 3339 time. Defaults to the simulation's now. Before the first frame or after the last, the end frame holds." }
+      "Utc": { "name": "utc", "in": "query", "schema": { "type": "string", "format": "date-time" }, "description": "An RFC 3339 time. Defaults to the simulation's now. Before the first frame or after the last, the end frame holds." },
+      "At": { "name": "at", "in": "query", "schema": { "type": "integer", "minimum": 0 }, "description": "Rewind: the world as it was at this tick, rebuilt from the history (see `GET /history`). Absent, the live world. A tick outside the history is 404." }
     },
     "headers": {
       "SimTick": { "description": "The tick the body is from.", "schema": { "type": "integer" } },
@@ -996,7 +1035,9 @@
           "max_applied_per_tick": { "type": "integer" },
           "max_published_cells": { "type": "integer", "description": "Cap on cells in one published view." },
           "intent_rate_per_actor": { "type": "number", "description": "Sustained intents per second per actor; bursts of twice this are allowed." },
-          "auto_recover": { "type": "boolean", "description": "Restart the driver after a tick panic." }
+          "auto_recover": { "type": "boolean", "description": "Restart the driver after a tick panic." },
+          "history_every_ticks": { "type": "integer", "minimum": 1, "description": "Ticks between rewind keyframes (gold profile)." },
+          "history_keyframes": { "type": "integer", "minimum": 0, "description": "Rewind keyframes kept; 0 turns rewind off." }
         }
       },
       "GridConfig": {

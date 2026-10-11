@@ -28,6 +28,8 @@ fn quad(id: u64, lat: f64, lon: f64, hdg: f64, turn: f64) -> AircraftState {
         turn_rate_dps: turn,
         mass_kg: None,
         performance: "quad".into(),
+        protection: None,
+        give_way: sim_conflict::GiveWay::First,
     }
 }
 
@@ -273,7 +275,72 @@ fn main() {
         })
         .unwrap_or(f64::NAN);
 
+    // 7. A manned aircraft's protected volume on the grid: which cells and
+    //    layers it puts itself in, beside a drone's own zone, and how far
+    //    out the grid actually counts a drone as inside it.
+    let protection = {
+        let (lat, lon, alt) = (54.9, 23.9, 1_000.0);
+        let (lateral, vertical) = (300.0, 150.0);
+        let res = cfg.resolution;
+        let offset = |east: f64, north: f64| {
+            let r = 6_371_000.0;
+            (
+                lat + (north / r).to_degrees(),
+                lon + (east / (r * lat.to_radians().cos())).to_degrees(),
+            )
+        };
+        let cell_at = |la: f64, lo: f64| GeoCell::from_lonlat(lo, la, res).unwrap();
+        let centre = cell_at(lat, lon);
+        let volume = sim_conflict::protected_cells(centre, lat, lon, lateral);
+        let around: Vec<Value> = centre
+            .spherical_cap(lateral + 450.0)
+            .unwrap()
+            .into_iter()
+            .map(|c| json!({ "ring": outline(c), "in": volume.contains(&c) }))
+            .collect();
+        // A drone inside the volume and one just outside it, the outside one
+        // with the zone it keeps from other drones (its cell and one ring).
+        let drone = |east: f64, north: f64, dz: f64, zone: bool| {
+            let (la, lo) = offset(east, north);
+            let c = cell_at(la, lo);
+            json!({
+                "at": [la, lo], "alt_m": alt + dz, "east": east, "north": north,
+                "distance_m": (east * east + north * north).sqrt(),
+                "cell": outline(c), "in": volume.contains(&c),
+                "zone": if zone { c.grid_disk(cfg.buffer_rings).unwrap().into_iter().map(outline).collect::<Vec<_>>() } else { Vec::new() },
+            })
+        };
+        // How far out a drone's cell is counted, every 5° round and every
+        // 2 m out: the nearest it is not, and the farthest it still is.
+        let (mut nearest_out, mut farthest_in) = (f64::INFINITY, 0.0_f64);
+        for b in (0..72).map(|i| (i as f64 * 5.0).to_radians()) {
+            for d in (50..300).map(|i| i as f64 * 2.0) {
+                let (la, lo) = offset(d * b.sin(), d * b.cos());
+                if volume.contains(&cell_at(la, lo)) {
+                    farthest_in = farthest_in.max(d);
+                } else {
+                    nearest_out = nearest_out.min(d);
+                }
+            }
+        }
+        let layers = &cfg.layers;
+        let (low, high) = (layers.index(alt - vertical), layers.index(alt + vertical));
+        json!({
+            "at": [lat, lon], "alt_m": alt, "resolution": res,
+            "edge_m": sim_core::cell::nominal_cell_edge_meters(res),
+            "lateral_m": lateral, "vertical_m": vertical,
+            "cells": around, "volume_cells": volume.len(),
+            "drones": [drone(170.0, -150.0, -80.0, false), drone(420.0, 160.0, -200.0, true)],
+            "nearest_out_m": nearest_out, "farthest_in_m": farthest_in,
+            "layers": (layers.index(alt - 260.0)..=layers.index(alt + 260.0))
+                .map(|l| { let (a, b) = layers.bounds(l); json!({ "from": a, "to": b, "in": (low..=high).contains(&l) }) })
+                .collect::<Vec<_>>(),
+            "covered_m": [layers.bounds(low).0, layers.bounds(high).1],
+        })
+    };
+
     let out = json!({
+        "protection": protection,
         "cloud": cloud,
         "cells": cells,
         "encounter": encounter,

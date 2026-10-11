@@ -327,6 +327,16 @@ operator's own route changes are logged as reroute reports, not sent over
 MAVLink. A drone a ground station flies into a fence is not rerouted; the
 breach is reported.
 
+Conflict advisories apply to every drone in the air, a ground station's too
+(see [Advisories are flown](conflicts.md#advisories-are-flown)). A drone
+advised flies its climb, descent, turn or speed change for the pack's
+`advisory_hold_s`, longer while the aircraft it avoids is still closing, and
+then carries on in its mode from where it is. The heartbeat's mode does not
+change while it does, and nothing about the advisory is sent over MAVLink: a
+ground station sees only the drone leave its track or height. Commands sent
+meanwhile are still taken, and the drone acts on them once the advisory is
+over. A pack turns advisories off with `atc = false`.
+
 ## Cursor-on-Target
 
 ### What is sent
@@ -338,6 +348,7 @@ CoT is one-way: the emitter sends and never listens.
 | Event | `type` | `uid` | `how` | Rate | Stale after |
 |---|---|---|---|---|---|
 | A drone | `a-f-A-M-H-Q` (friendly rotary-wing UAV) | `krabshell-uav-<sysid>` | `m-g` | Once a second | 10 s |
+| A manned aircraft on its route | `a-n-A-C-F` (neutral civil fixed-wing) | `krabshell-ac-<id>` | `m-g` | Once a second | 10 s |
 | A person a drone saw | `a-u-G-U-C-I` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |
 | A vehicle a drone saw | `a-u-G-E-V` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |
 | An intruder drone a drone saw | `a-u-A-M-H-Q` | `krabshell-det-<id>` | `m-s` | Each sighting report | 30 s |
@@ -352,6 +363,10 @@ and drone (15 s in `london-patrol`). New reports are picked up every 200 ms.
 Only sighting (detection) reports go out as CoT; landings, breaches, crashes and
 the rest are in the dashboard and `GET /api/v1/reports`.
 
+Manned aircraft (the drones model's `aircraft` kind) are sent with the drones,
+at the same rate and stale time, while they fly their route. One parked
+between flights sends nothing, and its last marker goes stale.
+
 Every uid starts with `krabshell-`, so the markers never collide with real
 ones. Two krabshell processes sending to the same place use the same uids,
 and a TAK client shows both worlds as one.
@@ -365,16 +380,19 @@ and a TAK client shows both worlds as one.
 - **Point.** `lat` and `lon` to seven decimal places. `hae` is the simulation's
   altitude above mean sea level, standing in for height above the ellipsoid
   (no geoid separation is applied). `ce`/`le` are 5 m for drones, 10 m for
-  sightings and 1 m for points of interest.
-- **`<contact callsign>`.** The drone's callsign; a sighting's callsign, or
+  manned aircraft and sightings, and 1 m for points of interest.
+- **`<contact callsign>`.** The drone's callsign; a manned aircraft's
+  callsign, or "Aircraft 42"; a sighting's callsign, or
   "Person 42", "Vehicle 42", "Unknown UAV 42"; a point of interest's name.
 - **`<track course speed>`.** Degrees true and metres per second. Drones send
-  their ground track and speed. Sightings send them when the report has them.
+  their ground track and speed, and so do manned aircraft. Sightings send
+  them when the report has them.
 - **`<link relation="p-p">`.** On a sighting, the uid and type of the drone that
   made it.
 - **`<remarks>`.** For a drone: callsign, mode, battery, mission item and
   simulation tick, as in `HAWK-1 · auto · battery 100% · mission item 2/6 ·
-  sim tick 5310`. For a sighting: `Seen by HAWK-1 at 38 m · sim tick 5310`.
+  sim tick 5310`. For a manned aircraft: `ARR26 · manned aircraft · sim tick
+  5310`. For a sighting: `Seen by HAWK-1 at 38 m · sim tick 5310`.
 
 A sighting as sent (wrapped here for reading):
 

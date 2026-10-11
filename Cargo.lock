@@ -6132,6 +6132,7 @@ dependencies = [
  "sim-conflict",
  "sim-core",
  "sim-cot",
+ "sim-drones",
  "sim-engine",
  "sim-mavlink",
  "sim-weather",
@@ -6152,6 +6153,7 @@ name = "sim-conflict"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "rayon",
  "serde",
  "serde_json",
  "sim-core",
@@ -6194,6 +6196,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sim-conflict",
  "sim-core",
 ]
 

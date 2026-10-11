@@ -1523,3 +1523,107 @@ async fn a_checkpoint_over_two_mebibytes_reaches_the_handler() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     assert!(body["code"].is_string(), "{text}");
 }
+
+/// A drones world over London with one manned aircraft that starts 5 s in.
+fn aircraft_world() -> ScenarioBlob {
+    let manifest = ScenarioManifest {
+        id: "aircraft-test".into(),
+        name: "Aircraft test".into(),
+        description: String::new(),
+        model: "drones".into(),
+        engine_rev: None,
+        resolution: 15,
+        root: Some(GeoCell::parse("6361800000000000").unwrap()),
+        profile: Profile::Gold,
+    };
+    let mut config = Config::default();
+    manifest.apply_to(&mut config);
+    for (key, value) in [("persons", 0), ("vehicles", 0)] {
+        config.model.insert(key.into(), Param::Int(value));
+    }
+    ScenarioBlob {
+        manifest,
+        config,
+        agents: vec![sim_core::SeedAgent {
+            id: Some(1),
+            kind: "aircraft".into(),
+            cell: None,
+            lon: None,
+            lat: None,
+            state: json!({
+                "callsign": "AIR-1",
+                "start_s": 5,
+                "route": [
+                    { "lon": -0.10, "lat": 51.5072, "alt_m": 300, "speed_ms": 75 },
+                    { "lon": -0.1276, "lat": 51.5072, "alt_m": 60 }
+                ]
+            }),
+        }],
+        fields: Value::Null,
+    }
+}
+
+#[tokio::test]
+async fn a_manned_aircraft_is_drawn_and_assessed_only_while_it_flies() {
+    let h = harness_for(aircraft_world());
+    let count = |body: &Value| body["aircraft"].as_u64().unwrap();
+
+    // Parked before its start: not on the map, not in the air.
+    let (_, entities, _) = call(&h, get("/api/v1/state/entities?kind=aircraft")).await;
+    assert_eq!(entities, json!([]));
+    let (status, body, _) = call(&h, get("/api/v1/conflicts")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(count(&body), 0);
+
+    call(&h, post("/api/v1/run/step", json!({"n": 100}))).await;
+    let (_, entities, _) = call(&h, get("/api/v1/state/entities?kind=aircraft")).await;
+    assert_eq!(entities.as_array().unwrap().len(), 1, "{entities}");
+    assert_eq!(entities[0]["callsign"], "AIR-1");
+    let alt = entities[0]["alt_m"].as_f64().unwrap();
+    assert!(alt < 300.0 && alt > 60.0, "{alt}");
+    let (_, body, _) = call(&h, get("/api/v1/conflicts")).await;
+    assert_eq!(count(&body), 1);
+}
+
+#[tokio::test]
+async fn the_dashboard_reads_can_be_rewound_within_the_history() {
+    let h = pack_harness("london-patrol");
+    call(&h, post("/api/v1/run/step", json!({"n": 150}))).await;
+    let (status, body, _) = call(&h, get("/api/v1/history")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["available"], true);
+    assert_eq!(body["live_tick"], 150);
+    assert_eq!(body["every_ticks"], 100);
+
+    // The history thread takes its keyframes a moment after the ticks.
+    let mut first = Value::Null;
+    for _ in 0..100 {
+        let (_, body, _) = call(&h, get("/api/v1/history")).await;
+        first = body["first_tick"].clone();
+        if first == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(first, 0);
+
+    let response = h
+        .router
+        .clone()
+        .oneshot(get("/api/v1/state/entities?kind=drone&at=40"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-sim-tick"], "40");
+    for path in [
+        "/api/v1/state/overlays?at=40",
+        "/api/v1/state/map?at=40",
+        "/api/v1/reports?at=40",
+        "/api/v1/conflicts?at=40&outlines=false",
+    ] {
+        let (status, body, _) = call(&h, get(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+    let (status, body, _) = call(&h, get("/api/v1/state/entities?at=151")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}

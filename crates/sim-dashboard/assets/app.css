@@ -145,6 +145,16 @@ h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacin
 .banner.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .banner.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
 
+/* Rewind: a strip above the control panel, amber while reviewing the past. */
+.timeline { padding: 10px 14px; }
+.timeline-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.timeline-review { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.timeline-review[hidden], .timeline [hidden] { display: none; }
+.timeline-status { margin-left: auto; font-size: 13px; }
+.timeline-scrub { width: 100%; margin-top: 8px; }
+.timeline.reviewing { border-color: var(--warn); background: var(--warn-bg); }
+.timeline.reviewing .timeline-status { color: var(--warn); font-weight: 600; }
+
 /* The outcome of the last dashboard action, kept outside the polled panel.
    An ok message folds away after six seconds; others stay until replaced. */
 .flash-slot .banner.ok {

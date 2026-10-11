@@ -4,7 +4,7 @@
 #}
 <div id="conflict-tables"
      hx-get="/fragments/conflicts"
-     hx-trigger="every 2s"
+     hx-trigger="every 2s, krabshell:at from:document"
      hx-swap="outerHTML">
   {% match conflicts.error %}
   {% when Some with (err) %}
@@ -14,6 +14,31 @@
   {% if conflicts.ready %}
   <p class="dim small">{{ conflicts.summary }}</p>
   {% endif %}
+
+  {% match conflicts.flown %}
+  {% when Some with (flown) %}
+  <section class="panel">
+    <h2>Advisories being flown</h2>
+    <p class="dim small">What the simulation last told the aircraft, which they fly for
+      <span class="mono">advisory_hold_s</span>. Drones give way first; a manned aircraft only
+      when no drone can. {{ conflicts.flown_summary }}</p>
+    {% if flown.is_empty() %}
+    <p class="dim">None at the last assessment.</p>
+    {% else %}
+    <div class="table-scroll">
+    <table class="grid">
+      <thead><tr><th>Aircraft</th><th>Advisory</th><th>Keeping clear of</th></tr></thead>
+      <tbody>
+        {% for r in flown %}
+        <tr><td class="mono">{{ r.callsign }}</td><td>{{ r.action }}</td><td class="mono small">{{ r.against }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+  </section>
+  {% when None %}
+  {% endmatch %}
 
   <section class="panel">
     <h2>Requests for conflict resolution</h2>

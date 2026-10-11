@@ -85,7 +85,8 @@
     refreshQueued = true;
     requestAnimationFrame(() => {
       refreshQueued = false;
-      window.htmx.ajax('GET', `/fragments/cell?cell=${watching}`, {
+      const at = window.krabshellRewind ? window.krabshellRewind.at() : null;
+      window.htmx.ajax('GET', `/fragments/cell?cell=${watching}${at === null ? '' : `&at=${at}`}`, {
         target: '#cell',
         swap: 'outerHTML',
       });
@@ -99,6 +100,8 @@
   }
 
   document.addEventListener('krabshell:cell', (event) => watch(event.detail));
+  // The rewind cursor moved: show the watched cell at the new tick.
+  document.addEventListener('krabshell:at', queueRefresh);
   cellInput.addEventListener('change', () => watch(cellInput.value.trim()));
 
   if (cellInput.value.trim()) watching = cellInput.value.trim();

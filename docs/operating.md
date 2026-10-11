@@ -39,7 +39,7 @@ Every flag can be given on the command line. Some can also come from the environ
 |---|---|---|---|
 | `--bind ADDR` | `KRABSHELL_BIND` | `127.0.0.1:8080` | Address the HTTP server listens on. Anything but loopback needs `DASHBOARD_TOKEN`. |
 | `--scenarios DIR` | `KRABSHELL_SCENARIOS` | `scenarios` | Directory of scenario packs. Uploaded packs go here too. |
-| `--scenario ID` | `KRABSHELL_SCENARIO` | none | Pack to load at start-up, by its manifest id. Without it the server starts with an empty world. |
+| `--scenario ID` | `KRABSHELL_SCENARIO` | none | Pack to load at start-up, by the name of its directory in `--scenarios`. Without it the server starts with an empty world. |
 | `--model KIND` | | none | Run the start-up pack on a different model than its manifest names: `drones`, `walkers` or `walkers-krabmaga`. |
 | `--run` | | off | Start running at once, at maximum speed, instead of paused. |
 | `--checkpoint-on-exit PATH` | | none | Write a checkpoint to `PATH` on a clean shutdown. See [Shutdown](#shutdown). |
@@ -188,7 +188,7 @@ The driver is always in one of these modes:
 | `loading` | Swapping in a scenario or checkpoint. |
 | `faulted` | A tick panicked. The world is frozen at the last good tick, the thread is still alive, and `GET /api/v1/health` answers `503`. A reset recovers it; with `run.auto_recover = true` the driver reloads the scenario by itself. |
 
-`--run` starts the clock at maximum speed whatever the pack's `target_tps` says. On the dashboard, Speed offers Max, Real time (one tick per `tick_seconds`, for packs that set it) and a Custom rate in ticks per second. The drones packs ship with no `target_tps`, so drones fly faster than real time unless you choose otherwise; the MAVLink gateway and CoT emitter keep their own real-time cadence regardless.
+`--run` starts the clock at maximum speed whatever the pack's `target_tps` says. `tick_seconds` must be between 0.001 and 10; a pack or config outside that is refused. On the dashboard, Speed offers Max, Real time (one tick per `tick_seconds`, for packs that set it) and a Custom rate in ticks per second. The drones packs ship with no `target_tps`, so drones fly faster than real time unless you choose otherwise; the MAVLink gateway and CoT emitter keep their own real-time cadence regardless.
 
 ## Profiles: gold and fast
 
@@ -200,12 +200,19 @@ Every run has a determinism profile, set by the pack's manifest (`profile = "gol
 | State hash | Each published view and checkpoint carries a stable hash of the world, unless the view was truncated at `run.max_published_cells` | None |
 | Intent log | Every applied intent is logged with its tick; `GET /api/v1/intents/log` downloads it as JSON Lines | Not kept; that route returns `400` |
 | Replay | `simctl replay` runs the pack twice and checks the hashes match | Refused |
+| Rewind | The recent past can be shown again, tick by tick (drones packs); see [Rewind](#rewind) | None |
 
 The drones model always steps agents in id order and draws every random number from a (seed, entity, tick) stream, so its runs are repeatable in either profile; gold adds the hash and the log that prove it. The walker models only fix their iteration order in gold.
 
-The shipped packs: `london-patrol` and `kaunas-deliveries` are gold, `swarm-survey` is fast. The benchmark packs in `bench/scenarios`: `london-walkers` is gold, `global-drift` is fast.
+The shipped packs: `london-patrol`, `kaunas-deliveries` and `iron-wolf` are gold, `swarm-survey` is fast. The benchmark packs in `bench/scenarios`: `london-walkers` is gold, `global-drift` is fast.
 
 The run config also has `run.parallel` and `run.threads`. They are shown on the dashboard and in `GET /api/v1/run`, but nothing acts on them yet: whether krABMaga's parallel code is compiled in is the `parallel` Cargo feature, and even then the drones schedule runs on one thread.
+
+### Rewind
+
+In `gold`, a drones world keeps its recent past. Every `run.history_every_ticks` ticks (100 by default) the driver hands a keyframe to a `sim-history` thread, which keeps the last `run.history_keyframes` (60 by default; 0 turns rewind off) and every intent applied since the oldest. With the defaults and 0.1 s ticks that is the last ten minutes. To show a past tick it restores the keyframe before it and replays the intents and steps, so the view is the world exactly as it was. The live run never waits for it.
+
+The dashboard's timeline steps back through it (see [The dashboard](dashboard.md#rewind)), and `GET /api/v1/history` and `?at=<tick>` on the state endpoints read it (see [API guide](api-guide.md#rewinding)). A load, reset or restored checkpoint starts it afresh. In `fast`, or for the walker models, `GET /api/v1/history` answers `available: false` and says why.
 
 ## Cargo features
 

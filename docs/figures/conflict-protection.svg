@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 460" width="760" height="460" role="img" aria-labelledby="t d">
+<title id="t">A manned aircraft's protected volume on the grid</title><desc id="d">An airliner at 1000 m. Left, from above: the A5 cells (resolution 15, about 178 m) whose centres are within 300 m of it make its volume. A drone counts only the cell it is in: one 230 m away is inside, one 450 m away is outside, and the cell and ring it keeps from other drones do not count against the airliner. Right, from the side: the 30 m layers within 150 m above and below, 840 to 1170 m.</desc>
+<style>
+svg{--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--surface:#ffffff;--box:#f6f7f9;--s1:#2a78d6;--s2:#eb6834;--bad:#d03b3b;--cost:#c3c2b7;--q1:#cde2fb;--q2:#9ec5f4;--q3:#6da7ec;--q4:#3987e5;--q5:#1c5cab;--o1:#86b6ef;--o2:#3987e5;--o3:#1c5cab;--o4:#0d366b;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){svg{--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--surface:#171b21;--box:#1f242b;--s1:#3987e5;--s2:#d95926;--bad:#e66767;--cost:#5a5955;--q1:#184f95;--q2:#1c5cab;--q3:#2a78d6;--q4:#6da7ec;--q5:#b7d3f6;--o1:#184f95;--o2:#256abf;--o3:#5598e7;--o4:#b7d3f6}}
+text{fill:var(--ink);font-size:13px}
+.t2{fill:var(--ink2)} .tm{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.h{font-weight:600} .small{font-size:12px}
+.halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+</style>
+<clipPath id="clip7"><rect x="56" y="50" width="430" height="340"/></clipPath>
+<line x1="87.8" y1="50.0" x2="87.8" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="87.8" y="405.0" text-anchor="middle" class="tm">-800</text>
+<line x1="133.6" y1="50.0" x2="133.6" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="133.6" y="405.0" text-anchor="middle" class="tm">-600</text>
+<line x1="179.4" y1="50.0" x2="179.4" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="179.4" y="405.0" text-anchor="middle" class="tm">-400</text>
+<line x1="225.2" y1="50.0" x2="225.2" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="225.2" y="405.0" text-anchor="middle" class="tm">-200</text>
+<line x1="271.0" y1="50.0" x2="271.0" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="271.0" y="405.0" text-anchor="middle" class="tm">0</text>
+<line x1="316.8" y1="50.0" x2="316.8" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="316.8" y="405.0" text-anchor="middle" class="tm">200</text>
+<line x1="362.6" y1="50.0" x2="362.6" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="362.6" y="405.0" text-anchor="middle" class="tm">400</text>
+<line x1="408.4" y1="50.0" x2="408.4" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="408.4" y="405.0" text-anchor="middle" class="tm">600</text>
+<line x1="454.2" y1="50.0" x2="454.2" y2="390.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="454.2" y="405.0" text-anchor="middle" class="tm">800</text>
+<line x1="56.0" y1="357.4" x2="486.0" y2="357.4" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="361.4" text-anchor="end" class="tm">-600</text>
+<line x1="56.0" y1="311.6" x2="486.0" y2="311.6" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="315.6" text-anchor="end" class="tm">-400</text>
+<line x1="56.0" y1="265.8" x2="486.0" y2="265.8" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="269.8" text-anchor="end" class="tm">-200</text>
+<line x1="56.0" y1="220.0" x2="486.0" y2="220.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="224.0" text-anchor="end" class="tm">0</text>
+<line x1="56.0" y1="174.2" x2="486.0" y2="174.2" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="178.2" text-anchor="end" class="tm">200</text>
+<line x1="56.0" y1="128.4" x2="486.0" y2="128.4" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="132.4" text-anchor="end" class="tm">400</text>
+<line x1="56.0" y1="82.6" x2="486.0" y2="82.6" stroke="var(--grid)" stroke-width="1"/>
+<text x="50.0" y="86.6" text-anchor="end" class="tm">600</text>
+<rect x="56" y="50" width="430" height="340" fill="none" stroke="var(--axis)"/>
+<g clip-path="url(#clip7)">
+<path d="M296.5,360.4L313.8,390.8L332.7,364.9L325.2,330.3L294.4,325.3L296.5,360.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M355.9,335.3L373.2,365.7L392.1,339.8L384.5,305.3L353.8,300.3L355.9,335.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M407.1,184.4L414.7,218.9L436.3,245.7L455.2,219.8L437.9,189.4L407.1,184.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M443.9,280.2L436.3,245.7L414.7,218.9L395.8,244.8L413.1,275.2L443.9,280.2Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M413.1,275.2L395.8,244.8L376.9,270.8L384.5,305.3L415.3,310.3L413.1,275.2Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M353.8,300.3L336.5,269.9L317.6,295.8L325.2,330.3L355.9,335.3L353.8,300.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M294.4,325.3L277.1,294.9L258.2,320.9L265.8,355.4L296.5,360.4L294.4,325.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M325.2,330.3L317.6,295.8L296.0,269.0L277.1,294.9L294.4,325.3L325.2,330.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M288.4,234.5L296.0,269.0L317.6,295.8L336.5,269.9L319.2,239.5L288.4,234.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M317.0,204.4L299.7,174.0L280.8,199.9L288.4,234.5L319.2,239.5L317.0,204.4Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M319.2,239.5L336.5,269.9L355.4,243.9L347.8,209.4L317.0,204.4L319.2,239.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M384.5,305.3L376.9,270.8L355.4,243.9L336.5,269.9L353.8,300.3L384.5,305.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M347.8,209.4L355.4,243.9L376.9,270.8L395.8,244.8L378.5,214.4L347.8,209.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M378.5,214.4L395.8,244.8L414.7,218.9L407.1,184.4L376.4,179.4L378.5,214.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M376.4,179.4L359.1,148.9L340.2,174.9L347.8,209.4L378.5,214.4L376.4,179.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M347.8,209.4L340.2,174.9L318.6,148.1L299.7,174.0L317.0,204.4L347.8,209.4Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M311.0,113.5L318.6,148.1L340.2,174.9L359.1,148.9L341.8,118.5L311.0,113.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M339.7,83.5L322.3,53.1L303.5,79.0L311.0,113.5L341.8,118.5L339.7,83.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M370.4,88.5L362.8,54.0L341.2,27.1L322.3,53.1L339.7,83.5L370.4,88.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M341.8,118.5L359.1,148.9L378.0,123.0L370.4,88.5L339.7,83.5L341.8,118.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M370.4,88.5L378.0,123.0L399.6,149.8L418.5,123.9L401.2,93.5L370.4,88.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M407.1,184.4L399.6,149.8L378.0,123.0L359.1,148.9L376.4,179.4L407.1,184.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M435.8,154.3L418.5,123.9L399.6,149.8L407.1,184.4L437.9,189.4L435.8,154.3Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M245.7,47.7L263.0,78.1L281.9,52.2L274.3,17.7L243.5,12.7L245.7,47.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M274.3,17.7L281.9,52.2L303.5,79.0L322.3,53.1L305.0,22.7L274.3,17.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M311.0,113.5L303.5,79.0L281.9,52.2L263.0,78.1L280.3,108.5L311.0,113.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M223.0,168.6L240.4,199.1L259.2,173.1L251.7,138.6L220.9,133.6L223.0,168.6Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M282.4,143.6L299.7,174.0L318.6,148.1L311.0,113.5L280.3,108.5L282.4,143.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M251.7,138.6L259.2,173.1L280.8,199.9L299.7,174.0L282.4,143.6L251.7,138.6Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M288.4,234.5L280.8,199.9L259.2,173.1L240.4,199.1L257.7,229.5L288.4,234.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M280.3,108.5L263.0,78.1L244.1,104.1L251.7,138.6L282.4,143.6L280.3,108.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M220.9,133.6L203.6,103.2L184.7,129.1L192.3,163.7L223.0,168.6L220.9,133.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M251.7,138.6L244.1,104.1L222.5,77.3L203.6,103.2L220.9,133.6L251.7,138.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M214.9,42.7L222.5,77.3L244.1,104.1L263.0,78.1L245.7,47.7L214.9,42.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M186.3,72.8L203.6,103.2L222.5,77.3L214.9,42.7L184.2,37.7L186.3,72.8Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M126.9,97.8L144.2,128.3L163.1,102.3L155.5,67.8L124.8,62.8L126.9,97.8Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M155.5,67.8L163.1,102.3L184.7,129.1L203.6,103.2L186.3,72.8L155.5,67.8Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M192.3,163.7L184.7,129.1L163.1,102.3L144.2,128.3L161.5,158.7L192.3,163.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M161.5,158.7L144.2,128.3L125.3,154.2L132.9,188.7L163.7,193.7L161.5,158.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M96.2,92.9L103.7,127.4L125.3,154.2L144.2,128.3L126.9,97.8L96.2,92.9Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M132.9,188.7L125.3,154.2L103.7,127.4L84.9,153.3L102.2,183.7L132.9,188.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M104.3,218.8L121.6,249.2L140.5,223.2L132.9,188.7L102.2,183.7L104.3,218.8Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M169.7,284.6L162.1,250.1L140.5,223.2L121.6,249.2L138.9,279.6L169.7,284.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M132.9,188.7L140.5,223.2L162.1,250.1L181.0,224.1L163.7,193.7L132.9,188.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M163.7,193.7L181.0,224.1L199.9,198.2L192.3,163.7L161.5,158.7L163.7,193.7Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M259.8,264.5L277.1,294.9L296.0,269.0L288.4,234.5L257.7,229.5L259.8,264.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M257.7,229.5L240.4,199.1L221.5,225.0L229.0,259.5L259.8,264.5L257.7,229.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M192.3,163.7L199.9,198.2L221.5,225.0L240.4,199.1L223.0,168.6L192.3,163.7Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M229.0,259.5L221.5,225.0L199.9,198.2L181.0,224.1L198.3,254.5L229.0,259.5Z" fill="var(--q2)" stroke="var(--axis)" stroke-width="1"/>
+<path d="M198.3,254.5L181.0,224.1L162.1,250.1L169.7,284.6L200.4,289.6L198.3,254.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M200.4,289.6L217.7,320.0L236.6,294.0L229.0,259.5L198.3,254.5L200.4,289.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M229.0,259.5L236.6,294.0L258.2,320.9L277.1,294.9L259.8,264.5L229.0,259.5Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M265.8,355.4L258.2,320.9L236.6,294.0L217.7,320.0L235.1,350.4L265.8,355.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M235.1,350.4L217.7,320.0L198.9,345.9L206.4,380.4L237.2,385.4L235.1,350.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M169.7,284.6L177.3,319.1L198.9,345.9L217.7,320.0L200.4,289.6L169.7,284.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M206.4,380.4L198.9,345.9L177.3,319.1L158.4,345.0L175.7,375.5L206.4,380.4Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M141.1,314.6L158.4,345.0L177.3,319.1L169.7,284.6L138.9,279.6L141.1,314.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<path d="M138.9,279.6L121.6,249.2L102.7,275.1L110.3,309.6L141.1,314.6L138.9,279.6Z" fill="transparent" stroke="var(--axis)" stroke-width="1"/>
+<circle cx="271.0" cy="220.0" r="68.7" fill="none" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+<path d="M347.8,209.4L355.4,243.9L376.9,270.8L395.8,244.8L378.5,214.4L347.8,209.4Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M378.5,214.4L395.8,244.8L414.7,218.9L407.1,184.4L376.4,179.4L378.5,214.4Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M376.4,179.4L359.1,148.9L340.2,174.9L347.8,209.4L378.5,214.4L376.4,179.4Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M347.8,209.4L340.2,174.9L318.6,148.1L299.7,174.0L317.0,204.4L347.8,209.4Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M311.0,113.5L318.6,148.1L340.2,174.9L359.1,148.9L341.8,118.5L311.0,113.5Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M407.1,184.4L399.6,149.8L378.0,123.0L359.1,148.9L376.4,179.4L407.1,184.4Z" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<path d="M288.4,234.5L296.0,269.0L317.6,295.8L336.5,269.9L319.2,239.5L288.4,234.5Z" fill="none" stroke="var(--bad)" stroke-width="2.5"/>
+<circle cx="309.9" cy="254.3" r="5" fill="var(--bad)" stroke="var(--surface)" stroke-width="2"/>
+<path d="M376.4,179.4L359.1,148.9L340.2,174.9L347.8,209.4L378.5,214.4L376.4,179.4Z" fill="none" stroke="var(--s1)" stroke-width="2.5"/>
+<circle cx="367.2" cy="183.4" r="5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<path d="M262.0,220.0 l18,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+</g>
+<text x="319.9" y="272.3" text-anchor="start" class="small h halo">drone 227 m off: in</text>
+<text x="357.2" y="171.4" text-anchor="end" class="small h halo">449 m off: out</text>
+<text x="283.0" y="210.0" text-anchor="start" class="small h halo">airliner</text>
+<text x="56.0" y="18.0" text-anchor="start" class="h">From above</text>
+<text x="56.0" y="36.0" text-anchor="start" class="small t2">11 cells with centres within 300 m: a drone's cell counts from 202 to 434 m out</text>
+<text x="271.0" y="424.0" text-anchor="middle" class="small t2">metres east of the airliner</text>
+<text x="16.0" y="220.0" text-anchor="middle" class="small t2" transform="rotate(-90 16 220.0)">metres north</text>
+<rect x="560" y="372.1" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="354.2" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="336.3" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="318.4" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="300.5" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="282.6" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="264.7" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="246.8" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="228.9" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="211.1" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="193.2" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="175.3" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="157.4" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="139.5" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="121.6" width="170" height="17.9" fill="var(--q2)" stroke="var(--axis)"/>
+<rect x="560" y="103.7" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="85.8" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="67.9" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<rect x="560" y="50.0" width="170" height="17.9" fill="transparent" stroke="var(--axis)"/>
+<text x="554.0" y="394.0" text-anchor="end" class="tm">720</text>
+<text x="554.0" y="358.2" text-anchor="end" class="tm">780</text>
+<text x="554.0" y="322.4" text-anchor="end" class="tm">840</text>
+<text x="554.0" y="286.6" text-anchor="end" class="tm">900</text>
+<text x="554.0" y="250.8" text-anchor="end" class="tm">960</text>
+<text x="554.0" y="215.1" text-anchor="end" class="tm">1020</text>
+<text x="554.0" y="179.3" text-anchor="end" class="tm">1080</text>
+<text x="554.0" y="143.5" text-anchor="end" class="tm">1140</text>
+<text x="554.0" y="107.7" text-anchor="end" class="tm">1200</text>
+<text x="554.0" y="71.9" text-anchor="end" class="tm">1260</text>
+<text x="554.0" y="71.9" text-anchor="end" class="tm">1260</text>
+<line x1="558.0" y1="312.5" x2="732.0" y2="312.5" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="558.0" y1="133.5" x2="732.0" y2="133.5" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+<path d="M591,222.98245614035088 l18,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>
+<text x="616.0" y="227.0" text-anchor="start" class="small h halo">airliner 1000 m</text>
+<circle cx="670" cy="270.7" r="5" fill="var(--bad)" stroke="var(--surface)" stroke-width="2"/>
+<text x="661.0" y="274.7" text-anchor="end" class="small h halo">-80 m</text>
+<circle cx="700" cy="342.3" r="5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<text x="691.0" y="346.3" text-anchor="end" class="small h halo">-200 m</text>
+<text x="560.0" y="18.0" text-anchor="start" class="h">From the side</text>
+<text x="560.0" y="36.0" text-anchor="start" class="small t2">layers 840 to 1170 m</text>
+<text x="645.0" y="424.0" text-anchor="middle" class="small t2">metres above sea level</text>
+<rect x="56" y="438" width="12" height="12" rx="2" fill="var(--q2)"/>
+<text x="74.0" y="448.0" text-anchor="start" class="small t2">the airliner's volume</text>
+<line x1="229.0" y1="444.0" x2="247.0" y2="444.0" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 3"/>
+<text x="253.0" y="448.0" text-anchor="start" class="small t2">300 m and ±150 m</text>
+<rect x="374" y="439" width="10" height="10" fill="none" stroke="var(--bad)" stroke-width="2"/>
+<text x="391.0" y="448.0" text-anchor="start" class="small t2">drone inside</text>
+<rect x="484" y="439" width="10" height="10" fill="none" stroke="var(--s1)" stroke-width="2"/>
+<text x="501.0" y="448.0" text-anchor="start" class="small t2">drone outside (dashed: its drone zone)</text>
+</svg>

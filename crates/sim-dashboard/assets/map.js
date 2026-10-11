@@ -439,6 +439,18 @@
 
   // ----------------------------------------------------------- geofences
 
+  // The ring drawn round a manned aircraft: 1 000 ft across the ground, and
+  // the height within which a drone inside it has lost separation (the
+  // conflict service's default manned_vertical_m).
+  const SEPARATION_H_M = 1_000 * 0.3048;
+  const SEPARATION_V_M = 150;
+
+  // Altitude above mean sea level as a flight level in thousands of feet,
+  // rounded down: 1 000 ft is FL1, 23 100 ft is FL23.
+  function flightLevel(altM) {
+    return `FL${Math.max(0, Math.floor(altM / 0.3048 / 1_000))}`;
+  }
+
   // A circle on the ground as a ring of [lon, lat], for drawing.
   function circleRing(lon, lat, radiusM, sides = 64) {
     const k = 180 / Math.PI / 6_371_000;
@@ -669,6 +681,7 @@
   const SIDC = {
     drone: 'SFAPMHQ--------',         // friend, air, military rotary-wing UAV
     intruder: 'SUAPMHQ--------',         // unknown, air, military rotary-wing UAV
+    aircraft: 'SNAPCF---------',         // neutral, air, civilian fixed-wing (CoT a-n-A-C-F)
     person: '10011100001103000000',   // unknown, land civilian unit, individual
     station: 'SFGPIBA---H----',       // friend, ground installation, airport / air base
   };
@@ -1127,6 +1140,41 @@
     // POIs first, so drones draw on top of them.
     const shown = entities.filter((e) => (e.kind === 'poi' ? layers.pois : layers.drones));
     const ordered = shown.sort((a, b) => (a.kind === 'poi' ? 0 : 1) - (b.kind === 'poi' ? 0 : 1));
+
+    // A 1 000 ft ring round each manned aircraft, red while a drone or
+    // intruder is inside it and within SEPARATION_V_M above or below: a loss
+    // of separation you can see.
+    const others = shown.filter((e) => e.kind === 'drone' || e.kind === 'intruder');
+    for (const a of shown.filter((e) => e.kind === 'aircraft')) {
+      const at = predicted(a, now);
+      const lost = others.some((o) => {
+        const p = predicted(o, now);
+        const north = (p.lat - at.lat) * 111_320;
+        const east = (p.lon - at.lon) * 111_320 * Math.cos((at.lat * Math.PI) / 180);
+        return Math.hypot(east, north) <= SEPARATION_H_M && Math.abs(o.alt_m - a.alt_m) <= SEPARATION_V_M;
+      });
+      ctx.beginPath();
+      circleRing(at.lon, at.lat, SEPARATION_H_M).forEach(([lon, lat], i) => {
+        const [px, py] = project(lon, lat);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.setLineDash(lost ? [] : [5, 4]);
+      ctx.strokeStyle = lost ? bad : ink;
+      ctx.globalAlpha = lost ? 1 : 0.6;
+      ctx.lineWidth = lost ? 2.5 : 1.25;
+      ctx.stroke();
+      if (lost) {
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = bad;
+        ctx.fill();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.5;
+    }
+
     for (const e of ordered) {
       const at = e.kind === 'poi' ? null : predicted(e, now);
       const [x, y] = at ? project(at.lon, at.lat) : project(e.lon, e.lat);
@@ -1149,17 +1197,24 @@
         ctx.globalAlpha = 1;
         ctx.lineWidth = 1.5;
       } else {
-        const sidc = e.kind === 'intruder' ? SIDC.intruder : SIDC.drone;
+        const sidc = SIDC[e.kind] || SIDC.drone;
         const reach = stamp(ctx, sidc, size, x, y, moving ? at.hdg : null);
-        if (reach === null) arrow(x, y, at.hdg, e.kind === 'intruder' ? bad : accent, panel);
+        if (reach === null) arrow(x, y, at.hdg, e.kind === 'drone' ? accent : bad, panel);
         else right = reach + 4;
       }
       // Drones parked together on a roof would print their names on top of
-      // each other: name the ones moving, and the rest once zoomed in. A
-      // drone's label says what it is doing, or failing that its mode.
-      if (e.callsign && (moving || namePois || (e.kind === 'intruder'))) {
+      // each other: name the ones in the air (hovering too), and the rest
+      // once zoomed in. A drone's label says what it is doing, or failing
+      // that its mode, and everything in the air its flight level.
+      const grounded = e.kind === 'drone'
+        && (e.mode === 'disarmed' || e.activity === 'idle' || e.activity === 'charging');
+      const airborne = e.kind !== 'poi' && !grounded;
+      if (e.callsign && (moving || airborne || namePois)) {
         const doing = e.activity || e.mode;
-        const label = e.kind === 'drone' && doing ? `${e.callsign} · ${doing}` : e.callsign;
+        const parts = [e.callsign];
+        if ((e.kind === 'drone' || e.kind === 'aircraft') && doing) parts.push(doing);
+        if (e.kind !== 'poi') parts.push(flightLevel(e.alt_m));
+        const label = parts.join(' · ');
         haloText(label, x + right, y + 4, panel, ink);
         ctx.lineWidth = 1.5;
       }
@@ -1228,14 +1283,25 @@
     }
   }
 
+  // The rewind cursor (timeline.js): the tick to show while reviewing the
+  // past, or null for the live world.
+  function rewindAt() {
+    return window.krabshellRewind ? window.krabshellRewind.at() : null;
+  }
+
+  function withAt(url) {
+    const at = rewindAt();
+    return at === null ? url : `${url}${url.includes('?') ? '&' : '?'}at=${at}`;
+  }
+
   async function refreshEntities() {
     try {
       const kinds = [
-        ...(layers.drones ? ['drone', 'intruder'] : []),
+        ...(layers.drones ? ['drone', 'intruder', 'aircraft'] : []),
         ...(layers.pois ? ['poi'] : []),
       ];
       const response = kinds.length
-        ? await fetch(`/api/v1/state/entities?kind=${kinds.join(',')}`)
+        ? await fetch(withAt(`/api/v1/state/entities?kind=${kinds.join(',')}`))
         : null;
       if (!response) entities = [];
       if (response && response.ok) {
@@ -1243,16 +1309,18 @@
         const tick = Number(response.headers.get('x-sim-tick'));
         updateClock(
           tick,
-          response.headers.get('x-sim-mode') || '',
+          // A rewound world stands still between the cursor's moves.
+          rewindAt() === null ? response.headers.get('x-sim-mode') || '' : 'paused',
           Number(response.headers.get('x-sim-tick-seconds')) || 0,
           performance.now(),
         );
         recordSamples(tick);
       }
 
+      // Sightings fade out as they come; a rewound world has none to add.
       const since = lastReport ?? 0;
-      const reports = await fetch(`/api/v1/reports?since=${since}`);
-      if (reports.ok) {
+      const reports = rewindAt() === null ? await fetch(`/api/v1/reports?since=${since}`) : null;
+      if (reports && reports.ok) {
         const body = await reports.json();
         // The first poll only finds out where the stream is, so opening the
         // page does not replay minutes of old sightings at once.
@@ -1284,13 +1352,13 @@
   async function refreshSlow() {
     try {
       if (layers.people) {
-        const response = await fetch('/api/v1/state/entities?kind=person,vehicle');
+        const response = await fetch(withAt('/api/v1/state/entities?kind=person,vehicle'));
         if (response.ok) people = await response.json();
       } else {
         people = [];
       }
       if (layers.deliveries || layers.stations || layers.rois || layers.range) {
-        const response = await fetch('/api/v1/state/overlays');
+        const response = await fetch(withAt('/api/v1/state/overlays'));
         if (response.ok) {
           const body = (await response.json()) || {};
           const list = (key, on) => (on && Array.isArray(body[key]) ? body[key] : []);
@@ -1341,7 +1409,7 @@
     inFlight = true;
     try {
       const res = displayResolution();
-      const response = await fetch(`/api/v1/state/map${res ? `?res=${res}` : ''}`);
+      const response = await fetch(withAt(`/api/v1/state/map${res ? `?res=${res}` : ''}`));
       if (!response.ok) {
         const problem = await response.json().catch(() => ({ detail: response.statusText }));
         status.textContent = problem.detail || 'The map could not be loaded.';
@@ -1604,6 +1672,15 @@
 
   window.addEventListener('keydown', (event) => {
     if (tool && tool.key && tool.key(event)) draw();
+  });
+
+  // The rewind cursor moved, or review began or ended: show that tick now
+  // rather than at the next poll.
+  document.addEventListener('krabshell:at', () => {
+    sightings = [];
+    refresh();
+    refreshEntities();
+    refreshSlow();
   });
 
   drawKeys();

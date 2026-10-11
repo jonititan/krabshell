@@ -110,6 +110,9 @@ def nice_ticks(lo, hi, n=5):
     return out
 
 
+CLIPS = 0
+
+
 class Plane:
     """A plan view in metres east and north of a reference, equal scale."""
 
@@ -146,7 +149,11 @@ class Plane:
         """Hairline grid in metres, with ticks on the left and bottom."""
         (e0, n0), (e1, n1) = self.ext
         x0, y0, w, h = self.box
-        clip = f"clip{id(self)}"
+        # Numbered in drawing order, so a figure drawn again from the same
+        # data is the same file.
+        global CLIPS
+        CLIPS += 1
+        clip = f"clip{CLIPS}"
         svg.add(f'<clipPath id="{clip}"><rect x="{x0}" y="{y0}" width="{w}" height="{h}"/></clipPath>')
         lo_e, hi_e = (x0 - self.ox) / self.k, (x0 + w - self.ox) / self.k
         lo_n, hi_n = (self.oy - y0 - h) / self.k, (self.oy - y0) / self.k
@@ -449,6 +456,87 @@ def detection(d, out):
     svg.save(out / "conflict-detection.svg")
 
 
+def protection(d, out):
+    P = d["protection"]
+    w, h = 760, 460
+    svg = Svg(
+        w, h, "A manned aircraft's protected volume on the grid",
+        f"An airliner at {P['alt_m']:.0f} m. Left, from above: the A5 cells (resolution "
+        f"{P['resolution']}, about {P['edge_m']:.0f} m) whose centres are within "
+        f"{P['lateral_m']:.0f} m of it make its volume. A drone counts only the cell it is in: "
+        f"one 230 m away is inside, one 450 m away is outside, and the cell and ring it keeps "
+        f"from other drones do not count against the airliner. Right, from the side: the 30 m "
+        f"layers within {P['vertical_m']:.0f} m above and below, {P['covered_m'][0]:.0f} to "
+        f"{P['covered_m'][1]:.0f} m.",
+    )
+    ref = P["at"]
+    # Plan view.
+    pw, ph = 430, h - 120
+    x0, y0 = 56, 50
+    plane0 = Plane(ref, 0, 0, 1, 1, ((0, 0), (1, 1)))
+    pts = [plane0.en(lat, lon) for c in P["cells"] for lon, lat in c["ring"]]
+    half = max(max(abs(e) for e, _ in pts), max(abs(n) for _, n in pts)) * 0.82
+    plane = Plane(ref, x0, y0, pw, ph, ((-half, -half), (half, half)))
+    clip = plane.frame(svg, label_axes=True, step=200)
+    svg.add(f'<g clip-path="url(#{clip})">')
+    for c in P["cells"]:
+        fill = "var(--q2)" if c["in"] else "transparent"
+        svg.add(f'<path d="{plane.path(c["ring"])}" fill="{fill}" stroke="var(--axis)" stroke-width="1"/>')
+    # The nominal minimum, a circle round the airliner.
+    cx, cy = plane.px(0, 0)
+    svg.add(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{P["lateral_m"] * plane.k:.1f}" fill="none" '
+            f'stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>')
+    inside, outside = P["drones"]
+    for zc in outside["zone"]:
+        svg.add(f'<path d="{plane.path(zc)}" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-dasharray="3 3"/>')
+    for dr, col in ((inside, "bad"), (outside, "s1")):
+        svg.add(f'<path d="{plane.path(dr["cell"])}" fill="none" stroke="var(--{col})" stroke-width="2.5"/>')
+        x, y = plane.xy(*dr["at"])
+        svg.add(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="var(--{col})" stroke="var(--surface)" stroke-width="2"/>')
+    svg.add(f'<path d="M{cx - 9},{cy} l18,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>')
+    svg.add("</g>")
+    xi, yi = plane.xy(*inside["at"])
+    svg.text(xi + 10, yi + 18, f"drone {inside['distance_m']:.0f} m off: in", "small h halo")
+    xo, yo = plane.xy(*outside["at"])
+    svg.text(xo - 10, yo - 12, f"{outside['distance_m']:.0f} m off: out", "small h halo", "end")
+    svg.text(cx + 12, cy - 10, "airliner", "small h halo")
+    svg.text(x0, 18, "From above", "h")
+    svg.text(x0, 36, f"{P['volume_cells']} cells with centres within {P['lateral_m']:.0f} m: a drone's cell counts "
+             f"from {P['nearest_out_m']:.0f} to {P['farthest_in_m']:.0f} m out", "small t2")
+    svg.text(x0 + pw / 2, y0 + ph + 34, "metres east of the airliner", "small t2", "middle")
+    svg.text(16, y0 + ph / 2, "metres north", "small t2", "middle", f' transform="rotate(-90 16 {y0 + ph / 2})"')
+
+    # Side view: the layers.
+    sx, sw = 560, 170
+    lo, hi = P["layers"][0]["from"], P["layers"][-1]["to"]
+    k = ph / (hi - lo)
+    Y = lambda v: y0 + ph - (v - lo) * k
+    for L in P["layers"]:
+        fill = "var(--q2)" if L["in"] else "transparent"
+        svg.add(f'<rect x="{sx}" y="{Y(L["to"]):.1f}" width="{sw}" height="{(L["to"] - L["from"]) * k:.1f}" '
+                f'fill="{fill}" stroke="var(--axis)"/>')
+    for L in P["layers"][::2] + [P["layers"][-1]]:
+        svg.text(sx - 6, Y(L["from"]) + 4, fmt(L["from"]), "tm", "end")
+    for v in (P["alt_m"] - P["vertical_m"], P["alt_m"] + P["vertical_m"]):
+        svg.line(sx - 2, Y(v), sx + sw + 2, Y(v), "s2", 2, ' stroke-dasharray="6 4"')
+    ay = Y(P["alt_m"])
+    svg.add(f'<path d="M{sx + 40 - 9},{ay} l18,-6 v12z" fill="var(--ink)" stroke="var(--surface)" stroke-width="1.5"/>')
+    svg.text(sx + 56, ay + 4, f"airliner {P['alt_m']:.0f} m", "small h halo")
+    for dr, col, dx in ((inside, "bad", 110), (outside, "s1", 140)):
+        yy = Y(dr["alt_m"])
+        svg.add(f'<circle cx="{sx + dx}" cy="{yy:.1f}" r="5" fill="var(--{col})" stroke="var(--surface)" stroke-width="2"/>')
+        svg.text(sx + dx - 9, yy + 4, f"{dr['alt_m'] - P['alt_m']:+.0f} m", "small h halo", "end")
+    svg.text(sx, 18, "From the side", "h")
+    svg.text(sx, 36, f"layers {P['covered_m'][0]:.0f} to {P['covered_m'][1]:.0f} m", "small t2")
+    svg.text(sx + sw / 2, y0 + ph + 34, "metres above sea level", "small t2", "middle")
+
+    x = legend_swatches(svg, x0, h - 12, [("q2", "the airliner's volume", "box"),
+                                          ("s2", f"{P['lateral_m']:.0f} m and ±{P['vertical_m']:.0f} m", "dash"),
+                                          ("bad", "drone inside", "ring"),
+                                          ("s1", "drone outside (dashed: its drone zone)", "ring")])
+    svg.save(out / "conflict-protection.svg")
+
+
 NAMES = {
     "climb": "Climb", "descend": "Descend", "level_off": "Level off", "turn_left": "Turn left",
     "turn_right": "Turn right", "speed_up": "Speed up", "slow_down": "Slow down",
@@ -607,9 +695,10 @@ def main():
     data = json.loads(Path(sys.argv[1]).read_text())
     out = Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
-    for fig in (pipeline, cloud, cells, layers, detection, search, profiles, energy):
+    figs = (pipeline, cloud, cells, layers, detection, protection, search, profiles, energy)
+    for fig in figs:
         fig(data, out)
-    print(f"wrote 8 figures to {out}")
+    print(f"wrote {len(figs)} figures to {out}")
 
 
 if __name__ == "__main__":

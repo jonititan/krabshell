@@ -1,0 +1,16 @@
+# Iron Wolf 2026 military exercise drones near Gaižiūnai Training Area and Kaunas Airport (EYKA).
+# Low-level strike/FPV drones operating nap-of-the-earth style (inspired by low-altitude trajectory optimisation)
+# plus higher-altitude relay drones providing persistent communications (1 h endurance, staggered on-station).
+# Temporary reserved volumes around the training area; civil traffic at EYKA remains the primary deconfliction concern.
+# Gold profile for reproducibility.
+#
+# world/agents.json defines launch pads and initial drones.
+# Geofences mark exercise volumes and airport buffers.
+# No address book / delivery queue — drones fly pre-planned or behaviour-driven strike and relay missions.
+id = "iron-wolf"
+name = "Iron Wolf 2026"
+description = "Lithuanian Armed Forces / NATO Iron Wolf 2026 exercise: low-level strike drones (nap-of-the-earth, unique tracks) and persistent high-altitude relay drones near Gaižiūnai Training Area, with awareness of Kaunas Airport traffic. Gold profile."
+model = "drones"
+resolution = 15
+root = "6410800000000000"
+profile = "gold"

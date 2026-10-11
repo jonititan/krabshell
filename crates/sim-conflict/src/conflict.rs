@@ -6,13 +6,18 @@
 //! conflict when at least two aircraft put something into it and the sum
 //! reaches the threshold. Since one aircraft puts at most 1 into a cell, a
 //! threshold of 1 or more never flags an aircraft against itself.
+//!
+//! On the protected plane ([`Plane::Protected`]) a cell also needs a
+//! protected aircraft in it, and only pairs with a protected aircraft in
+//! them meet there: two drones inside an airliner's volume conflict with the
+//! airliner, not, on that account, with each other.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use sim_core::GeoCell;
 
-use crate::predict::{Key, Prediction};
+use crate::predict::{Key, Plane, Prediction};
 use crate::Config;
 
 /// A cell and layer, at a step, with more aircraft expected than allowed.
@@ -30,6 +35,65 @@ pub struct Conflict {
     pub total: f64,
     /// Each aircraft's probability, highest first.
     pub aircraft: Vec<(u64, f64)>,
+    /// Which plane: a protected aircraft's volume, or everyone's zones.
+    pub plane: Plane,
+    /// The protected aircraft among them, on the protected plane.
+    pub protected: Vec<u64>,
+}
+
+impl Conflict {
+    /// The pairs that meet here: every pair, or on the protected plane the
+    /// pairs with a protected aircraft in them.
+    pub fn pairs(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        let ids: Vec<u64> = self.aircraft.iter().map(|(a, _)| *a).collect();
+        let mut out = Vec::new();
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                if self.plane == Plane::Zones
+                    || self.protected.contains(a)
+                    || self.protected.contains(b)
+                {
+                    out.push((*a.min(b), *a.max(b)));
+                }
+            }
+        }
+        out.into_iter()
+    }
+
+    /// Who `id` is in conflict with here.
+    pub fn against(&self, id: u64) -> impl Iterator<Item = u64> + '_ {
+        self.pairs()
+            .filter(move |(a, b)| *a == id || *b == id)
+            .map(move |(a, b)| if a == id { b } else { a })
+    }
+}
+
+/// Whether the aircraft in a key can meet there: two or more, and on the
+/// protected plane at least one of them protected.
+pub(crate) fn can_meet(plane: Plane, aircraft: u32, protected: u32) -> bool {
+    aircraft >= 2 && (plane == Plane::Zones || protected >= 1)
+}
+
+/// One step's keys summed over the predictions: the total, each aircraft's
+/// share, and the protected aircraft among them.
+type Sums = BTreeMap<Key, (f64, Vec<(u64, f64)>, Vec<u64>)>;
+
+fn sums(predictions: &[&Prediction], step: usize) -> Sums {
+    let mut sums: Sums = BTreeMap::new();
+    for p in predictions {
+        let Some(cells) = p.cells.get(step) else {
+            continue;
+        };
+        for (key, prob) in cells {
+            let e = sums.entry(*key).or_default();
+            e.0 += prob;
+            e.1.push((p.id, *prob));
+            if p.protected && key.plane == Plane::Protected {
+                e.2.push(p.id);
+            }
+        }
+    }
+    sums
 }
 
 /// Every conflict among the predictions, soonest first.
@@ -37,24 +101,15 @@ pub fn detect(predictions: &[&Prediction], cfg: &Config) -> Vec<Conflict> {
     let steps = predictions.iter().map(|p| p.cells.len()).max().unwrap_or(0);
     let mut out = Vec::new();
     for step in 0..steps {
-        let mut sums: BTreeMap<Key, (f64, Vec<(u64, f64)>)> = BTreeMap::new();
-        for p in predictions {
-            let Some(cells) = p.cells.get(step) else {
-                continue;
-            };
-            for (key, prob) in cells {
-                let e = sums.entry(*key).or_default();
-                e.0 += prob;
-                e.1.push((p.id, *prob));
-            }
-        }
         let t_s = predictions
             .iter()
             .find_map(|p| p.times_s.get(step))
             .copied()
             .unwrap_or(0.0);
-        for (key, (total, mut aircraft)) in sums {
-            if aircraft.len() < 2 || total < cfg.threshold {
+        for (key, (total, mut aircraft, protected)) in sums(predictions, step) {
+            if !can_meet(key.plane, aircraft.len() as u32, protected.len() as u32)
+                || total < cfg.threshold
+            {
                 continue;
             }
             aircraft.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -67,6 +122,8 @@ pub fn detect(predictions: &[&Prediction], cfg: &Config) -> Vec<Conflict> {
                 alt_to_m: cfg.layers.bounds(key.layer).1,
                 total,
                 aircraft,
+                plane: key.plane,
+                protected,
             });
         }
     }
@@ -112,24 +169,13 @@ pub fn hotspots(predictions: &[&Prediction], cfg: &Config) -> Vec<Hotspot> {
     let steps = predictions.iter().map(|p| p.cells.len()).max().unwrap_or(0);
     let mut worst: BTreeMap<GeoCell, Hotspot> = BTreeMap::new();
     for step in 0..steps {
-        let mut sums: BTreeMap<Key, (f64, Vec<(u64, f64)>)> = BTreeMap::new();
-        for p in predictions {
-            let Some(cells) = p.cells.get(step) else {
-                continue;
-            };
-            for (key, prob) in cells {
-                let e = sums.entry(*key).or_default();
-                e.0 += prob;
-                e.1.push((p.id, *prob));
-            }
-        }
         let t_s = predictions
             .iter()
             .find_map(|p| p.times_s.get(step))
             .copied()
             .unwrap_or(0.0);
-        for (key, (summed, mut aircraft)) in sums {
-            if aircraft.len() < 2 {
+        for (key, (summed, mut aircraft, protected)) in sums(predictions, step) {
+            if !can_meet(key.plane, aircraft.len() as u32, protected.len() as u32) {
                 continue;
             }
             if worst.get(&key.cell).is_some_and(|h| h.summed >= summed) {
@@ -178,18 +224,15 @@ pub fn heat(predictions: &[&Prediction]) -> Vec<HeatCell> {
     let steps = predictions.iter().map(|p| p.cells.len()).max().unwrap_or(0);
     let mut out: BTreeMap<GeoCell, HeatCell> = BTreeMap::new();
     for step in 0..steps {
-        let mut sums: BTreeMap<Key, Vec<f64>> = BTreeMap::new();
-        for p in predictions {
-            let Some(cells) = p.cells.get(step) else {
+        for (key, (_, aircraft, protected)) in sums(predictions, step) {
+            // Off a protected volume, the protected plane only repeats where
+            // everyone is; their zones are on the other plane.
+            if key.plane == Plane::Protected && protected.is_empty() {
                 continue;
-            };
-            for (key, prob) in cells {
-                sums.entry(*key).or_default().push(*prob);
             }
-        }
-        for (key, probs) in sums {
+            let probs: Vec<f64> = aircraft.iter().map(|(_, p)| *p).collect();
             let summed: f64 = probs.iter().sum();
-            let collision = if probs.len() > 1 {
+            let collision = if can_meet(key.plane, probs.len() as u32, protected.len() as u32) {
                 two_or_more(probs.iter().copied())
             } else {
                 0.0
@@ -247,20 +290,17 @@ pub struct Encounter {
 pub fn encounters(conflicts: &[Conflict]) -> Vec<Encounter> {
     let mut pairs: BTreeMap<(u64, u64), Encounter> = BTreeMap::new();
     for c in conflicts {
-        for (i, (a, _)) in c.aircraft.iter().enumerate() {
-            for (b, _) in &c.aircraft[i + 1..] {
-                let (a, b) = if a < b { (*a, *b) } else { (*b, *a) };
-                let e = pairs.entry((a, b)).or_insert(Encounter {
-                    a,
-                    b,
-                    first_s: c.t_s,
-                    peak_total: 0.0,
-                    cells: 0,
-                });
-                e.first_s = e.first_s.min(c.t_s);
-                e.peak_total = e.peak_total.max(c.total);
-                e.cells += 1;
-            }
+        for (a, b) in c.pairs() {
+            let e = pairs.entry((a, b)).or_insert(Encounter {
+                a,
+                b,
+                first_s: c.t_s,
+                peak_total: 0.0,
+                cells: 0,
+            });
+            e.first_s = e.first_s.min(c.t_s);
+            e.peak_total = e.peak_total.max(c.total);
+            e.cells += 1;
         }
     }
     let mut out: Vec<Encounter> = pairs.into_values().collect();
@@ -283,8 +323,16 @@ mod tests {
             manoeuvre: Manoeuvre::Maintain,
             targets: Targets::default(),
             times_s: vec![5.0],
-            cells: vec![BTreeMap::from([(Key { cell, layer: 2 }, p)])],
+            cells: vec![BTreeMap::from([(
+                Key {
+                    cell,
+                    layer: 2,
+                    plane: Plane::Zones,
+                },
+                p,
+            )])],
             mean: vec![[0.0; 3]],
+            protected: false,
         }
     }
 

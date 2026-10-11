@@ -36,6 +36,7 @@
 
 pub mod agents;
 pub mod airspace;
+pub mod atc;
 pub mod behaviour;
 pub mod dispatch;
 pub mod flight;
