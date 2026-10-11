@@ -9,7 +9,7 @@ text{fill:var(--ink);font-size:13px}
 .halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
 .grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
 </style>
-<clipPath id="clip132400716534304"><rect x="64.0" y="44" width="316.0" height="280"/></clipPath>
+<clipPath id="clip2"><rect x="64.0" y="44" width="316.0" height="280"/></clipPath>
 <line x1="79.5" y1="44.0" x2="79.5" y2="324.0" stroke="var(--grid)" stroke-width="1"/>
 <text x="79.5" y="339.0" text-anchor="middle" class="tm">-400</text>
 <line x1="143.2" y1="44.0" x2="143.2" y2="324.0" stroke="var(--grid)" stroke-width="1"/>
@@ -27,7 +27,7 @@ text{fill:var(--ink);font-size:13px}
 <line x1="64.0" y1="98.9" x2="380.0" y2="98.9" stroke="var(--grid)" stroke-width="1"/>
 <text x="58.0" y="102.9" text-anchor="end" class="tm">250</text>
 <rect x="64.0" y="44" width="316.0" height="280" fill="none" stroke="var(--axis)"/>
-<g clip-path="url(#clip132400716534304)">
+<g clip-path="url(#clip2)">
 <path d="M265.1,194.4L289.2,236.7L315.5,200.6L305.0,152.6L262.2,145.7L265.1,194.4Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M305.0,152.6L294.4,104.6L264.4,67.3L238.1,103.4L262.2,145.7L305.0,152.6Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M139.8,222.3L150.4,270.3L180.4,307.6L206.6,271.6L182.6,229.3L139.8,222.3Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
@@ -44,7 +44,7 @@ text{fill:var(--ink);font-size:13px}
 <text x="64.0" y="16.0" text-anchor="start" class="h">Resolution 15: cells about 178 m</text>
 <text x="64.0" y="34.0" text-anchor="start" class="small t2">11 cells covered, the most likely 1.00</text>
 <text x="222.0" y="354.0" text-anchor="middle" class="small t2">metres east of the cloud's mean</text>
-<clipPath id="clip132400716538560"><rect x="420.0" y="44" width="316.0" height="280"/></clipPath>
+<clipPath id="clip3"><rect x="420.0" y="44" width="316.0" height="280"/></clipPath>
 <line x1="435.5" y1="44.0" x2="435.5" y2="324.0" stroke="var(--grid)" stroke-width="1"/>
 <text x="435.5" y="339.0" text-anchor="middle" class="tm">-400</text>
 <line x1="499.2" y1="44.0" x2="499.2" y2="324.0" stroke="var(--grid)" stroke-width="1"/>
@@ -62,7 +62,7 @@ text{fill:var(--ink);font-size:13px}
 <line x1="420.0" y1="98.9" x2="736.0" y2="98.9" stroke="var(--grid)" stroke-width="1"/>
 <text x="414.0" y="102.9" text-anchor="end" class="tm">250</text>
 <rect x="420.0" y="44" width="316.0" height="280" fill="none" stroke="var(--axis)"/>
-<g clip-path="url(#clip132400716538560)">
+<g clip-path="url(#clip3)">
 <path d="M532.2,129.5L534.8,141.5L542.3,150.8L548.9,141.8L542.9,131.2L532.2,129.5Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M545.0,162.8L542.3,150.8L534.8,141.5L528.3,150.5L534.3,161.1L545.0,162.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>
 <path d="M591.2,220.8L588.5,208.8L581.0,199.5L574.4,208.5L580.5,219.1L591.2,220.8Z" fill="var(--q1)" stroke="var(--surface)" stroke-width="1.5"/>

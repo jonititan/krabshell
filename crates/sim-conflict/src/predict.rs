@@ -364,6 +364,51 @@ fn turn_to(from: f64, to: f64) -> f64 {
     (to - from + 540.0).rem_euclid(360.0) - 180.0
 }
 
+/// The cells of a protected volume round a point at `lat`, `lon` in `cell`:
+/// every cell at `cell`'s resolution whose centre is within `lateral_m` of
+/// the point, and `cell` itself. Measured from the point, not from its
+/// cell's centre, so the volume moves with the aircraft rather than in
+/// cell-sized jumps.
+pub fn protected_cells(cell: GeoCell, lat: f64, lon: f64, lateral_m: f64) -> Vec<GeoCell> {
+    let mut out = vec![cell];
+    out.extend(centres_within(
+        &candidates(cell, lateral_m),
+        lat,
+        lon,
+        lateral_m,
+    ));
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Every cell that could have its centre within `lateral_m` of a point in
+/// `cell`, with that centre: A5's spherical cap round `cell`'s centre,
+/// widened by a cell's width since the point may be anywhere in `cell`.
+fn candidates(cell: GeoCell, lateral_m: f64) -> Vec<(GeoCell, f64, f64)> {
+    let edge = sim_core::cell::nominal_cell_edge_meters(cell.resolution()).max(1.0);
+    cell.spherical_cap(lateral_m + edge)
+        .unwrap_or_else(|_| vec![cell])
+        .into_iter()
+        .filter_map(|c| c.centroid().ok().map(|(clon, clat)| (c, clat, clon)))
+        .collect()
+}
+
+/// The candidates whose centres are within `lateral_m` of the point.
+fn centres_within(
+    candidates: &[(GeoCell, f64, f64)],
+    lat: f64,
+    lon: f64,
+    lateral_m: f64,
+) -> impl Iterator<Item = GeoCell> + '_ {
+    let cos_lat = libm::cos(lat.to_radians());
+    candidates.iter().filter_map(move |&(c, clat, clon)| {
+        let north = (clat - lat).to_radians() * EARTH_RADIUS_M;
+        let east = (clon - lon).to_radians() * EARTH_RADIUS_M * cos_lat;
+        (north * north + east * east <= lateral_m * lateral_m).then_some(c)
+    })
+}
+
 impl<'a> Predictor<'a> {
     pub fn new(cfg: &'a Config, wind: &'a dyn WindSource) -> Predictor<'a> {
         Predictor {
@@ -375,7 +420,8 @@ impl<'a> Predictor<'a> {
     }
 
     /// The cells whose centres are within `lateral_m` of a point in `cell`,
-    /// always with `cell` itself.
+    /// always with `cell` itself: [`protected_cells`], with the candidates
+    /// kept for every particle that lands in `cell`.
     fn volume(
         &mut self,
         cell: GeoCell,
@@ -384,25 +430,12 @@ impl<'a> Predictor<'a> {
         lateral_m: f64,
         out: &mut Vec<GeoCell>,
     ) {
-        let edge = sim_core::cell::nominal_cell_edge_meters(self.cfg.resolution).max(1.0);
-        // Enough rings to reach past lateral_m even where cells run small.
-        let rings = (libm::ceil(lateral_m / (0.5 * edge)) as usize).saturating_add(1);
-        let near = self.near.entry(cell).or_insert_with(|| {
-            cell.grid_disk(rings)
-                .unwrap_or_else(|_| vec![cell])
-                .into_iter()
-                .filter_map(|c| c.centroid().ok().map(|(clon, clat)| (c, clat, clon)))
-                .collect()
-        });
+        let near = self
+            .near
+            .entry(cell)
+            .or_insert_with(|| candidates(cell, lateral_m));
         out.push(cell);
-        let cos_lat = libm::cos(lat.to_radians());
-        for &(c, clat, clon) in near.iter() {
-            let north = (clat - lat).to_radians() * EARTH_RADIUS_M;
-            let east = (clon - lon).to_radians() * EARTH_RADIUS_M * cos_lat;
-            if north * north + east * east <= lateral_m * lateral_m {
-                out.push(c);
-            }
-        }
+        out.extend(centres_within(near, lat, lon, lateral_m));
     }
 
     /// The cells a protected zone centred in `cell` covers.

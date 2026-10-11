@@ -242,6 +242,27 @@ They hold to within the grid: a cell is in the volume when its centre is
 within 300 m of the aircraft (cells at resolution 15 are about 180 m), and a
 layer when any of it is within 150 m.
 
+![From above: an airliner and the 11 resolution-15 A5 cells whose centres are within 300 m of it, shaded, a lumpy disc round a dashed 300 m circle; a drone 227 m off is in a shaded cell, one 449 m off is not, and the ring of cells it keeps from other drones is drawn dashed. From the side: the 30 m layers from 840 to 1 170 m shaded round the airliner at 1 000 m, a drone 80 m below inside them and one 200 m below outside](figures/conflict-protection.svg)
+
+*Figure 7. An airliner's protected volume on the grid. Each of its particles
+puts itself in every cell whose centre is within `manned_lateral_m` of the
+particle, and every layer any part of which is within `manned_vertical_m`;
+a drone counts only the cell and layer it is in. Because a drone may be
+anywhere in its cell, the grid counts it from 202 m to
+434 m out rather than at exactly 300 m, and the 30 m
+layers make ±150 m into 160 m below and
+170 m above. A finer `conflict_resolution`
+narrows both.*
+
+The cells are found with A5's spherical cap (`a5::spherical_cap`, the query
+krABMaga's `SparseA5Grid::cell_spherical_cap` wraps) round the cell a
+particle is in, widened by a cell's width since the particle may be anywhere
+in it, then kept if their centre is within `manned_lateral_m` of the particle
+itself. Measuring from the particle rather than from its cell's centre moves
+the volume with the aircraft instead of in cell-sized jumps; the candidates
+are kept per cell, so the cap is worked out once per cell, not per particle
+(`protected_cells` in [`predict.rs`](../crates/sim-conflict/src/predict.rs)).
+
 This is kept apart from drone-to-drone conflicts (a second plane of keys in
 `sim-conflict`), so two drones inside an airliner's volume are each in
 conflict with the airliner, not, on that account, with each other.
@@ -276,14 +297,14 @@ separate coordination rule.
 
 ![Bar charts of every manoeuvre's score for both drones: climb and descend leave no risk and score 1.1, turns score 3 to 8, slowing down 12 to 13 and speeding up over 30; only scores below 21.6 are advised](figures/conflict-search.svg)
 
-*Figure 7. The first round of the search for the encounter in figure 6. A
+*Figure 8. The first round of the search for the encounter in figure 6. A
 score is the risk left plus the manoeuvre's cost. Climbing and descending
 both clear the conflict for either drone; UAV 1's climb is tried first and
 wins the tie. Speeding up brings the meeting forward and makes things worse.*
 
 ![Height against time: UAV 1 climbs from 60 to about 208 metres over the minute, rising out of the shared layers well before the conflict at 40 seconds; UAV 2 stays at 60 metres](figures/conflict-resolution.svg)
 
-*Figure 8. The result. After UAV 1's climb nothing is left in conflict, so
+*Figure 9. The result. After UAV 1's climb nothing is left in conflict, so
 the search stops there and UAV 2 is given no advisory: risk 22.1 before,
 0 after. Bands are the 5th to 95th percentile of the particles' heights.*
 

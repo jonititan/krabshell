@@ -45,8 +45,8 @@ pub use conflict::{
 };
 pub use performance::{FixedWing, Multirotor, Performance};
 pub use predict::{
-    AircraftState, Calm, FieldWind, GiveWay, Manoeuvre, Plane, Prediction, Predictor, Protection,
-    Targets, WindSource,
+    protected_cells, AircraftState, Calm, FieldWind, GiveWay, Manoeuvre, Plane, Prediction,
+    Predictor, Protection, Targets, WindSource,
 };
 pub use resolve::{assess, Advisory, Assessment};
 
