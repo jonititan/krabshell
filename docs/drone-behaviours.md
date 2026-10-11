@@ -81,7 +81,7 @@ can fail when their prerequisite is not met.
 |---|---|
 | `Airborne` | The drone is off the ground: not on its pad, a station or the terrain. |
 | `IsCourier` | It has courier state and the world has at least one depot. |
-| `FlownBySimulation` | The simulation flies it, rather than a ground station: couriers, spares, and drones the pack starts with `"autostart": true`. This is fixed by the pack and does not change when a ground station sends the drone commands (see [protocols.md](protocols.md#ground-stations-and-the-simulations-own-flying)). |
+| `FlownBySimulation` | The simulation flies it, rather than a ground station: couriers, drones the pack starts with `"autostart": true`, spares once they are called up, and drones that replace a crashed one of these. It does not change when a ground station sends the drone commands (see [protocols.md](protocols.md#ground-stations-and-the-simulations-own-flying)). |
 | `BackFromTrip` | It has a delivery order or survey in progress and is disarmed. |
 | `ReadyForWork` | It is idle or disarmed on its home pad, charged to the configured launch level, and has no survey in progress. A courier must also have a depot, have finished its loading delay and have no order; any other drone must be one the simulation flies. |
 | `SensorDue` | The configured sensor schedule calls for a scan on this tick. |
@@ -96,7 +96,7 @@ can fail when their prerequisite is not met.
 | `AvoidGeofences` | Applies the simulation's keep-out response to a simulation-controlled drone: reroutes or repositions it, or sends a courier home if its destination is fenced. It queues work for `ObeyCommands`; succeeds. |
 | `WaitForSlot` | Manages a station landing slot. Coming in to land at a station whose slots are all taken, the drone holds position until one is free; a drone on its low-battery failsafe lands regardless. Succeeds. |
 | `ObeyCommands` | Applies the instructions queued since the last tick, from ground stations (over [MAVLink](protocols.md#mavlink) or the API) and from `AvoidGeofences`, including mission and flight commands; succeeds. |
-| `Fly` | Advances the autopilot and battery by one simulation tick, and handles reached waypoints and landing events. Fails if the drone runs out of battery in the air and crashes. |
+| `Fly` | Advances the autopilot and battery by one simulation tick, and handles reached waypoints and landing events. A [conflict advisory](drones.md#conflict-advisories) being flown takes the place of the autopilot until it runs out. Fails if the drone runs out of battery in the air and crashes. |
 | `FinishTrip` | Completes post-trip bookkeeping. It releases an unfinished survey, requeues an undelivered order (unless a geofence now rejects it), and starts courier loading; succeeds. |
 | `TakeOrder` | Assigns the oldest eligible order at the drone's depot and starts its delivery mission. It may plan charging stops at stations. Fails if no order is available or the drone is not a courier. |
 | `Survey` | Starts a mission to the most overdue reachable region of interest, circles it with the camera on, and returns. Fails when no region is due and reachable. |

@@ -16,13 +16,13 @@ A scenario pack is a directory of plain files that says what to simulate: which 
 
 Only `manifest.toml` is required. A missing `config.toml` means the defaults below; a missing `params.toml` means no parameters, so the model's defaults. The reader is [`../crates/sim-core/src/pack.rs`](../crates/sim-core/src/pack.rs).
 
-Every `world/*.json` file other than `agents.json` and `fields.json` is read and added to the fields under its file name without the extension. A drones pack uses this to keep hand-written data apart from a large generated `fields.json`: `world/geofences.json` becomes the `geofences` field. If `fields.json` already has a key of the same name, the pack is refused rather than one silently replacing the other.
+Every `world/*.json` file other than `agents.json` and `fields.json` is read and added to the fields under its file name without the extension. Files in `world/` that do not end in `.json` are ignored. A drones pack uses this to keep hand-written data apart from a large generated `fields.json`: `world/geofences.json` becomes the `geofences` field. If `fields.json` already has a key of the same name, the pack is refused rather than one silently replacing the other.
 
 ### What the drones model reads from `world/`
 
 | File | Field | What it holds | See |
 |---|---|---|---|
-| `agents.json` | — | Drones, intruders, people, vehicles and points of interest. | [Seed agents](#seed-agents) |
+| `agents.json` | — | Drones, intruders, manned aircraft, people, vehicles and points of interest. | [Seed agents](#seed-agents) |
 | `fields.json` | `terrain` | Ground elevation grid. Without it the ground is flat at 0 m. | [Terrain](#terrain) |
 | `fields.json` | `addresses` | The address book: depots and the addresses that order deliveries. | [The address book](#the-address-book) |
 | `geofences.json` | `geofences` | Fences open from the first tick. | [Geofences](geofences.md) |
@@ -37,7 +37,7 @@ Every `world/*.json` file other than `agents.json` and `fields.json` is read and
 
 | Key | Required | Default | Meaning |
 |---|---|---|---|
-| `id` | yes | — | Load key. 1 to 64 characters of `A-Z`, `a-z`, `0-9`, `-` and `_`. Keep it the same as the directory name: the store loads a pack by its directory name. |
+| `id` | yes | — | Load key. 1 to 64 characters of `A-Z`, `a-z`, `0-9`, `-` and `_`. Must be the pack's directory name: the store finds a pack by its directory, so a pack whose `id` differs is refused when loaded and left out of the list, with a warning in the log. |
 | `name` | yes | — | Display name. |
 | `description` | no | empty | One or two sentences for the Scenarios page. |
 | `model` | yes | — | The model to build: `drones`, `walkers` or `walkers-krabmaga`. |
@@ -73,7 +73,7 @@ The run configuration is everything about how the loop runs, as opposed to what 
 | `max_published_cells` | 50000 | Most cells in one published view. At least 1. |
 | `intent_rate_per_actor` | 200 | Intents per second one actor may submit, sustained; bursts of twice this are allowed. Positive. |
 | `auto_recover` | `false` | Restart the world automatically after a tick panics. |
-| `history_every_ticks` | 100 | Ticks between rewind keyframes, in the `gold` profile. Stepping back replays at most this many ticks. |
+| `history_every_ticks` | 100 | Ticks between rewind keyframes, in the `gold` profile. Stepping back replays at most this many ticks. At least 1. |
 | `history_keyframes` | 60 | Rewind keyframes kept; 0 turns rewind off. 60 × 100 ticks is ten minutes at 0.1 s a tick. |
 
 ### `[grid]`
@@ -171,12 +171,12 @@ A walker pack's seed agents can be of any `kind`; `"state": {"anchored": true}` 
 | Key | Meaning |
 |---|---|
 | `id` | Optional. Agent ids must be unique and from 1 to 2147483647. Without one, the agent takes the next free id. |
-| `kind` | What it is. The drones model knows `drone`, `intruder`, `person`, `vehicle` and `poi`. |
-| `lon`, `lat` | Where it starts, in degrees. |
+| `kind` | What it is. The drones model knows `drone`, `intruder`, `aircraft`, `person`, `vehicle` and `poi`. |
+| `lon`, `lat` | Where it starts, in degrees. An `aircraft` needs neither: it starts at the first point of its route. |
 | `cell` | Or a cell id instead of `lon` and `lat`; the agent starts at its centre. |
 | `state` | Kind-specific settings. |
 
-The `state` each drones kind takes is listed in [Drones: agent types](drones.md#agent-types). An agent outside the root, or a `state` that does not make sense (a `depot` not in the address book, a `sysid` used twice), stops the pack loading.
+The `state` each drones kind takes is listed in [Drones: agent types](drones.md#agent-types). An agent outside the root, or a `state` that does not make sense (a `depot` not in the address book, a `sysid` used twice), stops the pack loading. For a `depot` or `spare`, the error says whether the pack has no address book at all, in which case the key should go, or lists the depots it does have.
 
 ## Terrain
 
@@ -309,17 +309,24 @@ These are described on their own pages.
 | `survey_agl_m` | 60 | m | Height above the ground a survey is flown at. Clamped to 5–500. | [Stations](stations.md) |
 | `crash_roi_radius_m` | 150 | m | Radius of the region of interest left where a drone crashes. 0 leaves none. Clamped to 0–5000. | [Stations](stations.md) |
 
+### Conflict advisories
+
+The model assesses conflicts itself and its drones and manned aircraft fly the advisories; see [Conflicts: advisories are flown](conflicts.md#advisories-are-flown). The conflicts service reads `conflict_resolution`, `manned_lateral_m` and `manned_vertical_m` too, and also `cruise_ms`, `climb_ms` and `intruder_speed_ms`.
+
+| Parameter | Default | Unit | Meaning | See |
+|---|---|---|---|---|
+| `atc` | `true` | boolean | Assess conflicts in the model and fly the advisories. Only the boolean `false` turns it off. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `atc_every_s` | 5 | s | Time between assessments. Clamped to 0.1–600 and rounded to whole ticks, at least one. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `advisory_hold_s` | 10 | s | How long an advisory is flown, renewed while what it avoids is still coming. Clamped to 0.1–600. | [Conflicts](conflicts.md#advisories-are-flown) |
+| `conflict_resolution` | the world's resolution | — | A5 resolution of the cells conflicts are assessed on, 8–18. A value outside that range is ignored. | [Conflicts](conflicts.md) |
+| `manned_lateral_m` | 300 | m | Lateral separation drones and intruders must keep from a manned aircraft. At least 0. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
+| `manned_vertical_m` | 150 | m | Vertical separation, above and below. At least 0. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
+
 ### Read by the server around the model
 
 | Parameter | Default | Meaning | See |
 |---|---|---|---|
 | `heatmap_resolution` | absent | A5 resolution (0–30) of the flight heatmap. Setting it starts a run log. | [Operating](operating.md) |
-| `conflict_resolution` | absent | Default A5 resolution (8–18) for conflict prediction. The conflicts service also reads `cruise_ms`, `climb_ms` and `intruder_speed_ms`. | [Conflicts](conflicts.md) |
-| `atc` | true | The drones model assesses conflicts itself and its drones and manned aircraft fly their advisories. `false` turns it off. | [Conflicts](conflicts.md#advisories-are-flown) |
-| `atc_every_s` | 5 | Seconds between those assessments. | [Conflicts](conflicts.md#advisories-are-flown) |
-| `advisory_hold_s` | 10 | Seconds an advisory is flown for, renewed while what it avoids is still coming. | [Conflicts](conflicts.md#advisories-are-flown) |
-| `manned_lateral_m` | 300 | Lateral separation drones and intruders must keep from a manned aircraft, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
-| `manned_vertical_m` | 150 | Vertical separation, above and below, m. | [Conflicts](conflicts.md#manned-aircraft-protected-volume-and-giving-way) |
 | `weather` | `"off"` | `"off"`, `"recorded"` or `"live"`. | [Weather](weather.md) |
 | `weather_start_utc` | none | UTC time of tick 0 for recorded weather, e.g. `"2026-03-14T06:00:00Z"`. Required when `weather = "recorded"`. | [Weather](weather.md) |
 | `weather_hours` | 24 | Hours of weather to fetch, 1–384. | [Weather](weather.md) |
@@ -340,6 +347,7 @@ Weather is fetched by the server when a pack loads. `simctl` and `krab-drones` d
 | `london-patrol` | `drones` | `gold` | The smallest complete drones world, and the commented example to copy. |
 | `kaunas-deliveries` | `drones` | `gold` | Deliveries over real terrain and real addresses, with geofences, crashes, spares, recorded weather and a run log. |
 | `swarm-survey` | `drones` | `fast` | Load on the MAVLink and CoT gateways. |
+| `iron-wolf` | `drones` | `gold` | Drones looping sorties on their own, stations, and manned aircraft they must give way to. |
 
 **`london-patrol`.** Four drones over central London, resolution 15 inside root `6361800000000000`. HAWK-1, HAWK-2 and HAWK-3 start on looping patrols (`autostart`, with a `DO_JUMP` back to the first waypoint) over Westminster, the City and the South Bank. UAV-4 waits on the ground for a ground station to take it. There are 1200 people and 150 vehicles within 1800 m of the origin, ten named landmarks as points of interest, and one intruder, UNKNOWN-1, flying a four-point circuit at 14 m/s. `battery_drain_pct_s = 0`, so the patrols fly for ever; set a drain to see low-battery returns. Because the patrols are flown by the simulation, they are kept clear of any geofence opened from the dashboard.
 
@@ -354,6 +362,13 @@ Weather is fetched by the server when a pack loads. `simctl` and `krab-drones` d
 The recorded weather is fetched from Open-Meteo the first time the pack loads and cached in `var/weather-cache/`. With `--no-weather`, and nothing cached, the pack refuses to load. `world/agents.json` and `world/fields.json` are generated by `tools/kaunas_deliveries.py`; the zones in `world/geofences.json` by `tools/lt_geozones.py`.
 
 **`swarm-survey`.** Thirty drones on the ground in central London, all left to ground stations, with ten points of interest, two intruders (one at 20 m/s), 4000 people and 1000 vehicles within 4 km. The cameras reach 300 m and scan every 2 s, reporting each target at most every 30 s. It does not set `battery_drain_pct_s` or `charge_pct_s`, so drones a ground station flies have the default 25-minute endurance and no charger. Fast profile: use it for gateway load, not replay.
+
+**`iron-wolf`.** Drones at the Gaižiūnai training area, north-east of Kaunas, with traffic in and out of Kaunas Airport, resolution 15 inside root `6410800000000000`. Twelve drones fly from tick 0 (`autostart`), each mission ending in `NAV_LAND` on its pad and a `DO_JUMP` back to the takeoff for ever:
+
+- STRIKE-1 to STRIKE-8 fly four waypoints each, 25 to 60 m above the terrain;
+- RELAY-1 to RELAY-4 climb to 300, 500, 700 and 900 m above the terrain and loiter there for 420, 360, 300 and 240 s.
+
+Each takeoff waits on the pad for 90 % (`launch_battery_pct`), charging at 0.05 %/s; the battery lasts about 21 minutes at the 18 m/s `cruise_ms`. Two manned aircraft fly every 900 s: ARR26, an arrival from 1524 m above sea level down to 78 m at the airport, from 120 s, and DEP26, a departure from there climbing to 3000 m, from 570 s. The separations from them are the defaults, written out. `world/stations.json` has three stations (8, 6 and 4 slots) on the pads of STRIKE-1, STRIKE-2 and RELAY-1. There are two points of interest (the training area and the airport), and 800 people and 120 vehicles within 8 km. The terrain is a flat 85 m stub, `world/geofences.json` is an empty list, and `world/regions.js` is not read, as it is not a `.json` file, so the pack has no fences and no regions of interest. The drones' `role` and `cruise_agl_m` are not read either: none is a courier. It has recorded weather for 2026-05-12 from 08:00 UTC, twelve hours, fetched over its `weather_bbox` at resolution 11, and a run log, from `heatmap_resolution = 15`.
 
 ### `bench/scenarios/`
 

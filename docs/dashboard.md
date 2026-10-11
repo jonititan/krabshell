@@ -99,6 +99,8 @@ The panel also raises banners for three faults:
 Above the control panel, **⏪ Rewind** pauses the run and lets you step back
 through what just happened, then replay it and carry on.
 
+- Out of review the strip says how far back it reaches (`10.0 min to
+  rewind`).
 - **⏪ Rewind** pauses the run (so the past stops growing) and puts you in
   review at the current tick. The strip turns amber and reads
   `REVIEW · tick 2 470 · 00:04:07 · 30.1 s behind now`.
@@ -107,7 +109,8 @@ through what just happened, then replay it and carry on.
 - **▶ Replay** plays forward from the cursor at the chosen speed (×1 is real
   time, up to ×64). When it reaches now, review ends and the run starts again
   at the speed it had: what already happened plays first, then the simulation
-  picks up where it left off. Press it again to pause the replay.
+  picks up where it left off. While it plays the button reads **❚❚ Pause**;
+  press it to pause the replay.
 - **⏭ Now** leaves review without starting the run. Pressing Start or Step on
   the control panel also ends review.
 
@@ -115,8 +118,9 @@ While reviewing, the maps (drones, aircraft and their rings, people and
 vehicles, occupancy, overlays), the cell inspector and the Conflicts screen's
 heatmap and tables show the cursor's tick. The control panel, the geofence and
 station lists and anything sent out (MAVLink, CoT, run logs) stay live.
-Sightings, which fade in as they are reported, are not replayed. Each browser
-tab has its own cursor, kept while you move between pages.
+Sightings and drop-offs, which fade in as they are reported, are not
+replayed. Each browser tab has its own cursor, kept while you move between
+pages (`sessionStorage`, key `krabshell.rewind`).
 
 The past is rebuilt, not recorded. Every `run.history_every_ticks` ticks (100)
 the driver hands a keyframe of the world to a history thread, which keeps the
@@ -124,8 +128,11 @@ last `run.history_keyframes` (60: ten minutes at 0.1 s a tick), and every intent
 applied since the oldest. To show a tick it restores the keyframe before and
 replays the intents and steps up to it, so what you see is the world exactly
 as it was, conflicts included. That needs the `gold` profile, which replays to
-the bit; with `fast` the strip says rewind is unavailable. A load, reset or
-checkpoint restore starts the history again.
+the bit, and a model that can hand its world over cheaply (the drones can,
+the walkers cannot). Otherwise, or with `run.history_keyframes` at 0, the
+strip says rewind is unavailable and why. A load, reset, checkpoint restore
+or config change that rebuilds the world starts the history again, and picks
+up any new history settings.
 
 ## Run
 
@@ -222,12 +229,19 @@ picks the A5 resolution conflicts are counted at; it posts to
 `/actions/conflicts/resolution` (API: `PUT /api/v1/conflicts/settings`) and
 applies at once.
 
-Below the map, two server-rendered tables refresh every two seconds
-(`/fragments/conflicts`): **Requests for conflict resolution** (the advisory
-for each aircraft, who it conflicts with, how soon, the total risk before and
-after, and the outcome) and the **Top 10 A5 cells by conflict probability**.
-Clicking a row picks its cell out on the map and centres on it. The tables
-work without JavaScript; the map does not. See [conflicts.md](conflicts.md).
+Below the map, server-rendered tables refresh every two seconds, and at once
+when the rewind cursor moves (`/fragments/conflicts`):
+
+- **Advisories being flown**: what the simulation last told each aircraft,
+  from the model's `atc` overlay (the aircraft, its advisory, and who it is
+  keeping clear of). Shown only when the pack runs advisories.
+- **Requests for conflict resolution**: the advisory for each aircraft, who it
+  conflicts with, how soon, the total risk before and after, and the outcome.
+- **Top 10 A5 cells by conflict probability**. Clicking a row picks its cell
+  out on the map and centres on it.
+
+The tables work without JavaScript; the map does not. See
+[conflicts.md](conflicts.md).
 
 ## Intents
 
@@ -239,8 +253,10 @@ Despawn with no agent clears the whole cell; move needs an agent id.
 
 The **Activity** table lists recent intents (tick, actor, verb, cell,
 outcome), refreshed every two seconds. The result of your own submission
-appears in a banner under the form, and stays until you submit again. Intents from the dashboard are subject to the same
-per-actor rate limit as any other.
+appears in a banner under the form, which the poll leaves alone: a green one
+fades after six seconds, and an amber or red one stays until you submit
+again. Intents from the dashboard are subject to the same per-actor rate limit
+as any other.
 
 ## Import / export
 

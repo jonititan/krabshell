@@ -25,15 +25,19 @@ example; see [Regenerating the figures](#regenerating-the-figures).
 
 The assessment takes every aircraft in the air at the current tick:
 
-- **Drones**, unless they are on the ground: a drone that is disarmed, idle or
-  charging is left out.
+- **Drones**, unless they are on the ground, taking off or landing: a drone
+  that is disarmed, idle, charging, or in its takeoff or land mode is left
+  out. The stations' slots keep drones on and over their pads apart.
 - **Intruders**, always.
 - **Manned aircraft** (the drones model's `aircraft` kind) while they fly
   their route; one parked between flights is left out.
 
 For each it reads the position, altitude, airspeed (or ground speed if no
 airspeed is published), heading (where the nose points), vertical speed and
-callsign from the published state. Turn rate is taken as zero.
+callsign from the published state. Turn rate is taken as zero. Intruders
+publish only their ground speed and track, so they are predicted flying
+those through the air, with the wind added on top; in a wind an intruder's
+cloud drifts downwind of where it will really go.
 
 Each kind flies with a performance model built from the pack's params:
 
@@ -57,7 +61,9 @@ predicted in still air.
 
 Altitudes here are above mean sea level, as the drones report them. The wind
 lookup takes that altitude as height above the ground, so over high terrain
-the predicted wind is taken from higher up than the drones' own.
+the predicted wind is taken from higher up than the drones' own. The lowest
+altitude a descent is advised at (20 m) is likewise above sea level, not
+above the ground.
 
 ## How an aircraft is predicted
 
@@ -137,7 +143,8 @@ flying.
 krabshell's drones and intruders are all multirotors. Its manned aircraft
 (the drones model's `aircraft` kind) are assessed as the generic narrow-body
 jet, on the drones preset's cells, layers and horizon, with their own
-protected volume, advised only when no drone can resolve a conflict (see above). Fixed-wing
+protected volume, advised only when no drone can resolve a conflict (see
+[giving way](#manned-aircraft-protected-volume-and-giving-way)). Fixed-wing
 aircraft are also used by the `airliners` preset, the tests and the example. No BADA or OpenAP
 aircraft data is included: BADA's is licensed by EUROCONTROL and OpenAP's is
 LGPL. `FixedWing`'s fields are named as OpenAP names them, so either source
@@ -280,7 +287,8 @@ by the manned aircraft. In `sim-conflict` this is each aircraft's `give_way`:
 Advisories are chosen greedily, using the prediction itself as the judge.
 
 1. With everyone carrying on as they are, find the conflicts.
-2. For every aircraft in a conflict that has no advisory yet, try each
+2. For every aircraft in a conflict that has no advisory yet and may be
+   advised this round (see [giving way](#manned-aircraft-protected-volume-and-giving-way)), try each
    manoeuvre it can fly, predict it again flying that manoeuvre, and score
    the risk left. Each manoeuvre is charged a cost, as a share of the risk,
    so that vertical manoeuvres are preferred, as in airborne collision
@@ -289,7 +297,9 @@ Advisories are chosen greedily, using the prediction itself as the judge.
    only if that total is more than 2 % below the risk of carrying on, and
    commit that aircraft to it.
 4. Go back to step 2 until nothing is in conflict, no manoeuvre helps, or 16
-   advisories have been given.
+   advisories (or one per aircraft, if fewer) have been given. When no
+   drone's manoeuvre helps, the manned aircraft are added to the search
+   before giving up.
 
 Because the second aircraft is advised knowing the first's advisory, the two
 come out complementary (one climbs, the other descends or holds) without a
@@ -327,9 +337,10 @@ peak number of aircraft expected in a cell they share. They are what the
 advisories could not fix, either because no single manoeuvre helped enough
 or because the limit was reached.
 
-**Not flown.** krabshell does not send the advisories to the drones, to a
-ground station or over MAVLink or CoT. An operator who wants a drone to act on
-one has to command it.
+**Not sent.** The dashboard's assessment (the screen and the API) only
+reports its advisories. Neither it nor the simulation's own assessment sends
+anything to a ground station or over MAVLink or CoT. The aircraft fly the
+simulation's own advisories, described next.
 
 ## Advisories are flown
 
@@ -368,12 +379,18 @@ rewind replays them exactly. A pack turns it off with `atc = false`.
 
 ## When it runs
 
-The assessment runs off the tick thread, on a blocking worker, and at most
+The dashboard's assessment runs off the tick thread, on a blocking worker, and at most
 once per published tick at a given resolution: a second request for the same
 tick gets the same report. It runs only while someone is looking. A request
 to the API or the Conflicts screen counts as a look; for 30 seconds after the
 last one the server works it out again every 2 seconds in the background, so
 the report is ready. A run nobody watches pays nothing for it.
+
+A past tick can be assessed too, while it is in the rewind history (see
+[Rewind](dashboard.md#rewind)): `?at=` on the API, or the Conflicts
+screen while it is rewound. The world is taken as it was at that tick, with
+the weather field the run has now. The last 16 such reports are kept, so a
+replay that asks again gets the same one.
 
 Cost grows with the number of aircraft and with the number of aircraft in
 conflict. Each aircraft costs one prediction (200 particles, 60 substeps), and
@@ -394,7 +411,7 @@ cargo run --release -p sim-conflict --example head_on
 ## The Conflicts screen
 
 The dashboard's **Conflicts** screen ([Dashboard](dashboard.md#conflicts))
-has a map and two tables.
+has a map and up to three tables. Rewound, it shows the tick rewound to.
 
 **Heatmap.** Every A5 cell any aircraft could be in over the next minute is
 shaded at its highest, over every layer and step, so each aircraft's spread
@@ -411,7 +428,13 @@ with everyone carrying on as they are, not from the advised ones.
 - The other map layers (drones, stations, geofences and so on) can be shown
   on top (see [Map](map.md)).
 
-**Requests for conflict resolution.** One row per advisory: the aircraft,
+**Advisories being flown.** What the simulation's own assessment last told
+the aircraft (its `atc` overlay; see [Advisories are flown](#advisories-are-flown)):
+each aircraft, its advisory and who it is keeping clear of, with the tick
+assessed, the aircraft in the air, and any pairs still in conflict. Not shown
+when a pack turns `atc` off.
+
+**Requests for conflict resolution.** The dashboard's own assessment. One row per advisory: the aircraft,
 what it is asked to do (for example "Climb at 2.5 m/s" or "Turn right to
 135°"), who it was in conflict with, when its first conflict is, the total
 risk before and after, and whether it clears it or leaves it still in
@@ -435,7 +458,7 @@ Both endpoints are under `/api/v1` and need the dashboard token (see
 
 | Method | Path | |
 |---|---|---|
-| GET | `/conflicts` | The assessment of the current tick. `?outlines=false` leaves out the cell outlines. |
+| GET | `/conflicts` | The assessment of the current tick. `?outlines=false` leaves out the cell outlines; `?at=` assesses a past tick in the rewind history. |
 | GET | `/conflicts/settings` | The cell resolution in use and where it came from. |
 | PUT | `/conflicts/settings` | Choose the resolution, 8 to 18, or `null` for the pack's (or else the world's). |
 
@@ -502,9 +525,19 @@ presets:
 | Lowest descent advisory | 20 m | 300 m |
 | Urgency half-weight | 30 s | 120 s |
 
+Each `AircraftState` carries its `give_way` (`first`, `last` or `never`)
+and, for a manned aircraft, its `protection` (`lateral_m`, `vertical_m`).
+`assess` takes its wind as a `&(dyn WindSource + Sync)`, since the
+predictions are flown on several threads; `Calm` is still air and
+`FieldWind` a krabshell weather field. `protected_cells` gives the cells of
+a protected volume round a point.
+
 krabshell uses `drones()` with only the resolution changed. Source:
 [`crates/sim-conflict/src`](../crates/sim-conflict/src), krabshell's use of it:
-[`crates/sim-axum/src/conflicts.rs`](../crates/sim-axum/src/conflicts.rs).
+[`crates/sim-drones/src/atc.rs`](../crates/sim-drones/src/atc.rs) (the
+fleet, the states and the advisories flown) and
+[`crates/sim-axum/src/conflicts.rs`](../crates/sim-axum/src/conflicts.rs)
+(the dashboard's assessment).
 
 ### Regenerating the figures
 

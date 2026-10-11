@@ -96,8 +96,8 @@ A vehicle sighting is drawn by the `vehicle_type` it carries; an unknown type
 is drawn as a car. Civilians keep the unknown identity's yellow rather than
 APP-6's optional civilian purple, since who they are is not known.
 
-Symbols stay upright, as the standard has them. A moving drone (over
-0.3 m/s) gets APP-6's direction-of-movement arrow along its heading. Symbols
+Symbols stay upright, as the standard has them. Anything moving in the air
+(over 0.3 m/s) gets APP-6's direction-of-movement arrow along its heading. Symbols
 grow in three steps as you zoom in: 17, 21 and 26 pixels. Sightings are drawn
 a little smaller than drones. Every symbol and arrow has a pale halo so it
 reads over a dark theme or a basemap.
@@ -121,7 +121,9 @@ report stream is, so it does not replay old sightings at once.
 
 Labels are kept off a crowded map. Everything in the air (drones moving or
 hovering, intruders, manned aircraft) is always named; a drone's label says
-what it is doing (`MEGA-3 · delivering`) or, failing that, its flight mode.
+what it is doing (`MEGA-3 · delivering`, `avoiding` while it flies a conflict
+advisory) or, failing that, its flight mode. A manned aircraft's label gives
+the advisory it is flying, if any (`turn left`, `climb`).
 Labels of anything in the air end with its flight level: altitude above mean
 sea level in thousands of feet, rounded down, so `RELAY-4 · flying · FL3` is
 between 3 000 and 3 999 ft, FL1 is 1 000 ft and FL23 23 100 ft. Parked drones
@@ -136,7 +138,8 @@ service's own minima are the pack's `manned_lateral_m` and `manned_vertical_m`
 once zoomed in a little; regions and fence numbers likewise.
 
 If milsymbol fails to load, the map falls back to plain shapes: arrows for
-drones (blue) and intruders (red), squares for stations, dots for sightings.
+drones (blue) and intruders and manned aircraft (red), squares for stations,
+dots for sightings.
 The map key beside each map draws the same symbols with the same code, so the
 key always matches the map.
 
@@ -199,6 +202,13 @@ At high speed-ups the prediction stops 20 simulated seconds past a sample
 rather than dead-reckon through a turn. The simulated clock comes from the
 `x-sim-tick`, `x-sim-mode` and `x-sim-tick-seconds` headers on the entities
 response.
+
+While the rewind strip is reviewing the past (see
+[dashboard.md](dashboard.md#rewind)), the occupancy cells, entities and
+overlays are fetched with `?at=<tick>`, the map refetches as soon as the
+cursor moves, and nothing is predicted between polls: the rewound world
+stands still. Geofences stay live. Reports are not fetched, so no new sightings
+or drop-offs appear; sightings already shown are cleared.
 
 ### The cell inspector (State)
 

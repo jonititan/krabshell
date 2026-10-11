@@ -245,7 +245,12 @@ pad is refused too. Fences apply to every drone, not just the vehicle the
 plan was uploaded to.
 
 A drone you fly is not rerouted for you: fly it into a fence and the breach
-is logged.
+is logged. It does fly conflict advisories, as every drone in the air does.
+Flying near another aircraft (the intruder in `london-patrol`, say), it may
+climb, descend, turn or change speed on its own for a few seconds (the pack's
+`advisory_hold_s`, 10 by default) and then carry on in its mode. Its mode in
+QGroundControl does not change while it does. See
+[Advisories are flown](conflicts.md#advisories-are-flown).
 
 Altitudes are above mean sea level. A pack can carry terrain (see the README);
 without it the ground is flat at 0 m. A drone's home is the pad it starts on,
@@ -291,13 +296,15 @@ bring a drone down. See [protocols.md](protocols.md#modes).
 | Vehicles a drone saw | `a-u-G-E-V` | As above |
 | The intruder drone | `a-u-A-M-H-Q` | As above |
 | Landmarks | `b-m-p-s-m` spot markers | Every 15 s |
+| Manned aircraft, in packs that have them (`iron-wolf`, not `london-patrol`) | `a-n-A-C-F` (neutral civil fixed-wing) | Once a second while flying their route |
 
 Every uid starts with `krabshell-`. Drones are `krabshell-uav-<sysid>`,
-landmarks `krabshell-poi-<id>` and sightings `krabshell-det-<id>`, and
-each links to the drone that made it. The remarks say who saw it, at what
+manned aircraft `krabshell-ac-<id>`, landmarks `krabshell-poi-<id>` and
+sightings `krabshell-det-<id>`; each sighting links to the drone that made
+it. The remarks say who saw it, at what
 range, and the simulation tick. Events are stamped with real time, so a
-sighting stays on the map for 30 s after the last report, a drone for 10 s
-and a landmark for 10 minutes. The full event format is in
+sighting stays on the map for 30 s after the last report, a drone or manned
+aircraft for 10 s and a landmark for 10 minutes. The full event format is in
 [protocols.md](protocols.md#cursor-on-target).
 
 ### Option A: the default multicast (same network, no setup)

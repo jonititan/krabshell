@@ -7,7 +7,7 @@
 # world/agents.json defines launch pads and initial drones.
 # Geofences mark exercise volumes and airport buffers.
 # No address book / delivery queue — drones fly pre-planned or behaviour-driven strike and relay missions.
-id = "iron-wolf-2026"
+id = "iron-wolf"
 name = "Iron Wolf 2026"
 description = "Lithuanian Armed Forces / NATO Iron Wolf 2026 exercise: low-level strike drones (nap-of-the-earth, unique tracks) and persistent high-altitude relay drones near Gaižiūnai Training Area, with awareness of Kaunas Airport traffic. Gold profile."
 model = "drones"

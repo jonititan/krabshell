@@ -1,5 +1,8 @@
 # No target_tps: the simulation runs flat out.
 [run]
+# Single-threaded. Nothing reads this yet (the `parallel` Cargo feature
+# decides), but it says what this pack expects.
+parallel = false
 publish_hz = 20.0
 intent_horizon = 8
 max_pending_intents = 10000

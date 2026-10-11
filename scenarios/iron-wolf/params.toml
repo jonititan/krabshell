@@ -54,7 +54,7 @@ weather_bbox = [23.45, 54.88, 24.62, 55.06]
 weather_resolution = 11
 
 # Separation drones must keep from the airliners (the defaults, written out):
-# 300 m across, 150 m above and below. Airliners have the right of way, so
-# conflict advisories always go to the drones.
+# 300 m across, 150 m above and below. Drones are advised to give way first;
+# an airliner is advised only when no drone can resolve the conflict.
 manned_lateral_m = 300.0
 manned_vertical_m = 150.0
