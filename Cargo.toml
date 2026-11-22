@@ -39,6 +39,10 @@ libm = "0.2.16"
 # drops mission replies that do not echo it.
 mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions", "serde"] }
 
+# Cursor-on-Target serialisation for sim-cot. Without default features it
+# pulls in nothing else.
+uas-cot = { version = "0.4.0", default-features = false }
+
 # Behaviour trees for the drones (sim-drones/behaviour), read from JSON.
 bonsai-bt = { version = "0.14", features = ["serde"] }
 
