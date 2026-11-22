@@ -6183,6 +6183,7 @@ dependencies = [
  "sim-engine",
  "tokio",
  "tracing",
+ "uas-cot",
 ]
 
 [[package]]
@@ -7031,6 +7032,12 @@ name = "typewit"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "214ca0b2191785cbc06209b9ca1861e048e39b5ba33574b3cedd58363d5bb5f6"
+
+[[package]]
+name = "uas-cot"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c4caac728ce368733447e838e6b104af1f6a934569a6c5c6f05c099627a1bd8"
 
 [[package]]
 name = "unicase"

@@ -18,7 +18,6 @@
 //! faster than real time, the markers move faster than real time too, but they
 //! never arrive already stale.
 
-use std::fmt::Write as _;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -77,85 +76,45 @@ pub struct CotEvent {
     pub link: Option<(String, String)>,
 }
 
-/// Escape text for an XML attribute or element body.
-fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c if (c as u32) < 0x20 && c != '\n' && c != '\t' => {}
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// `YYYY-MM-DDThh:mm:ss.sssZ`, the form CoT uses.
 pub fn cot_time(t: SystemTime) -> String {
-    let since = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = since.as_secs() as i64;
-    let millis = since.subsec_millis();
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's days-to-civil algorithm.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
-        rem / 3_600,
-        rem % 3_600 / 60,
-        rem % 60
-    )
+    uas_cot::Iso8601(micros(t)).to_string()
+}
+
+fn micros(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).unwrap_or_default().as_micros() as u64
 }
 
 /// Render an event as a standalone CoT XML document.
 pub fn event_xml(e: &CotEvent) -> String {
-    let now = cot_time(e.time);
-    let stale = cot_time(e.time + e.stale);
-    let mut xml = String::with_capacity(512);
-    xml.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
-    let _ = write!(
-        xml,
-        r#"<event version="2.0" uid="{}" type="{}" how="{}" time="{now}" start="{now}" stale="{stale}">"#,
-        escape(&e.uid),
-        escape(&e.cot_type),
-        e.how,
-    );
-    let _ = write!(
-        xml,
-        r#"<point lat="{:.7}" lon="{:.7}" hae="{:.1}" ce="{:.1}" le="{:.1}"/>"#,
-        e.lat, e.lon, e.hae, e.ce, e.le
-    );
-    xml.push_str("<detail>");
-    if let Some(callsign) = &e.callsign {
-        let _ = write!(xml, r#"<contact callsign="{}"/>"#, escape(callsign));
-    }
-    if let Some((course, speed)) = e.track {
-        let _ = write!(xml, r#"<track course="{course:.1}" speed="{speed:.2}"/>"#);
-    }
-    if let Some((uid, cot_type)) = &e.link {
-        let _ = write!(
-            xml,
-            r#"<link uid="{}" type="{}" relation="p-p"/>"#,
-            escape(uid),
-            escape(cot_type)
-        );
-    }
-    if let Some(remarks) = &e.remarks {
-        let _ = write!(xml, "<remarks>{}</remarks>", escape(remarks));
-    }
-    xml.push_str("</detail></event>");
-    xml
+    let time_us = micros(e.time);
+    let event = uas_cot::Event {
+        how: e.how.into(),
+        stale_us: micros(e.time + e.stale),
+        point: uas_cot::Point {
+            lat: e.lat,
+            lon: e.lon,
+            hae: e.hae,
+            ce: e.ce,
+            le: e.le,
+        },
+        callsign: e.callsign.clone(),
+        track: e
+            .track
+            .map(|(course, speed)| uas_cot::Track { course, speed }),
+        links: e
+            .link
+            .iter()
+            .map(|(uid, kind)| uas_cot::Link {
+                uid: uid.clone(),
+                kind: kind.clone(),
+                relation: "p-p".into(),
+            })
+            .collect(),
+        remarks: e.remarks.clone(),
+        ..uas_cot::Event::new(e.uid.as_str(), e.cot_type.as_str(), time_us, 0)
+    };
+    event.to_xml()
 }
 
 pub const DRONE_TYPE: &str = "a-f-A-M-H-Q";
@@ -490,7 +449,7 @@ mod tests {
         assert_eq!(
             event_xml(&event),
             concat!(
-                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<?xml version="1.0" encoding="UTF-8"?>"#,
                 r#"<event version="2.0" uid="krabshell-det-42" type="a-u-G-U-C-I" how="m-s" "#,
                 r#"time="2026-09-24T10:34:56.000Z" start="2026-09-24T10:34:56.000Z" stale="2026-09-24T10:35:26.000Z">"#,
                 r#"<point lat="51.5072000" lon="-0.1276000" hae="0.0" ce="10.0" le="10.0"/>"#,
@@ -499,6 +458,33 @@ mod tests {
                 r#"<link uid="krabshell-uav-1" type="a-f-A-M-H-Q" relation="p-p"/>"#,
                 r#"<remarks>Seen by HAWK-1 at 38 m</remarks></detail></event>"#,
             )
+        );
+    }
+
+    #[test]
+    fn a_heading_just_short_of_north_stays_inside_the_track_schema() {
+        // hdg_cdeg 35_999 is 359.99 degrees. CoT's track.xsd caps course
+        // below 360, so it must go on the wire as 0.0, not 360.0.
+        let event = CotEvent {
+            uid: "krabshell-uav-1".into(),
+            cot_type: DRONE_TYPE.into(),
+            how: "m-g",
+            time: UNIX_EPOCH,
+            stale: Duration::from_secs(10),
+            lat: 51.5,
+            lon: -0.1,
+            hae: 100.0,
+            ce: 5.0,
+            le: 5.0,
+            callsign: None,
+            track: Some((35_999.0 / 100.0, 3.0)),
+            remarks: None,
+            link: None,
+        };
+        let xml = event_xml(&event);
+        assert!(
+            xml.contains(r#"<track course="0.0" speed="3.00"/>"#),
+            "{xml}"
         );
     }
 
